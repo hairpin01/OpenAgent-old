@@ -47,7 +47,7 @@ _DEFAULT_TOOL_STATUS_EMOJIS = {
 from .PluginsEngine import (
     OpenAgentPlugin,
 )
-from .SystemPlugins import SystemTool
+from .SystemPlugins import SystemTool, UserPluginRegistry
 
 
 class _OpenAgentToolRegistryMixin:
@@ -448,13 +448,9 @@ class _OpenAgentToolRegistryMixin:
         core: dict[str, Any] = {}
         for tool_name, tool in (getattr(self, "_system_tools", {}) or {}).items():
             if isinstance(tool, SystemTool):
-                core[str(tool_name).strip().lower()] = tool.handler
+                core[str(tool_name).strip().lower()] = tool
 
-        for plugin in self._plugins.values():
-            for tname, handler in getattr(plugin, "tool_map", {}).items():
-                if not tname or not handler:
-                    continue
-                core[str(tname).strip().lower()] = str(handler).strip()
+        core.update(UserPluginRegistry(self._plugins).tool_map())
         self._tool_map_cache = core
         return core
 
@@ -493,6 +489,8 @@ class _OpenAgentToolRegistryMixin:
                     handler_method = getattr(plugin_owner, p_handler, None)
         if not handler_method and callable(method_ref):
             handler_method = method_ref
+        if not handler_method and isinstance(method_ref, SystemTool):
+            handler_method = method_ref.resolve_handler()
         if not handler_method and method_name:
             handler_method = getattr(self, method_name, None)
         if not handler_method:

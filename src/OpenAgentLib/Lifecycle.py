@@ -128,6 +128,7 @@ class _OpenAgentLifecycleMixin:
         self._plugins: dict[str, OpenAgentPlugin] = {}
         self._plugin_files: dict[str, Path] = {}
         self._plugins_cache: list[dict] = []
+        self._system_tool_registry: Any | None = None
         self._system_tools: dict[str, Any] = {}
         self._tool_map_cache: dict[str, Any] | None = None
         self._tool_registry_cache: tuple[str, ...] | None = None

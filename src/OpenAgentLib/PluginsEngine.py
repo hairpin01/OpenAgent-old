@@ -37,7 +37,7 @@ from core.lib.loader.module_config import (
 )
 
 from .TodoService import _WHITESPACE_RE
-from .SystemPlugins import SystemTool, discover_system_tools
+from .SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
 
 class OpenAgentPlugin:
     """Base class for OpenAgent plugins."""
@@ -167,9 +167,12 @@ class _OpenAgentPluginSkillMixin:
         """Register bundled system tools from SystemPlugins dynamically."""
         await asyncio.sleep(0)
         try:
-            self._system_tools = discover_system_tools(self._system_plugins_dir())
+            self._system_tool_registry = SystemToolRegistry(self._system_plugins_dir())
+            self._system_tools = self._system_tool_registry.load()
+            self._system_tool_registry.validate()
         except Exception as exc:
             self.log.warning(f"OpenAgent: failed to load system tools: {exc}")
+            self._system_tool_registry = SystemToolRegistry(self._system_plugins_dir())
             self._system_tools = {}
         self._tool_map_cache = None
         self._tool_registry_cache = None
@@ -290,13 +293,7 @@ class _OpenAgentPluginSkillMixin:
         names = set(getattr(self, "TOOL_REGISTRY", ()) or ())
         names.update(self._get_tool_map().keys())
         names.update((getattr(self, "_system_tools", {}) or {}).keys())
-        for plugin in self._plugins.values():
-            for tool_name in getattr(plugin, "tool_registry", ()):
-                if tool_name:
-                    names.add(str(tool_name).strip().lower())
-            for tool_name in getattr(plugin, "tool_map", {}).keys():
-                if tool_name:
-                    names.add(str(tool_name).strip().lower())
+        names.update(UserPluginRegistry(self._plugins).tool_names())
         registry = tuple(sorted(names))
         self._tool_registry_cache = registry
         return registry
@@ -343,14 +340,12 @@ class _OpenAgentPluginSkillMixin:
 
     def _core_tool_docs(self) -> dict[str, dict[str, str]]:
         docs: dict[str, dict[str, str]] = {}
+        registry = getattr(self, "_system_tool_registry", None)
+        raw_docs = registry.docs() if isinstance(registry, SystemToolRegistry) else {}
         for tool_name, tool in (getattr(self, "_system_tools", {}) or {}).items():
             if not isinstance(tool, SystemTool):
                 continue
-            entry = dict(tool.docs)
-            if tool.dangerous:
-                entry.setdefault("dangerous", "true")
-            if tool_name != tool.full_name:
-                entry.setdefault("alias_of", tool.full_name)
+            entry = dict(raw_docs.get(tool_name, tool.docs))
             docs[tool_name] = self._normalize_tool_doc_entry(
                 tool_name,
                 entry,

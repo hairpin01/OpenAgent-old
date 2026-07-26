@@ -37,6 +37,7 @@ from core.lib.loader.module_config import (
 )
 
 from .TodoService import _WHITESPACE_RE
+from .SystemPlugins import SystemTool, discover_system_tools
 
 class OpenAgentPlugin:
     """Base class for OpenAgent plugins."""
@@ -158,6 +159,22 @@ class _OpenAgentPluginSkillMixin:
                 dirs.append(candidate)
         return dirs
 
+    def _system_plugins_dir(self) -> Path:
+        """Directory with built-in one-file system tool descriptors."""
+        return Path(__file__).resolve().parent / "SystemPlugins"
+
+    async def _load_system_plugins(self) -> None:
+        """Register bundled system tools from SystemPlugins dynamically."""
+        await asyncio.sleep(0)
+        try:
+            self._system_tools = discover_system_tools(self._system_plugins_dir())
+        except Exception as exc:
+            self.log.warning(f"OpenAgent: failed to load system tools: {exc}")
+            self._system_tools = {}
+        self._tool_map_cache = None
+        self._tool_registry_cache = None
+        self.log.info("System tools registered: %s", len(getattr(self, "_system_tools", {})))
+
     async def _load_installed_plugins(self) -> None:
         """Scan bundled + external plugin directories and register all plugins.
         External plugins override bundled ones without warning."""
@@ -270,8 +287,9 @@ class _OpenAgentPluginSkillMixin:
         cached = getattr(self, "_tool_registry_cache", None)
         if isinstance(cached, tuple):
             return cached
-        names = set(self.TOOL_REGISTRY)
+        names = set(getattr(self, "TOOL_REGISTRY", ()) or ())
         names.update(self._get_tool_map().keys())
+        names.update((getattr(self, "_system_tools", {}) or {}).keys())
         for plugin in self._plugins.values():
             for tool_name in getattr(plugin, "tool_registry", ()):
                 if tool_name:
@@ -317,47 +335,29 @@ class _OpenAgentPluginSkillMixin:
             return plugin
         return None
 
+    def _get_system_tool(self, tool_name: str) -> SystemTool | None:
+        tool_name = (tool_name or "").lower().strip()
+        tools = getattr(self, "_system_tools", {}) or {}
+        tool = tools.get(tool_name)
+        return tool if isinstance(tool, SystemTool) else None
+
     def _core_tool_docs(self) -> dict[str, dict[str, str]]:
-        return {
-            "thinking.note": {"desc": "Record a concise progress/thinking note for the user.", "args": "note/text", "body": "optional note text"},
-            "skill": {"desc": "Save an OpenAgent skill from body text.", "args": "name/title", "body": "skill markdown/content"},
-            "skill.save": {"desc": "Save an OpenAgent skill from body text.", "args": "name/title", "body": "skill markdown/content"},
-            "skills.list": {"desc": "List installed OpenAgent skills."},
-            "skills.read": {"desc": "Read an installed OpenAgent skill.", "args": "name", "body": "optional skill name"},
-            "skills.activate": {"desc": "Activate/load the best matching installed skill for the current task.", "args": "query/name", "body": "optional query"},
-            "skills.import_md": {"desc": "Import a skill from markdown body.", "args": "name/title", "body": "markdown content"},
-            "skills.export_md": {"desc": "Export/read an installed skill as markdown.", "args": "name", "body": "optional skill name"},
-            "skills.save_from_ai": {"desc": "Persist useful knowledge as an OpenAgent skill.", "args": "name/title", "body": "skill content"},
-            "skills.install": {"desc": "Install a skill from the configured skill repository.", "args": "name", "body": "optional skill name"},
-            "skills.repo_list": {"desc": "List skills available in the configured skill repository."},
-            "code.generate_file": {"desc": "Generate a text/code file and keep it for sending/attaching.", "args": "name/path", "body": "file content"},
-            "code.generate_mcub_module": {"desc": "Generate an MCUB module file.", "args": "name", "body": "module code"},
-            "code.choose_filename": {"desc": "Choose/sanitize a filename for generated code.", "args": "name/path", "body": "optional filename"},
-            "code.attach_result": {"desc": "Attach/send the latest generated code/file result."},
-            "code.read_docs": {"desc": "Read bundled/remote MCUB API documentation."},
-            "context.remember": {"desc": "Remember a note in the active chat context.", "body": "memory note"},
-            "context.clear": {"desc": "Clear the active OpenAgent session context."},
-            "context.prune": {"desc": "Prune internal OpenAgent context: history, tools, tool_memory, runtime_comments, or all.", "args": "target/all; keep", "body": "optional target list"},
-            "context.discard": {"desc": "Alias for context.prune." , "args": "target/all; keep", "body": "optional target list"},
-            "context.regenerate": {"desc": "Explain that regeneration is available via the response button."},
-            "context.reply_context": {"desc": "Read context from the replied message."},
-            "context.media_context": {"desc": "Read replied media/message context."},
-            "todo.add": {"desc": "Add a TODO item.", "args": "text/task"},
-            "todo.delete": {"desc": "Delete a TODO item.", "args": "id/index/text"},
-            "todo.edit": {"desc": "Edit a TODO item.", "args": "id/index/text/status"},
-            "todo.current": {"desc": "Show the current TODO list."},
-            "todo.close": {"desc": "Mark a TODO item as closed.", "args": "id/index/text"},
-            "todo.closeall": {"desc": "Close all TODO items."},
-            "todo.clear": {"desc": "Clear the TODO list."},
-            "utility.token_usage": {"desc": "Show token usage from the last provider response."},
-            "utility.placeholders": {"desc": "Show available OpenAgent template placeholders."},
-            "utility.random_template": {"desc": "Render the current thinking/random template."},
-            "utility.agent_log": {"desc": "Explain where the agent log is shown."},
-            "utility.error_file": {"desc": "Explain how OpenAgent reports errors."},
-            "utility.tool_help": {"desc": "Show normalized documentation for one core/plugin tool.", "args": "tool (str) — exact tool name", "body": "optional tool name"},
-            "utility.list_tools": {"desc": "List all available core and plugin tools by category with short descriptions."},
-            "utility.plugin_docs": {"desc": "Show activated plugin documentation and each plugin's tools.", "args": "plugin/name (str, optional) — plugin to inspect", "body": "optional plugin name"},
-        }
+        docs: dict[str, dict[str, str]] = {}
+        for tool_name, tool in (getattr(self, "_system_tools", {}) or {}).items():
+            if not isinstance(tool, SystemTool):
+                continue
+            entry = dict(tool.docs)
+            if tool.dangerous:
+                entry.setdefault("dangerous", "true")
+            if tool_name != tool.full_name:
+                entry.setdefault("alias_of", tool.full_name)
+            docs[tool_name] = self._normalize_tool_doc_entry(
+                tool_name,
+                entry,
+                handler=tool.handler if isinstance(tool.handler, str) else getattr(tool.handler, "__name__", "callable"),
+                source="system",
+            )
+        return docs
 
     def _doc_text(self, value: object, *, default: str = "") -> str:
         text = _WHITESPACE_RE.sub(" ", str(value or "")).strip()
@@ -449,6 +449,9 @@ class _OpenAgentPluginSkillMixin:
         core_docs = self._core_tool_docs()
         for tname, handler in self._get_tool_map().items():
             clean = str(tname).lower().strip()
+            if clean in core_docs:
+                docs[clean] = core_docs[clean]
+                continue
             docs[clean] = self._normalize_tool_doc_entry(
                 clean,
                 core_docs.get(clean, {"desc": f"Tool handled by {handler}", "args": "see core handler docs"}),
@@ -1538,6 +1541,9 @@ class _OpenAgentStatusMixin:
                 tool_level = plugin_dangerous.get(name)
                 if tool_level is not None:
                     return tool_level != "safe"
+        system_tool = self._get_system_tool(name)
+        if system_tool is not None and system_tool.dangerous:
+            return True
         safe_read_tools = {
             "message.get", "message.search", "message.history", "message.typing",
             "dialog.list_private", "dialog.list_groups", "dialog.list_all", "dialog.search",

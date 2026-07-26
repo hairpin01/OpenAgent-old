@@ -47,6 +47,7 @@ _DEFAULT_TOOL_STATUS_EMOJIS = {
 from .PluginsEngine import (
     OpenAgentPlugin,
 )
+from .SystemPlugins import SystemTool
 
 
 class _OpenAgentToolRegistryMixin:
@@ -437,61 +438,24 @@ class _OpenAgentToolRegistryMixin:
                 pass
         return text
 
-    def _get_tool_map(self) -> dict[str, str]:
+    def _get_tool_map(self) -> dict[str, Any]:
         """Unified mapping of tool tags to internal methods. Merges core + plugin maps.
 
         Cached after first build; invalidated by _register_plugin / _unregister_plugin.
         """
         if getattr(self, "_tool_map_cache", None) is not None:
             return self._tool_map_cache  # type: ignore[return-value]
-        core = {
-            # Core tools tightly coupled with module internals.
-            "thinking.note": "_thinking_note_tool",
-            "skill": "_skills_registry_tool",
-            "skill.save": "_skills_registry_tool",
-            "skills.list": "_skills_registry_tool",
-            "skills.read": "_skills_registry_tool",
-            "skills.activate": "_skills_registry_tool",
-            "skills.import_md": "_skills_registry_tool",
-            "skills.export_md": "_skills_registry_tool",
-            "skills.save_from_ai": "_skills_registry_tool",
-            "skills.install": "_skills_registry_tool",
-            "skills.repo_list": "_skills_registry_tool",
-            "code.generate_file": "_code_registry_tool",
-            "code.generate_mcub_module": "_code_registry_tool",
-            "code.choose_filename": "_code_registry_tool",
-            "code.attach_result": "_code_registry_tool",
-            "code.read_docs": "_fetch_mcub_docs",
-            "context.remember": "_context_registry_tool",
-            "context.clear": "_context_registry_tool",
-            "context.prune": "_context_registry_tool",
-            "context.discard": "_context_registry_tool",
-            "context.regenerate": "_context_registry_tool",
-            "context.reply_context": "_context_registry_tool",
-            "context.media_context": "_context_registry_tool",
-            "todo.add": "_todo_registry_tool",
-            "todo.delete": "_todo_registry_tool",
-            "todo.edit": "_todo_registry_tool",
-            "todo.current": "_todo_registry_tool",
-            "todo.close": "_todo_registry_tool",
-            "todo.closeall": "_todo_registry_tool",
-            "todo.clear": "_todo_registry_tool",
-            "utility.token_usage": "_utility_registry_tool",
-            "utility.placeholders": "_utility_registry_tool",
-            "utility.random_template": "_utility_registry_tool",
-            "utility.agent_log": "_utility_registry_tool",
-            "utility.error_file": "_utility_registry_tool",
-            "utility.tool_help": "_utility_registry_tool",
-            "utility.list_tools": "_utility_registry_tool",
-            "utility.plugin_docs": "_utility_registry_tool",
-        }
+        core: dict[str, Any] = {}
+        for tool_name, tool in (getattr(self, "_system_tools", {}) or {}).items():
+            if isinstance(tool, SystemTool):
+                core[str(tool_name).strip().lower()] = tool.handler
 
         for plugin in self._plugins.values():
             for tname, handler in getattr(plugin, "tool_map", {}).items():
                 if not tname or not handler:
                     continue
                 core[str(tname).strip().lower()] = str(handler).strip()
-        self._tool_map_cache: dict[str, str] = core
+        self._tool_map_cache = core
         return core
 
     async def _dispatch_tool(
@@ -511,7 +475,8 @@ class _OpenAgentToolRegistryMixin:
         # Plugin dispatch handles aliases via tool_map.
 
         # 1. Direct match or alias
-        method_name = tmap.get(name)
+        method_ref = tmap.get(name)
+        method_name = method_ref if isinstance(method_ref, str) else ""
         handler_method = None
         plugin_owner: OpenAgentPlugin | None = None
 
@@ -526,6 +491,8 @@ class _OpenAgentToolRegistryMixin:
                 p_handler = pmap.get(name)
                 if p_handler:
                     handler_method = getattr(plugin_owner, p_handler, None)
+        if not handler_method and callable(method_ref):
+            handler_method = method_ref
         if not handler_method and method_name:
             handler_method = getattr(self, method_name, None)
         if not handler_method:
@@ -602,6 +569,10 @@ class _OpenAgentToolRegistryMixin:
                 kwargs["runtime_token"] = self._placeholder_context.get(
                                               "cancel_token"
                                           )
+            if "agent" in params:
+                kwargs["agent"] = self
+            if "attrs" in params:
+                kwargs["attrs"] = attrs
             if "kind" in params:
                 kwargs["kind"] = "group" if name.endswith(
                     "group"

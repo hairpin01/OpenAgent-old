@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from core.lib.types import InlineMessage, Event
 
 try:
-    from openagent_lib.OpenAgentMixins import (
+    from OpenAgentLib.OpenAgentMixins import (
         _OpenAgentLifecycleMixin,
         _OpenAgentProviderMixin,
         _OpenAgentTodoMixin,
@@ -681,42 +681,9 @@ class OpenAgent(
         r"<([a-z0-9._]+)([^>]*)>(.*?)</\1>|<([a-z0-9._]+)([^>]*)/?>", re.DOTALL | re.I
     )
     TOOL_CALL_JSON_RE = re.compile(r"```tool_call\s*(.*?)```", re.DOTALL | re.I)
-    TOOL_REGISTRY = (
-        # Core/module-tied tools. Most tools should come from plugins.
-        "thinking.note",
-        "skills.list",
-        "skills.read",
-        "skills.activate",
-        "skills.import_md",
-        "skills.export_md",
-        "skills.save_from_ai",
-        "skills.install",
-        "skills.repo_list",
-        "code.generate_file",
-        "code.generate_mcub_module",
-        "code.choose_filename",
-        "code.attach_result",
-        "code.read_docs",
-        "context.remember",
-        "context.clear",
-        "context.regenerate",
-        "context.reply_context",
-        "context.media_context",
-        "todo.add",
-        "todo.delete",
-        "todo.edit",
-        "todo.current",
-        "todo.close",
-        "todo.closeall",
-        "todo.clear",
-        "utility.token_usage",
-        "utility.placeholders",
-        "utility.random_template",
-        "utility.agent_log",
-        "utility.error_file",
-        "utility.tool_help",
-        "utility.list_tools",
-    )
+    TOOL_REGISTRY = ()
+    # Built-in tools are now discovered dynamically from
+    # OpenAgentLib/SystemPlugins/<group>/<tool>.py.
     AGENT_MAX_STEPS = 15
     PREMIUM_EMOJIS = {
         "claude": '<tg-emoji emoji-id="5368808376694248152">💬</tg-emoji>',

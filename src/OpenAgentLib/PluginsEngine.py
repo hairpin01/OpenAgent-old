@@ -1878,10 +1878,13 @@ class _OpenAgentAgentLoopMixin:
             )
             self._remember_tool_output(chat_id, tool_name, output)
             thinking_outputs.append(
-                f"Tool <{tool_name}> call:\n"
-                f"attrs: {attrs_raw or '-'}\n"
-                f"body: {body or '-'}\n"
-                f"output:\n{output}"
+                self._format_tool_call_for_context(
+                    chat_id,
+                    tool_name,
+                    attrs_raw,
+                    body,
+                    output,
+                )
             )
         if thinking_outputs:
             think_assistant_msg = {"role": "assistant", "content": think_answer or ""}
@@ -1975,10 +1978,13 @@ class _OpenAgentAgentLoopMixin:
                 )
                 self._remember_tool_output(chat_id, tool_name, output)
                 outputs.append(
-                    f"Tool <{tool_name}> call:\n"
-                    f"attrs: {attrs_raw or '-'}\n"
-                    f"body: {body or '-'}\n"
-                    f"output:\n{output}"
+                    self._format_tool_call_for_context(
+                        chat_id,
+                        tool_name,
+                        attrs_raw,
+                        body,
+                        output,
+                    )
                 )
 
             assistant_tool_msg = {"role": "assistant", "content": answer}

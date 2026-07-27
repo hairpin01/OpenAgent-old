@@ -47,7 +47,10 @@ _DEFAULT_TOOL_STATUS_EMOJIS = {
 from .PluginsEngine import (
     OpenAgentPlugin,
 )
-from .SystemPlugins import SystemTool, UserPluginRegistry
+from .SystemPlugins import (
+    SystemTool,
+    UserPluginRegistry
+)
 
 
 class _OpenAgentToolRegistryMixin:

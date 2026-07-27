@@ -9,7 +9,6 @@ import importlib.util
 import inspect
 import sys
 
-
 SystemToolHandler = str | Callable[..., Any]
 
 
@@ -49,10 +48,15 @@ class SystemTool:
     module_name: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "tool_class", self._clean_identifier(self.tool_class, "tool_class"))
+        object.__setattr__(
+            self, "tool_class", self._clean_identifier(self.tool_class, "tool_class")
+        )
         object.__setattr__(self, "name", self._clean_identifier(self.name, "name"))
         object.__setattr__(self, "api_version", str(self.api_version or "1"))
-        if not isinstance(self.docs, dict) or not str(self.docs.get("desc") or "").strip():
+        if (
+            not isinstance(self.docs, dict)
+            or not str(self.docs.get("desc") or "").strip()
+        ):
             raise ValueError(f"{self.full_name}: docs.desc is required")
         if isinstance(self.handler, str):
             clean_handler = self.handler.strip()
@@ -60,11 +64,17 @@ class SystemTool:
                 raise ValueError(f"{self.full_name}: handler is required")
             object.__setattr__(self, "handler", clean_handler)
         elif not callable(self.handler):
-            raise ValueError(f"{self.full_name}: handler must be a method name or callable")
+            raise ValueError(
+                f"{self.full_name}: handler must be a method name or callable"
+            )
         object.__setattr__(
             self,
             "aliases",
-            tuple(str(alias).strip().lower() for alias in self.aliases if str(alias or "").strip()),
+            tuple(
+                str(alias).strip().lower()
+                for alias in self.aliases
+                if str(alias or "").strip()
+            ),
         )
 
     @staticmethod
@@ -97,7 +107,9 @@ class SystemTool:
         module = _module_from_cache_or_file(self.module_name, self.source_path)
         handler = getattr(module, self.handler, None)
         if not callable(handler):
-            raise ValueError(f"{self.full_name}: handler {self.handler!r} is not callable")
+            raise ValueError(
+                f"{self.full_name}: handler {self.handler!r} is not callable"
+            )
 
     def resolve_handler(self) -> Callable[..., Any]:
         if callable(self.handler):
@@ -122,7 +134,9 @@ class SystemToolRegistry:
     def validate(self) -> None:
         for tool_name, tool in self.tools.items():
             if tool_name not in tool.all_names:
-                raise ValueError(f"Invalid registry entry {tool_name!r} for {tool.full_name}")
+                raise ValueError(
+                    f"Invalid registry entry {tool_name!r} for {tool.full_name}"
+                )
             tool.validate_handler_reference()
 
     def tool_map(self) -> dict[str, SystemTool]:
@@ -158,22 +172,34 @@ class UserPluginRegistry:
     def tool_names(self) -> set[str]:
         names: set[str] = set()
         for plugin in self.plugins.values():
-            names.update(str(item).strip().lower() for item in getattr(plugin, "tool_registry", ()) if str(item or "").strip())
-            names.update(str(item).strip().lower() for item in getattr(plugin, "tool_map", {}).keys() if str(item or "").strip())
+            names.update(
+                str(item).strip().lower()
+                for item in getattr(plugin, "tool_registry", ())
+                if str(item or "").strip()
+            )
+            names.update(
+                str(item).strip().lower()
+                for item in getattr(plugin, "tool_map", {}).keys()
+                if str(item or "").strip()
+            )
         return names
 
 
 def discover_system_tools(root: Path | None = None) -> dict[str, SystemTool]:
     """Load all SystemPlugins recursively without hardcoded plugin names."""
 
-    registry = SystemToolRegistry(root) if not isinstance(root, SystemToolRegistry) else root
+    registry = (
+        SystemToolRegistry(root) if not isinstance(root, SystemToolRegistry) else root
+    )
     root_path = registry.root
     tools: dict[str, SystemTool] = {}
     if not root_path.exists():
         return tools
 
     for file_path in sorted(root_path.rglob("*.py")):
-        if file_path.name in {"__init__.py", "base.py"} or file_path.name.startswith("_"):
+        if file_path.name in {"__init__.py", "base.py"} or file_path.name.startswith(
+            "_"
+        ):
             continue
         tool = _load_tool_file(file_path, root_path)
         for name in tool.all_names:

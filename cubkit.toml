@@ -1,5 +1,5 @@
 id = 'openagent'
-src = 'src'
+src = 'Src'
 entrypoint = "OpenAgentMain.py"
 package = 'OpenAgentLib'
 sign = true

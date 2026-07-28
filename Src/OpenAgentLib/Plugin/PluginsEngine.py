@@ -35,8 +35,8 @@ from core.lib.loader.module_config import (
     Integer,
 )
 
-from .TodoService import _WHITESPACE_RE
-from .SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
+from ..TodoService import _WHITESPACE_RE
+from ..SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
 from .PluginBase import AgentHookContext, OpenAgentPlugin, PluginHookResult
 
 

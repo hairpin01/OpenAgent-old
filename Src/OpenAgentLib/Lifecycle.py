@@ -5,7 +5,7 @@ from pathlib import Path
 import asyncio
 from typing import Any
 
-from .PluginBase import OpenAgentPlugin
+from .Plugin.PluginBase import OpenAgentPlugin
 from .SessionManager import SessionManager
 
 class _OpenAgentLifecycleMixin:

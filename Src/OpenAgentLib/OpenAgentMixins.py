@@ -12,8 +12,8 @@ from .SessionManager import (
     SessionManager,
     _OpenAgentSessionsMixin,
 )
-from .PluginBase import OpenAgentPlugin
-from .PluginsEngine import (
+from .Plugin.PluginBase import OpenAgentPlugin
+from .Plugin.PluginsEngine import (
     _OpenAgentPluginSkillMixin,
     _OpenAgentTelegramMediaMixin,
     _OpenAgentStatusMixin,

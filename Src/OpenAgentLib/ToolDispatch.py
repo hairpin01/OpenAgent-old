@@ -14,6 +14,11 @@ import contextlib
 import json
 
 from .OASessionManager import OASession
+from .Plugin.PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
+from .SystemPlugins import (
+    SystemTool,
+    UserPluginRegistry,
+)
 
 _TOOL_GROUP_ALIASES = {
     "web_search": "web",
@@ -43,12 +48,6 @@ _DEFAULT_TOOL_STATUS_EMOJIS = {
     "utility": "🛠",
     "default": "🛠",
 }
-
-from .PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
-from .SystemPlugins import (
-    SystemTool,
-    UserPluginRegistry
-)
 
 
 class _OpenAgentToolRegistryMixin:

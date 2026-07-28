@@ -44,9 +44,7 @@ _DEFAULT_TOOL_STATUS_EMOJIS = {
     "default": "🛠",
 }
 
-from .PluginsEngine import (
-    OpenAgentPlugin,
-)
+from .PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
 from .SystemPlugins import (
     SystemTool,
     UserPluginRegistry
@@ -470,6 +468,32 @@ class _OpenAgentToolRegistryMixin:
         thinking_notes: list[str] | None = None,
     ) -> str:
         name = name.lower().strip()
+        tool_context = ToolHookContext(
+            agent=self,
+            tool_name=name,
+            attrs_raw=attrs_raw,
+            body=body,
+            source_event=source_event,
+            status_event=status_event,
+            agent_log=agent_log,
+            started_at=started_at,
+            thinking_notes=thinking_notes,
+        )
+        before_hook = await self._run_plugin_hooks("before_tool", tool_context)
+        if before_hook is not None and before_hook.cancel:
+            if before_hook.has_result:
+                return "" if before_hook.result is None else str(before_hook.result)
+            if tool_context.result is not HOOK_NO_RESULT:
+                return "" if tool_context.result is None else str(tool_context.result)
+            return before_hook.reason or f"Tool <{name}> was cancelled by a plugin hook."
+
+        name = str(tool_context.tool_name or "").lower().strip()
+        attrs_raw = str(tool_context.attrs_raw or "")
+        body = str(tool_context.body or "")
+        source_event = tool_context.source_event
+        status_event = tool_context.status_event
+        agent_log = tool_context.agent_log
+        thinking_notes = tool_context.thinking_notes
         tmap = self._get_tool_map()
         # Plugin dispatch handles aliases via tool_map.
 
@@ -482,6 +506,7 @@ class _OpenAgentToolRegistryMixin:
         # Check plugin handlers first. Exact tool_map ownership supports
         # legacy aliases like web_search/send_message/dialogs too.
         plugin_owner = self._get_plugin_for_tool(name)
+        tool_context.plugin_owner = plugin_owner
         if plugin_owner:
             if method_name and hasattr(plugin_owner, method_name):
                 handler_method = getattr(plugin_owner, method_name)
@@ -617,6 +642,16 @@ class _OpenAgentToolRegistryMixin:
             else:
                 result = await handler_method(**kwargs)
 
+            tool_context.result = result
+            after_hook = await self._run_plugin_hooks("after_tool", tool_context)
+            if after_hook is not None and after_hook.has_result:
+                result = after_hook.result
+            elif after_hook is not None and after_hook.cancel and after_hook.reason:
+                result = after_hook.reason
+            elif tool_context.result is not HOOK_NO_RESULT:
+                result = tool_context.result
+            result = "" if result is None else str(result)
+
             if status_event:
                 elapsed = time.monotonic() - started_at if started_at is not None else None
                 await self._show_agent_action(
@@ -633,12 +668,22 @@ class _OpenAgentToolRegistryMixin:
         except Exception as e:
             err_type = type(e).__name__
             details = str(e).strip() or "no details"
-            return (
+            error_result = (
                 f"Tool <{name}> execution failed.\n"
                 f"Error type: {err_type}\n"
                 f"Details: {details[:1200]}\n"
                 "Fix args and retry with a corrected tool call."
             )
+            tool_context.error = e
+            tool_context.result = error_result
+            error_hook = await self._run_plugin_hooks("on_tool_error", tool_context)
+            if error_hook is not None and error_hook.has_result:
+                return "" if error_hook.result is None else str(error_hook.result)
+            if error_hook is not None and error_hook.cancel and error_hook.reason:
+                return error_hook.reason
+            if tool_context.result is not HOOK_NO_RESULT:
+                return "" if tool_context.result is None else str(tool_context.result)
+            return error_result
 
 class OpenAgentToolDisplayService:
     """Tool status/rendering helpers that can be tested without MCUB runtime."""

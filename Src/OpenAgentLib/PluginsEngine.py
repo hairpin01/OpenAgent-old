@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 from pathlib import Path
+import ast
 import sys
 import contextlib
 import asyncio
@@ -18,15 +19,13 @@ import time
 import difflib
 import mimetypes
 import uuid
+import inspect
 
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.functions.channels import EditPhotoRequest
 import aiohttp
 
-from core.lib.types import (
-    Kernel,
-    Event,
-)
+from core.lib.types import Event
 from core.lib.loader.module_config import (
     ConfigValue,
     Boolean,
@@ -38,57 +37,8 @@ from core.lib.loader.module_config import (
 
 from .TodoService import _WHITESPACE_RE
 from .SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
+from .PluginBase import AgentHookContext, OpenAgentPlugin, PluginHookResult
 
-class OpenAgentPlugin:
-    """Base class for OpenAgent plugins."""
-    name: str = ""
-    version: str = "0.1.0"
-    author: str = ""
-    description: str = ""
-    tool_registry: tuple[str, ...] = ()
-    tool_map: dict[str, str] = {}
-    tool_docs: dict[str, dict[str, str]] = {}
-    dangerous_tools: set[str] = set()
-    config_defaults: dict[str, object] = {}
-
-    def __init__(self, agent: "OpenAgent") -> None:
-        self._agent = agent
-        self.kernel: Kernel = self._agent.kernel
-        self.client = self._agent.client
-
-    @property
-    def agent(self) -> "OpenAgent":
-        return self._agent
-
-    def add_runtime_comment(self, runtime_token: str | None, comment: str) -> bool:
-        """Queue a live comment for the current OpenAgent run."""
-        return self._agent.add_runtime_comment(runtime_token, comment)
-
-    def create_background_tool_task(
-        self,
-        *,
-        tool_name: str,
-        attrs_raw: str = "",
-        body: str = "",
-        source_event: Any | None = None,
-        status_event: Any | None = None,
-        runtime_token: str | None = None,
-        label: str = "",
-    ) -> str:
-        """Run an OpenAgent tool in background and comment when it finishes."""
-        return self._agent.create_background_tool_task(
-            tool_name=tool_name,
-            attrs_raw=attrs_raw,
-            body=body,
-            source_event=source_event,
-            status_event=status_event,
-            runtime_token=runtime_token,
-            label=label,
-        )
-
-    async def on_load(self) -> None:
-        """Called after plugin is registered."""
-        pass
 
 class _OpenAgentPluginSkillMixin:
     """OpenAgent plugin and skill discovery/install helpers."""
@@ -301,11 +251,152 @@ class _OpenAgentPluginSkillMixin:
     def _unregister_plugin(self, name: str) -> None:
         """Remove a plugin by name."""
         name = str(name or "").strip().lower()
-        self._plugins.pop(name, None)
+        plugin = self._plugins.pop(name, None)
         self._plugin_files.pop(name, None)
         self._tool_map_cache = None  # invalidate after plugin list changes
         self._tool_registry_cache = None
+        if plugin is not None:
+            self._schedule_plugin_unload(plugin)
         self.log.info(f"Plugin unregistered: {name}")
+
+    def _plugin_hook_priority(self, plugin: OpenAgentPlugin) -> int:
+        try:
+            return int(getattr(plugin, "hook_priority", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _iter_hook_plugins(self) -> list[OpenAgentPlugin]:
+        indexed = list(enumerate((getattr(self, "_plugins", {}) or {}).values()))
+        indexed.sort(
+            key=lambda item: (-self._plugin_hook_priority(item[1]), item[0])
+        )
+        return [plugin for _index, plugin in indexed]
+
+    def _is_default_plugin_hook(self, method: object, hook_name: str) -> bool:
+        base_method = getattr(OpenAgentPlugin, hook_name, None)
+        return getattr(method, "__func__", None) is base_method
+
+    def _coerce_plugin_hook_result(self, value: object) -> PluginHookResult | None:
+        if value is None:
+            return None
+        if isinstance(value, PluginHookResult):
+            return value
+        return PluginHookResult(result=value)
+
+    async def _run_plugin_hooks(
+        self,
+        hook_name: str,
+        context: object,
+    ) -> PluginHookResult | None:
+        """Run plugin hooks in priority order and return the last result.
+
+        Hook failures are logged and isolated so one plugin cannot break the
+        whole OpenAgent runtime.
+        """
+        last_result: PluginHookResult | None = None
+        for plugin in self._iter_hook_plugins():
+            method = getattr(plugin, hook_name, None)
+            if not callable(method) or self._is_default_plugin_hook(method, hook_name):
+                continue
+            try:
+                maybe_result = method(context)
+                if inspect.isawaitable(maybe_result):
+                    maybe_result = await maybe_result
+            except Exception as exc:
+                self.log.warning(
+                    "OpenAgent plugin hook failed: %s.%s: %s",
+                    getattr(plugin, "name", plugin.__class__.__name__),
+                    hook_name,
+                    exc,
+                )
+                continue
+            result = self._coerce_plugin_hook_result(maybe_result)
+            if result is None:
+                continue
+            if result.has_result:
+                if hasattr(context, "result"):
+                    setattr(context, "result", result.result)
+                if hasattr(context, "answer"):
+                    setattr(context, "answer", "" if result.result is None else str(result.result))
+                last_result = result
+            if result.cancel:
+                return result
+        return last_result
+
+    def _restore_plugin_patches(self, plugin: OpenAgentPlugin, plugin_name: str) -> None:
+        restore = getattr(plugin, "restore_patches", None)
+        if not callable(restore):
+            return
+        try:
+            restore()
+        except Exception as exc:
+            self.log.warning(
+                "OpenAgent plugin patch restore failed: %s: %s",
+                plugin_name,
+                exc,
+            )
+
+    def _schedule_plugin_unload(self, plugin: OpenAgentPlugin) -> None:
+        on_unload = getattr(plugin, "on_unload", None)
+        has_custom_unload = callable(on_unload) and not self._is_default_plugin_hook(on_unload, "on_unload")
+        plugin_name = getattr(plugin, "name", plugin.__class__.__name__)
+        if not has_custom_unload:
+            self._restore_plugin_patches(plugin, plugin_name)
+            return
+        try:
+            maybe_result = on_unload()
+            if inspect.isawaitable(maybe_result):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    with contextlib.suppress(Exception):
+                        maybe_result.close()
+                    self._restore_plugin_patches(plugin, plugin_name)
+                    self.log.warning(
+                        "OpenAgent plugin unload skipped without a running loop: %s",
+                        plugin_name,
+                    )
+                    return
+
+                async def _run_unload() -> None:
+                    try:
+                        await maybe_result
+                    finally:
+                        self._restore_plugin_patches(plugin, plugin_name)
+
+                task = loop.create_task(_run_unload())
+                unload_tasks = getattr(self, "_plugin_unload_tasks", None)
+                if not isinstance(unload_tasks, set):
+                    unload_tasks = set()
+                    self._plugin_unload_tasks = unload_tasks
+                unload_tasks.add(task)
+
+                def _consume_unload_result(done_task: asyncio.Task[Any]) -> None:
+                    unload_tasks.discard(done_task)
+                    try:
+                        done_task.result()
+                    except asyncio.CancelledError:
+                        self.log.debug(
+                            "OpenAgent plugin unload cancelled: %s",
+                            plugin_name,
+                        )
+                    except Exception as exc:
+                        self.log.warning(
+                            "OpenAgent plugin unload failed: %s: %s",
+                            plugin_name,
+                            exc,
+                        )
+
+                task.add_done_callback(_consume_unload_result)
+            else:
+                self._restore_plugin_patches(plugin, plugin_name)
+        except Exception as exc:
+            self._restore_plugin_patches(plugin, plugin_name)
+            self.log.warning(
+                "OpenAgent plugin unload failed: %s: %s",
+                plugin_name,
+                exc,
+            )
 
     def _get_plugin_for_tool(self, tool_name: str) -> OpenAgentPlugin | None:
         """Find which plugin handles a given tool name."""
@@ -355,8 +446,192 @@ class _OpenAgentPluginSkillMixin:
         return docs
 
     def _doc_text(self, value: object, *, default: str = "") -> str:
-        text = _WHITESPACE_RE.sub(" ", str(value or "")).strip()
+        """Return compact user-facing text for plugin metadata/docs.
+
+        Plugins often reuse MCUB-style localized dictionaries for descriptions.
+        Stringifying those dictionaries makes ``.oaplugin`` and plugin docs look
+        broken, so prefer localized/common text keys and fall back to the first
+        non-empty scalar value.
+        """
+        if isinstance(value, dict):
+            preferred_keys = (
+                "ru",
+                "en",
+                "description",
+                "desc",
+                "text",
+                "title",
+                "name",
+                "default",
+            )
+            for key in preferred_keys:
+                if key in value:
+                    text = self._doc_text(value.get(key), default="")
+                    if text:
+                        return text
+            for item in value.values():
+                text = self._doc_text(item, default="")
+                if text:
+                    return text
+            return default
+        if isinstance(value, (list, tuple, set)):
+            text = ", ".join(
+                item for item in (self._doc_text(item, default="") for item in value) if item
+            )
+        else:
+            text = _WHITESPACE_RE.sub(" ", str(value or "")).strip()
         return text or default
+
+    def _string_list(self, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            iterable = value.keys()
+        elif isinstance(value, str):
+            iterable = re.split(r"[,\n]", value)
+        elif isinstance(value, (list, tuple, set)):
+            iterable = value
+        else:
+            iterable = (value,)
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in iterable:
+            text = self._doc_text(item, default="")
+            key = text.lower()
+            if text and key not in seen:
+                result.append(text)
+                seen.add(key)
+        return result
+
+    def _plugin_manifest(self, plugin: object) -> dict[str, object]:
+        raw_manifest = getattr(plugin, "manifest", None)
+        if not isinstance(raw_manifest, dict):
+            raw_manifest = getattr(plugin, "plugin_manifest", None)
+        manifest = dict(raw_manifest) if isinstance(raw_manifest, dict) else {}
+        for key in ("name", "version", "author", "description"):
+            value = getattr(plugin, key, None)
+            if key not in manifest and value not in (None, "", (), [], {}):
+                manifest[key] = value
+        for key in ("permissions", "requirements"):
+            value = getattr(plugin, key, None)
+            if key not in manifest and value not in (None, "", (), [], {}):
+                manifest[key] = value
+        return manifest
+
+    def _plugin_meta_text(self, plugin: object, key: str, *, default: str = "") -> str:
+        manifest = self._plugin_manifest(plugin)
+        return self._doc_text(manifest.get(key, getattr(plugin, key, None)), default=default)
+
+    def _plugin_permissions(self, plugin: object) -> list[str]:
+        manifest = self._plugin_manifest(plugin)
+        return self._string_list(manifest.get("permissions", getattr(plugin, "permissions", ())))
+
+    def _plugin_requirements(self, plugin: object) -> list[str]:
+        manifest = self._plugin_manifest(plugin)
+        return self._string_list(manifest.get("requirements", getattr(plugin, "requirements", ())))
+
+    def _schema_text(self, value: object) -> str:
+        if value in (None, "", {}, [], ()):  # type: ignore[comparison-overlap]
+            return ""
+        if isinstance(value, str):
+            return self._doc_text(value)
+        if isinstance(value, dict):
+            description = self._doc_text(
+                value.get("description") or value.get("desc") or value.get("text") or ""
+            )
+            parts: list[str] = []
+            if description:
+                parts.append(description)
+            value_type = self._doc_text(value.get("type", ""))
+            if value_type:
+                parts.append(f"type={value_type}")
+            enum_values = self._string_list(value.get("enum"))
+            if enum_values:
+                parts.append("one of: " + ", ".join(enum_values))
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                required = {str(item) for item in value.get("required", []) or []}
+                fields: list[str] = []
+                for field_name, field_schema in properties.items():
+                    field_type = ""
+                    field_desc = ""
+                    if isinstance(field_schema, dict):
+                        field_type = self._doc_text(field_schema.get("type", ""))
+                        field_desc = self._doc_text(
+                            field_schema.get("description") or field_schema.get("desc") or ""
+                        )
+                    else:
+                        field_desc = self._doc_text(field_schema)
+                    marker = "*" if str(field_name) in required else ""
+                    label = f"{field_name}{marker}"
+                    if field_type:
+                        label += f":{field_type}"
+                    if field_desc:
+                        label += f" - {field_desc}"
+                    fields.append(label)
+                if fields:
+                    parts.append("fields: " + "; ".join(fields))
+            if parts:
+                return " | ".join(parts)
+            with contextlib.suppress(Exception):
+                return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, (list, tuple, set)):
+            return ", ".join(item for item in (self._schema_text(item) for item in value) if item)
+        return self._doc_text(value)
+
+    def _tool_schema_doc(self, raw_schema: object) -> dict[str, str]:
+        if not isinstance(raw_schema, dict):
+            return {}
+        entry: dict[str, str] = {}
+        desc = self._doc_text(raw_schema.get("desc") or raw_schema.get("description") or "")
+        if desc:
+            entry["desc"] = desc
+        for source_key, target_key in (
+            ("args", "args"),
+            ("arguments", "args"),
+            ("params", "args"),
+            ("input", "args"),
+            ("input_schema", "args"),
+            ("schema", "args"),
+            ("body", "body"),
+            ("body_schema", "body"),
+            ("returns", "returns"),
+            ("return", "returns"),
+            ("output", "returns"),
+            ("output_schema", "returns"),
+            ("example", "example"),
+            ("notes", "notes"),
+        ):
+            if source_key in raw_schema and target_key not in entry:
+                text = self._schema_text(raw_schema.get(source_key))
+                if text:
+                    entry[target_key] = text
+        if not entry and any(key in raw_schema for key in ("type", "properties", "required")):
+            text = self._schema_text(raw_schema)
+            if text:
+                entry["args"] = text
+        return entry
+
+    def _plugin_manifest_tool_docs(self, plugin: object) -> dict[str, object]:
+        tools = self._plugin_manifest(plugin).get("tools", {})
+        docs: dict[str, object] = {}
+        if isinstance(tools, dict):
+            for tool_name, tool_doc in tools.items():
+                clean = str(tool_name or "").strip().lower()
+                if clean:
+                    docs[clean] = tool_doc
+        elif isinstance(tools, (list, tuple, set)):
+            for item in tools:
+                if isinstance(item, dict):
+                    raw_name = item.get("tool") or item.get("name")
+                    clean = str(raw_name or "").strip().lower()
+                    if clean:
+                        docs[clean] = item
+                else:
+                    clean = str(item or "").strip().lower()
+                    if clean:
+                        docs[clean] = {}
+        return docs
 
     def _plugin_tool_names(self, plugin: object, *, include_aliases: bool = True) -> list[str]:
         names: set[str] = set()
@@ -369,6 +644,14 @@ class _OpenAgentPluginSkillMixin:
                 clean = str(tool_name or "").strip().lower()
                 if clean:
                     names.add(clean)
+        for attr_name in ("tool_docs", "tool_schemas"):
+            raw = getattr(plugin, attr_name, {}) or {}
+            if isinstance(raw, dict):
+                for tool_name in raw.keys():
+                    clean = str(tool_name or "").strip().lower()
+                    if clean:
+                        names.add(clean)
+        names.update(self._plugin_manifest_tool_docs(plugin).keys())
         return sorted(names)
 
     def _normalize_tool_doc_entry(
@@ -381,7 +664,30 @@ class _OpenAgentPluginSkillMixin:
         source: str = "core",
     ) -> dict[str, str]:
         if isinstance(raw_doc, dict):
-            entry = {str(key): self._doc_text(value) for key, value in raw_doc.items() if value is not None}
+            schema_key_map = {
+                "args": "args",
+                "arguments": "args",
+                "params": "args",
+                "input": "args",
+                "input_schema": "args",
+                "schema": "args",
+                "body": "body",
+                "body_schema": "body",
+                "returns": "returns",
+                "return": "returns",
+                "output": "returns",
+                "output_schema": "returns",
+            }
+            entry = {}
+            for key, value in raw_doc.items():
+                if value is None:
+                    continue
+                clean_key = str(key)
+                target_key = schema_key_map.get(clean_key, clean_key)
+                if clean_key in schema_key_map:
+                    entry[target_key] = self._schema_text(value)
+                else:
+                    entry[target_key] = self._doc_text(value)
         elif raw_doc:
             entry = {"desc": self._doc_text(raw_doc)}
         else:
@@ -398,13 +704,13 @@ class _OpenAgentPluginSkillMixin:
             entry.setdefault("handler", handler)
 
         if plugin is not None:
-            plugin_name = self._doc_text(getattr(plugin, "name", ""), default=self._tool_group(clean))
+            plugin_name = self._plugin_meta_text(plugin, "name", default=self._tool_group(clean))
             entry["plugin"] = plugin_name
-            entry["plugin_version"] = self._doc_text(getattr(plugin, "version", ""), default="?")
-            author = self._doc_text(getattr(plugin, "author", ""))
+            entry["plugin_version"] = self._plugin_meta_text(plugin, "version", default="?")
+            author = self._plugin_meta_text(plugin, "author")
             if author:
                 entry["plugin_author"] = author
-            plugin_desc = self._doc_text(getattr(plugin, "description", ""))
+            plugin_desc = self._plugin_meta_text(plugin, "description")
             if plugin_desc:
                 entry["plugin_desc"] = plugin_desc
             dangerous = {str(item).strip().lower() for item in getattr(plugin, "dangerous_tools", set()) or set()}
@@ -415,6 +721,9 @@ class _OpenAgentPluginSkillMixin:
     def _plugin_tool_docs(self, plugin: object) -> dict[str, dict[str, str]]:
         plugin_docs = getattr(plugin, "tool_docs", None)
         plugin_docs = plugin_docs if isinstance(plugin_docs, dict) else {}
+        tool_schemas = getattr(plugin, "tool_schemas", None)
+        tool_schemas = tool_schemas if isinstance(tool_schemas, dict) else {}
+        manifest_docs = self._plugin_manifest_tool_docs(plugin)
         tool_map = {
             str(key).strip().lower(): str(value).strip()
             for key, value in (getattr(plugin, "tool_map", {}) or {}).items()
@@ -423,13 +732,23 @@ class _OpenAgentPluginSkillMixin:
         docs: dict[str, dict[str, str]] = {}
         for tool_name in self._plugin_tool_names(plugin):
             handler = tool_map.get(tool_name, "")
+            manifest_doc = manifest_docs.get(tool_name)
             raw_doc = plugin_docs.get(tool_name)
+            schema_doc = self._tool_schema_doc(manifest_doc)
+            schema_doc.update(self._tool_schema_doc(tool_schemas.get(tool_name)))
             if raw_doc is None:
+                raw_doc = manifest_doc if manifest_doc not in (None, "", {}, []) else None
+            if isinstance(raw_doc, dict):
+                raw_doc = {**schema_doc, **raw_doc}
+            elif raw_doc is None:
                 raw_doc = {
-                    "desc": f"Plugin tool from {self._doc_text(getattr(plugin, 'name', ''), default=self._tool_group(tool_name))}",
-                    "args": "see plugin implementation or call utility.plugin_docs",
-                    "body": "optional, depends on tool",
+                    "desc": f"Plugin tool from {self._plugin_meta_text(plugin, 'name', default=self._tool_group(tool_name))}",
+                    "args": schema_doc.get("args", "see plugin implementation or call utility.plugin_docs"),
+                    "body": schema_doc.get("body", "optional, depends on tool"),
+                    **{key: value for key, value in schema_doc.items() if key not in {"args", "body"}},
                 }
+            elif schema_doc:
+                raw_doc = {**schema_doc, "desc": self._doc_text(raw_doc)}
             docs[tool_name] = self._normalize_tool_doc_entry(
                 tool_name,
                 raw_doc,
@@ -506,13 +825,21 @@ class _OpenAgentPluginSkillMixin:
         lines = ["🧩 Activated plugin docs:"]
         for name, plugin in selected:
             docs = self._plugin_tool_docs(plugin)
-            desc = self._doc_text(getattr(plugin, "description", ""), default="no description")
-            version = self._doc_text(getattr(plugin, "version", ""), default="?")
-            author = self._doc_text(getattr(plugin, "author", ""))
-            header = f"\n{name} v{version} — {desc}"
+            display_name = self._plugin_meta_text(plugin, "name", default=name)
+            desc = self._plugin_meta_text(plugin, "description", default="no description")
+            version = self._plugin_meta_text(plugin, "version", default="?")
+            author = self._plugin_meta_text(plugin, "author")
+            title = display_name if display_name.lower() == name.lower() else f"{display_name} ({name})"
+            header = f"\n{title} v{version} — {desc}"
             if author:
                 header += f" (author: {author})"
             lines.append(header)
+            permissions = self._plugin_permissions(plugin)
+            requirements = self._plugin_requirements(plugin)
+            if permissions:
+                lines.append("  permissions: " + ", ".join(permissions))
+            if requirements:
+                lines.append("  requirements: " + ", ".join(requirements))
             tool_items = sorted(docs.items())
             if max_tools is not None and len(tool_items) > max_tools:
                 visible = tool_items[:max_tools]
@@ -532,7 +859,7 @@ class _OpenAgentPluginSkillMixin:
                     bits.append("⚠️ confirmation")
                 lines.append(" | ".join(bits))
             if hidden:
-                lines.append(f"  · ...(+{hidden} more; call utility.plugin_docs tool={name})")
+                lines.append(f"  · ...(+{hidden} more; call utility.plugin_docs plugin={name})")
         return "\n".join(lines)
 
     async def _fetch_repo_plugins(self) -> list[dict]:
@@ -562,8 +889,16 @@ class _OpenAgentPluginSkillMixin:
         return plugins
 
     async def _parse_plugin_meta(self, raw_url: str) -> dict:
-        """Parse plugin metadata from raw .py file via regex."""
-        meta: dict = {"name": "?", "version": "?", "author": "?", "description": "?", "tools": []}
+        """Parse plugin metadata from raw .py file without importing it."""
+        meta: dict = {
+            "name": "?",
+            "version": "?",
+            "author": "?",
+            "description": "?",
+            "tools": [],
+            "permissions": [],
+            "requirements": [],
+        }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(raw_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -573,6 +908,81 @@ class _OpenAgentPluginSkillMixin:
         except Exception:
             return meta
 
+        values: dict[str, object] = {}
+        max_ast_chars = 200_000
+        max_literal_chars = 50_000
+        with contextlib.suppress(SyntaxError):
+            if len(code) > max_ast_chars:
+                raise SyntaxError("plugin metadata source is too large for AST parsing")
+            tree = ast.parse(code)
+
+            def literal_assignments(nodes: list[ast.stmt]) -> dict[str, object]:
+                found: dict[str, object] = {}
+                for node in nodes:
+                    targets: list[ast.expr] = []
+                    value_node: ast.expr | None = None
+                    if isinstance(node, ast.Assign):
+                        targets = list(node.targets)
+                        value_node = node.value
+                    elif isinstance(node, ast.AnnAssign):
+                        targets = [node.target]
+                        value_node = node.value
+                    if value_node is None:
+                        continue
+                    for target in targets:
+                        if not isinstance(target, ast.Name):
+                            continue
+                        source = ast.get_source_segment(code, value_node) or ""
+                        if len(source) > max_literal_chars:
+                            continue
+                        with contextlib.suppress(Exception):
+                            found[target.id] = ast.literal_eval(value_node)
+                return found
+
+            values.update(literal_assignments(tree.body))
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef) and node.name.endswith("Plugin"):
+                    values.update(literal_assignments(node.body))
+                    break
+
+        raw_manifest = values.get("manifest")
+        if not isinstance(raw_manifest, dict):
+            raw_manifest = values.get("plugin_manifest")
+        manifest = dict(raw_manifest) if isinstance(raw_manifest, dict) else {}
+        for key in ("name", "version", "author", "description"):
+            text = self._doc_text(manifest.get(key, values.get(key, "")))
+            if text:
+                meta[key] = text
+        permissions = self._string_list(manifest.get("permissions", values.get("permissions")))
+        requirements = self._string_list(manifest.get("requirements", values.get("requirements")))
+        if permissions:
+            meta["permissions"] = permissions
+        if requirements:
+            meta["requirements"] = requirements
+
+        tools: set[str] = set()
+        raw_tools = manifest.get("tools", values.get("tools"))
+        if isinstance(raw_tools, dict):
+            tools.update(str(tool).strip().lower() for tool in raw_tools if str(tool).strip())
+        elif isinstance(raw_tools, (list, tuple, set)):
+            for item in raw_tools:
+                if isinstance(item, dict):
+                    tool_name = item.get("tool") or item.get("name")
+                else:
+                    tool_name = item
+                clean = str(tool_name or "").strip().lower()
+                if clean:
+                    tools.add(clean)
+        for attr_name in ("tool_registry", "tool_docs", "tool_schemas"):
+            raw_items = values.get(attr_name)
+            if isinstance(raw_items, dict):
+                tools.update(str(tool).strip().lower() for tool in raw_items if str(tool).strip())
+            elif isinstance(raw_items, (list, tuple, set)):
+                tools.update(str(tool).strip().lower() for tool in raw_items if str(tool).strip())
+        raw_tool_map = values.get("tool_map")
+        if isinstance(raw_tool_map, dict):
+            tools.update(str(tool).strip().lower() for tool in raw_tool_map if str(tool).strip())
+
         name_m = re.search(r'name\s*=\s*["](.+?)["]', code) or re.search(r"name\s*=\s*['](.+?)[']", code)
         ver_m = re.search(r'version\s*=\s*["](.+?)["]', code) or re.search(r"version\s*=\s*['](.+?)[']", code)
         author_m = re.search(r'author\s*=\s*["](.+?)["]', code) or re.search(r"author\s*=\s*['](.+?)[']", code)
@@ -581,16 +991,18 @@ class _OpenAgentPluginSkillMixin:
             desc_m = re.search(r'"en"\s*:\s*"(.+?)"', code)
         tools_m = re.findall(r'"((?:terminal|web|mcub|message|file|dialog|chat|moderation|profile|contacts|creation|account|code|utility|skills|context|todo|thinking)\.[\w.]+)"', code)
 
-        if name_m:
+        if name_m and meta["name"] == "?":
             meta["name"] = name_m.group(1)
-        if ver_m:
+        if ver_m and meta["version"] == "?":
             meta["version"] = ver_m.group(1)
-        if author_m:
+        if author_m and meta["author"] == "?":
             meta["author"] = author_m.group(1)
-        if desc_m:
+        if desc_m and meta["description"] == "?":
             meta["description"] = desc_m.group(1)
         if tools_m:
-            meta["tools"] = tools_m
+            tools.update(tool.strip().lower() for tool in tools_m if tool.strip())
+        if tools:
+            meta["tools"] = sorted(tools)
 
         return meta
 
@@ -1807,11 +2219,68 @@ class _OpenAgentAgentLoopMixin:
         flash_mode: bool = False,
     ) -> tuple[str, list[str], list[str], list[dict[str, str]]]:
         provider = self._provider()
+        agent_log: list[str] = []
+        tool_trace: list[dict[str, str]] = []
+        thinking_notes: list[str] = []
+        attachments = attachments or []
+        agent_context = AgentHookContext(
+            agent=self,
+            prompt=prompt,
+            provider=provider,
+            source_event=source_event,
+            status_event=status_event,
+            attachments=list(attachments),
+            cancel_token=cancel_token,
+            system_override=system_override,
+            flash_mode=flash_mode,
+            agent_log=agent_log,
+            thinking_notes=thinking_notes,
+            tool_trace=tool_trace,
+        )
+
+        async def finish_agent(raw_answer: str) -> tuple[str, list[str], list[str], list[dict[str, str]]]:
+            agent_context.answer = (raw_answer or "").strip()
+            agent_context.agent_log = agent_log
+            agent_context.thinking_notes = thinking_notes
+            agent_context.tool_trace = tool_trace
+            after_hook = await self._run_plugin_hooks("after_agent", agent_context)
+            if after_hook is not None:
+                if after_hook.has_result:
+                    agent_context.answer = "" if after_hook.result is None else str(after_hook.result)
+                elif after_hook.cancel and after_hook.reason:
+                    agent_context.answer = after_hook.reason
+            return (agent_context.answer or "").strip(), agent_log, thinking_notes, tool_trace
+
+        before_agent = await self._run_plugin_hooks("before_agent", agent_context)
+        if before_agent is not None and before_agent.cancel:
+            if before_agent.has_result:
+                raw_answer = "" if before_agent.result is None else str(before_agent.result)
+            elif agent_context.answer:
+                raw_answer = agent_context.answer
+            else:
+                raw_answer = before_agent.reason or ""
+            return await finish_agent(raw_answer)
+
+        requested_provider = self._normalize_provider(str(agent_context.provider or provider))
+        if requested_provider in self.PROVIDERS:
+            provider = requested_provider
+        else:
+            self.log.warning(
+                "OpenAgent plugin requested unknown provider %s; keeping %s",
+                requested_provider,
+                provider,
+            )
+            agent_context.provider = provider
         api_key = self._api_key()
         if not api_key:
             raise RuntimeError(self.strings("no_key"))
 
-        attachments = attachments or []
+        prompt = str(agent_context.prompt or "")
+        attachments = agent_context.attachments or []
+        source_event = agent_context.source_event
+        status_event = agent_context.status_event
+        system_override = agent_context.system_override
+        flash_mode = bool(agent_context.flash_mode)
         if provider == "google":
             user_content = self._build_google_content(prompt, attachments)
         else:
@@ -1831,11 +2300,8 @@ class _OpenAgentAgentLoopMixin:
         messages.extend(history)
         messages.append({"role": "user", "content": user_content})
 
-        agent_log: list[str] = []
-        tool_trace: list[dict[str, str]] = []
         if compacted_context:
             agent_log.append("context.compact")
-        thinking_notes: list[str] = []
         max_steps = self.AGENT_MAX_STEPS  # Architectural limit for tool chaining in 0.5.0
         invalid_tool_retries = 0
         answer = ""
@@ -1847,6 +2313,19 @@ class _OpenAgentAgentLoopMixin:
         ]
         think_messages.extend(history)
         think_messages.append({"role": "user", "content": user_content})
+        agent_context.messages = messages
+        agent_context.thinking_messages = think_messages
+        messages_hook = await self._run_plugin_hooks("before_agent_messages", agent_context)
+        if messages_hook is not None and messages_hook.cancel:
+            if messages_hook.has_result:
+                raw_answer = "" if messages_hook.result is None else str(messages_hook.result)
+            elif agent_context.answer:
+                raw_answer = agent_context.answer
+            else:
+                raw_answer = messages_hook.reason or ""
+            return await finish_agent(raw_answer)
+        messages = agent_context.messages or messages
+        think_messages = agent_context.thinking_messages or think_messages
         think_answer = await self._ask_provider_with_reconnect(
             provider,
             think_messages,
@@ -1913,7 +2392,7 @@ class _OpenAgentAgentLoopMixin:
                 started_at=started_at,
                 thinking_notes=thinking_notes,
             )
-            return (answer or "").strip(), agent_log, thinking_notes, tool_trace
+            return await finish_agent(answer or "")
 
         for _ in range(max_steps):
             if cancel_token and cancel_token in self._cancelled_generations:
@@ -1940,7 +2419,7 @@ class _OpenAgentAgentLoopMixin:
                     invalid_tool_retries += 1
                     agent_log.append(f"tool_error: {tool_error[:220]}")
                     if invalid_tool_retries > 2:
-                        return tool_error, agent_log, thinking_notes, tool_trace
+                        return await finish_agent(tool_error)
                     messages.append({"role": "assistant", "content": answer or ""})
                     messages.append(
                         {
@@ -1958,7 +2437,7 @@ class _OpenAgentAgentLoopMixin:
                     agent_log.append("user.comment")
                     continue
                 if clean_answer or not agent_log:
-                    return clean_answer, agent_log, thinking_notes, tool_trace
+                    return await finish_agent(clean_answer)
                 break
             invalid_tool_retries = 0
 
@@ -2048,8 +2527,8 @@ class _OpenAgentAgentLoopMixin:
                 )
                 clean = (answer or "").strip()
         if clean:
-            return clean, agent_log, thinking_notes, tool_trace
-        return self.strings("tools_no_final"), agent_log, thinking_notes, tool_trace
+            return await finish_agent(clean)
+        return await finish_agent(self.strings("tools_no_final"))
 
     def _tool_names(self) -> set[str]:
         """Single whitelist source for executable tool names and aliases."""

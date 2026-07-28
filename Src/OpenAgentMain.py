@@ -203,6 +203,10 @@ class OpenAgent(
             "generic_error": "❌ Ошибка: {error}",
             "plugin_manager_no_installed": "Нет установленных плагинов",
             "plugin_version_label": "Версия",
+            "plugin_id_label": "ID",
+            "plugin_author_label": "Автор",
+            "plugin_permissions_label": "Права",
+            "plugin_requirements_label": "Зависимости",
             "plugin_actions_title": "<b>Действия:</b>",
             "plugin_delete_btn": "🗑 Удалить",
             "plugin_deleted_alert": "🗑 {name} удалён",
@@ -330,6 +334,10 @@ class OpenAgent(
             "generic_error": "❌ Error: {error}",
             "plugin_manager_no_installed": "No installed plugins",
             "plugin_version_label": "Version",
+            "plugin_id_label": "ID",
+            "plugin_author_label": "Author",
+            "plugin_permissions_label": "Permissions",
+            "plugin_requirements_label": "Requirements",
             "plugin_actions_title": "<b>Actions:</b>",
             "plugin_delete_btn": "🗑 Delete",
             "plugin_deleted_alert": "🗑 {name} deleted",
@@ -457,6 +465,10 @@ class OpenAgent(
             "generic_error": "❌ Ошибочка: {error}",
             "plugin_manager_no_installed": "Плагинов нет",
             "plugin_version_label": "Версия",
+            "plugin_id_label": "ID",
+            "plugin_author_label": "Автор",
+            "plugin_permissions_label": "Права",
+            "plugin_requirements_label": "Зависимости",
             "plugin_actions_title": "<b>Движения:</b>",
             "plugin_delete_btn": "🗑 Снести",
             "plugin_deleted_alert": "🗑 {name} снесён",
@@ -584,6 +596,10 @@ class OpenAgent(
             "generic_error": "❌ error: {error}",
             "plugin_manager_no_installed": "no loaded plugins",
             "plugin_version_label": "Version",
+            "plugin_id_label": "ID",
+            "plugin_author_label": "Author",
+            "plugin_permissions_label": "Permissions",
+            "plugin_requirements_label": "Requirements",
             "plugin_actions_title": "<b>Actions:</b>",
             "plugin_delete_btn": "🗑 remove",
             "plugin_deleted_alert": "🗑 {name} removed",
@@ -1972,6 +1988,47 @@ class OpenAgent(
             as_html=True,
         )
 
+    def _format_oaplugin_overview(self) -> str:
+        installed = self._plugins
+        text = self.strings("plugins_enabled_title")
+        if not installed:
+            text += self.strings("plugins_none_installed")
+        else:
+            for pname, plugin in sorted(installed.items()):
+                display_name = self._plugin_meta_text(plugin, "name", default=pname)
+                version = self._plugin_meta_text(plugin, "version", default="?")
+                desc = self._plugin_meta_text(
+                    plugin,
+                    "description",
+                    default=self.strings("plugin_no_description"),
+                )
+                author = self._plugin_meta_text(plugin, "author")
+                tools = self._plugin_tool_names(plugin)[:5]
+                item_lines = [
+                    f"<b>{html.escape(display_name)}</b> <code>v{html.escape(version)}</code>"
+                ]
+                if display_name.lower() != str(pname).lower():
+                    item_lines.append(
+                        f"{html.escape(self.strings('plugin_id_label'))}: "
+                        f"<code>{html.escape(str(pname))}</code>"
+                    )
+                if desc:
+                    item_lines.append(html.escape(desc))
+                if author:
+                    item_lines.append(
+                        f"{html.escape(self.strings('plugin_author_label'))}: {html.escape(author)}"
+                    )
+                if tools:
+                    tools_text = ", ".join(
+                        f"<code>{html.escape(tool)}</code>" for tool in tools
+                    )
+                    item_lines.append(
+                        f"{html.escape(self.strings('plugin_tools_label'))}: {tools_text}"
+                    )
+                text += "<blockquote>" + "\n".join(item_lines) + "</blockquote>\n"
+        text += self.strings("plugins_total", count=len(installed))
+        return text
+
     @command(
         "oaplugin",
         doc_ru="управление плагинами OpenAgent",
@@ -1996,16 +2053,7 @@ class OpenAgent(
             )
             return
 
-        installed = self._plugins
-        text = self.strings("plugins_enabled_title")
-        if not installed:
-            text += self.strings("plugins_none_installed")
-        else:
-            for pname, plugin in installed.items():
-                desc = getattr(plugin, "description", "?") or "?"
-                author = getattr(plugin, "author", "?") or "?"
-                text += f"<blockquote>{pname} - {desc} | by {author}</blockquote>\n"
-        text += self.strings("plugins_total", count=len(installed))
+        text = self._format_oaplugin_overview()
 
         buttons = [
             [
@@ -2066,24 +2114,39 @@ class OpenAgent(
             await call.answer()
             return
         m = plugins[page]
-        name = m.get("name", "?")
-        author = m.get("author", "?")
-        version = m.get("version", "?")
-        desc = m.get("description", self.strings("plugin_no_description"))
-        tools = m.get("tools", [])
+        name = self._doc_text(m.get("name", "?"), default="?")
+        author = self._doc_text(m.get("author", "?"), default="?")
+        version = self._doc_text(m.get("version", "?"), default="?")
+        desc = self._doc_text(
+            m.get("description", self.strings("plugin_no_description")),
+            default=self.strings("plugin_no_description"),
+        )
+        tools = self._string_list(m.get("tools", []))
+        permissions = self._string_list(m.get("permissions", []))
+        requirements = self._string_list(m.get("requirements", []))
         fname = m.get("file_name", "")
         plugin_key = self._safe_plugin_name(
             m.get("plugin_name") or fname.replace(".py", "") or name
         )
         installed = plugin_key in self._plugins
 
-        text = f"📦 <b>{name}</b> v{version} by <code>{author}</code>\n\n"
-        text += f"📝 {desc}\n"
+        text = (
+            f"📦 <b>{html.escape(name)}</b> "
+            f"<code>v{html.escape(version)}</code> "
+            f"by <code>{html.escape(author)}</code>\n\n"
+        )
+        text += f"📝 {html.escape(desc)}\n"
         if tools:
-            tools_str = ", ".join(f"<code>{t}</code>" for t in tools[:8])
+            tools_str = ", ".join(f"<code>{html.escape(t)}</code>" for t in tools[:8])
             if len(tools) > 8:
                 tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
             text += f"\n🔧 <b>{html.escape(self.strings('plugin_tools_label'))}:</b> {tools_str}"
+        if permissions:
+            perms_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in permissions)
+            text += f"\n🔐 <b>{html.escape(self.strings('plugin_permissions_label'))}:</b> {perms_str}"
+        if requirements:
+            reqs_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in requirements)
+            text += f"\n📦 <b>{html.escape(self.strings('plugin_requirements_label'))}:</b> {reqs_str}"
         text += f"\n\n🔢 {page + 1}/{len(plugins)}"
 
         buttons = []
@@ -2152,16 +2215,7 @@ class OpenAgent(
     @callback(ttl=900)
     async def _oaplugin_main(self, call: InlineMessage) -> None:
         """Return to main plugin page."""
-        installed = self._plugins
-        text = self.strings("plugins_enabled_title")
-        if not installed:
-            text += self.strings("plugins_none_installed")
-        else:
-            for pname, plugin in installed.items():
-                desc = getattr(plugin, "description", "?") or "?"
-                author = getattr(plugin, "author", "?") or "?"
-                text += f"<blockquote>{pname} - {desc} | by {author}</blockquote>\n"
-        text += self.strings("plugins_total", count=len(installed))
+        text = self._format_oaplugin_overview()
         buttons = [
             [
                 self.Button.inline(
@@ -2211,23 +2265,49 @@ class OpenAgent(
     @callback(ttl=900)
     async def _oaplugin_manager(self, call: InlineMessage, page: int = 0) -> None:
         """Show installed plugins with delete option."""
-        installed = list(self._plugins.values())
+        installed = list(self._plugins.items())
         if not installed:
             await call.answer(self.strings("plugin_manager_no_installed"), alert=True)
             return
         if page < 0 or page >= len(installed):
             await call.answer()
             return
-        plugin = installed[page]
-        text = f"<b>⚙️ {plugin.name}</b>\n"
-        text += f"{html.escape(self.strings('plugin_version_label'))}: {getattr(plugin, 'version', '?')}\n"
-        text += f"Tools: {len(getattr(plugin, 'tool_registry', ()))}\n\n"
+        plugin_id, plugin = installed[page]
+        plugin_id = str(plugin_id or getattr(plugin, "name", "") or "?")
+        display_name = self._plugin_meta_text(plugin, "name", default=plugin_id)
+        version = self._plugin_meta_text(plugin, "version", default="?")
+        desc = self._plugin_meta_text(plugin, "description", default=self.strings("plugin_no_description"))
+        author = self._plugin_meta_text(plugin, "author")
+        tools = self._plugin_tool_names(plugin)
+        permissions = self._plugin_permissions(plugin)
+        requirements = self._plugin_requirements(plugin)
+
+        text = f"<b>⚙️ {html.escape(display_name)}</b>\n"
+        if display_name.lower() != plugin_id.lower():
+            text += f"{html.escape(self.strings('plugin_id_label'))}: <code>{html.escape(plugin_id)}</code>\n"
+        text += f"{html.escape(self.strings('plugin_version_label'))}: <code>{html.escape(version)}</code>\n"
+        if author:
+            text += f"{html.escape(self.strings('plugin_author_label'))}: {html.escape(author)}\n"
+        if desc:
+            text += f"\n{html.escape(desc)}\n"
+        if tools:
+            tools_str = ", ".join(f"<code>{html.escape(tool)}</code>" for tool in tools[:8])
+            if len(tools) > 8:
+                tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
+            text += f"\n{html.escape(self.strings('plugin_tools_label'))}: {tools_str}\n"
+        if permissions:
+            perms_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in permissions)
+            text += f"{html.escape(self.strings('plugin_permissions_label'))}: {perms_str}\n"
+        if requirements:
+            reqs_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in requirements)
+            text += f"{html.escape(self.strings('plugin_requirements_label'))}: {reqs_str}\n"
+        text += "\n"
         text += self.strings("plugin_actions_title")
         row1 = [
             self.Button.inline(
                 self.strings("plugin_delete_btn"),
                 self._oaplugin_uninstall,
-                args=(plugin.name, page),
+                args=(plugin_id, page),
                 style="danger",
             )
         ]

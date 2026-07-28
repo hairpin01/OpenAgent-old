@@ -5,7 +5,7 @@ from pathlib import Path
 import asyncio
 from typing import Any
 
-from .PluginsEngine import OpenAgentPlugin
+from .PluginBase import OpenAgentPlugin
 from .SessionManager import SessionManager
 
 class _OpenAgentLifecycleMixin:
@@ -111,6 +111,7 @@ class _OpenAgentLifecycleMixin:
         self._pending_prompts: dict[str, dict[str, Any]] = {}
         self._runtime_comments: dict[str, list[str]] = {}
         self._background_tool_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._plugin_unload_tasks: set[asyncio.Task[Any]] = set()
         self._inline_status_waiters: dict[str, asyncio.Future[Any]] = {}
         # Per-chat reference to the last inline response form so follow-up
         # Button.input edits it in place instead of posting a new message.

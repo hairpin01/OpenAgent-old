@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """OpenAgent lib for CubKit"""
 
+from .PluginBase import *
 from .OpenAgentMixins import *
 from .OASessionManager import *
 from .TodoService import *

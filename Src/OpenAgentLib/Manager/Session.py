@@ -16,7 +16,7 @@ from typing import (
     Callable,
 )
 
-from .OASessionManager import OASession
+from .OASession import OASession
 
 _SESSION_PREFERENCES = frozenset({"ask", "continue", "new"})
 

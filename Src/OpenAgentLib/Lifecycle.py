@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from .Plugin.PluginBase import OpenAgentPlugin
-from .SessionManager import SessionManager
+from .Manager.Session import SessionManager
 
 class _OpenAgentLifecycleMixin:
     """Lifecycle/bootstrap logic."""

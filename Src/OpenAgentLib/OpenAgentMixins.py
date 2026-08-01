@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from .OASessionManager import (
+from .Manager import Session as Session
+from .Manager.OASession import (
     OASession
 )
-from .SessionManager import (
+from .Manager.Session import (
     _SESSION_PREFERENCES,
     SessionManager,
     _OpenAgentSessionsMixin,
@@ -63,7 +64,7 @@ __all__ = [
     '_TOOL_GROUP_ALIASES',
     '_DEFAULT_TOOL_STATUS_EMOJIS',
     'OASession',
-    'SessionManager',
+    'Session',
     'OpenAgentPlugin',
     '_OpenAgentLifecycleMixin',
     'OpenAgentProviderService',

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 
-from core.lib.loader.module_base import ModuleBase, callback, command
+from core.lib.loader.module_base import ModuleBase, bot_command, callback, command
 from core.lib.loader.module_config import (
     Boolean,
     Choice,
@@ -1587,6 +1587,120 @@ class OpenAgent(
                 self._invalidate_config_caches(key)
             await self.save_config()
         return applied, skipped, failed
+
+    @staticmethod
+    def _rich_text_html(text: str, *, limit: int = 30000) -> str:
+        text = str(text or "")
+        if len(text) > limit:
+            text = text[:limit] + "\n… [truncated]"
+        escaped = html.escape(text)
+        paragraphs = []
+        for part in re.split(r"\n{2,}", escaped):
+            part = part.strip()
+            if part:
+                paragraphs.append(f"<p>{part.replace(chr(10), '<br>')}</p>")
+        return "".join(paragraphs) or "<p></p>"
+
+    def _rich_draft_bot(self):
+        return getattr(getattr(self, "subinline", None), "bot", None)
+
+    def _rich_bot_system_prompt(self, prompt: str) -> str:
+        return (
+            self._system_prompt(prompt)
+            + "\n\n## Bot command final answer format\n"
+            "For this bot command, the final answer is sent as Telegram Rich Message HTML. "
+            "Use BlockRich/Rich HTML block formatting directly in the final answer: "
+            "<p>, <blockquote>, <pre><code class=\"language-python\">, <details><summary>, "
+            "<ul>/<ol>/<li>, <table>/<caption>/<tr>/<th>/<td>, <footer>, <tg-math>, "
+            "<tg-math-block>, <tg-emoji>, <tg-reference>, <tg-time>, and media block tags when useful. "
+            "Return only the answer body. Do not wrap it in Markdown fences. "
+            "The earlier no-XML rule applies only to tool-call syntax; final Rich HTML tags are allowed here."
+        )
+
+    @bot_command(
+        "oa",
+        doc_ru="<запрос> спросить OpenAgent через rich draft streaming",
+        doc_en="<prompt> ask OpenAgent using rich draft streaming",
+    )
+    async def bot_oa(self, event: Event) -> None:
+        prompt = self.args_raw(event).strip()
+        if not prompt:
+            await event.reply("Usage: oa <prompt>")
+            return
+
+        bot = self._rich_draft_bot()
+        if bot is None or not hasattr(bot, "send_draft_message"):
+            await event.reply("Rich draft bot client is unavailable")
+            return
+
+        target = getattr(event, "chat_id", None) or getattr(event, "sender_id", None)
+        if target is None:
+            await event.reply("Can't resolve target chat for rich draft")
+            return
+
+        draft_id = int.from_bytes(uuid.uuid4().bytes[:8], "big", signed=True)
+        started = time.monotonic()
+
+        async def push_draft(label: str) -> None:
+            safe_label = html.escape(label)
+            with contextlib.suppress(Exception):
+                await bot.send_draft_message(
+                    target,
+                    html=f"<tg-thinking>{safe_label}</tg-thinking>",
+                    draft_id=draft_id,
+                    noautolink=True,
+                )
+
+        await push_draft("OpenAgent думает…")
+        task = asyncio.create_task(
+            self._ask_agent(
+                prompt,
+                status_event=None,
+                source_event=event,
+                attachments=[],
+                started_at=started,
+                system_override=self._rich_bot_system_prompt(prompt),
+            )
+        )
+
+        tick = 0
+        try:
+            while not task.done():
+                await asyncio.sleep(1.5)
+                tick += 1
+                elapsed = time.monotonic() - started
+                await push_draft(f"OpenAgent генерирует ответ… {elapsed:.1f}s")
+
+            answer, agent_log, thinking_notes, tool_trace = await task
+            elapsed = time.monotonic() - started
+            self._remember_context(
+                getattr(event, "chat_id", None),
+                prompt,
+                answer,
+                tool_trace,
+                thinking_notes,
+            )
+            final_html = answer.strip() if answer.strip() else "<p></p>"
+            if "<" not in final_html or ">" not in final_html:
+                final_html = self._rich_text_html(final_html)
+            await bot.send_rich_message(
+                target,
+                html=final_html,
+                message=answer[:4096] if answer else "",
+                fallback=True,
+                noautolink=True,
+            )
+        except Exception as exc:
+            await push_draft("OpenAgent словил ошибку")
+            error_html = (
+                "<p><b>OpenAgent error</b></p>"
+                f"<blockquote><code>{html.escape(str(exc))}</code></blockquote>"
+            )
+            with contextlib.suppress(Exception):
+                if bot is not None and hasattr(bot, "send_rich_message"):
+                    await bot.send_rich_message(target, html=error_html, fallback=True)
+                    return
+            await event.reply(f"OpenAgent error: {exc}")
 
     @command(
         "oa",

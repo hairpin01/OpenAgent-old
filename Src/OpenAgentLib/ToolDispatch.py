@@ -13,7 +13,7 @@ from pathlib import Path
 import contextlib
 import json
 
-from .OASessionManager import OASession
+from .Manager.OASession import OASession
 from .Plugin.PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
 from .SystemPlugins import (
     SystemTool,

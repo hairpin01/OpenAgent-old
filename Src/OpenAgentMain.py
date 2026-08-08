@@ -3,7 +3,7 @@
 # -- repo data --
 # repo: https://github.com/hairpin01/repo-MCUB-fork/
 # -- end --
-# scop: kernel min v1.4.5
+# scop: kernel min v1.4.6
 
 from __future__ import annotations
 
@@ -1601,9 +1601,6 @@ class OpenAgent(
                 paragraphs.append(f"<p>{part.replace(chr(10), '<br>')}</p>")
         return "".join(paragraphs) or "<p></p>"
 
-    def _rich_draft_bot(self):
-        return getattr(getattr(self, "subinline", None), "bot", None)
-
     def _rich_bot_system_prompt(self, prompt: str) -> str:
         return (
             self._system_prompt(prompt)
@@ -1623,12 +1620,15 @@ class OpenAgent(
         doc_en="<prompt> ask OpenAgent using rich draft streaming",
     )
     async def bot_oa(self, event: Event) -> None:
+        if event.sender_id != self.kernel.ADMIN_ID:
+            return None
+
         prompt = self.args_raw(event).strip()
         if not prompt:
             await event.reply("Usage: oa <prompt>")
             return
 
-        bot = self._rich_draft_bot()
+        bot = self.subinline.bot
         if bot is None or not hasattr(bot, "send_draft_message"):
             await event.reply("Rich draft bot client is unavailable")
             return
@@ -1687,8 +1687,6 @@ class OpenAgent(
                 target,
                 html=final_html,
                 message=answer[:4096] if answer else "",
-                fallback=True,
-                noautolink=True,
             )
         except Exception as exc:
             await push_draft("OpenAgent словил ошибку")

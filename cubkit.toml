@@ -1,5 +1,40 @@
+format = 2
+
+[module]
 id = 'openagent'
-src = 'Src'
+scope = "inline"
+
+[bundle]
+source = 'Src'
 entrypoint = "OpenAgentMain.py"
-package = 'OpenAgentLib'
+packages = ['OpenAgentLib']
+locales = 'locales'
+output = 'dist/OpenDebug.py'
+debug_output = 'dist/OpenDebug.py'
+release_output = 'dist/OpenAgent-MCUB-repo.py'
 sign = true
+fail_on_secrets = true
+
+[hooks]
+pre_check = [
+    ['python', 'scripts/check_locales.py'],
+    ['cubkit', 'lint', '.'],
+]
+pre_build = [
+    ['python', 'scripts/check_locales.py'],
+    ['cubkit', 'lint', '.'],
+]
+
+[hooks.debug]
+post_build = ['python', 'scripts/notify_build.py']
+
+[hooks.release]
+post_build = [
+    [
+        'python',
+        'scripts/copy_release.py',
+        '{output}',
+        '../repo-MCUB-fork/OpenAgent-MCUB-repo.py',
+    ],
+    ['python', 'scripts/notify_build.py'],
+]

@@ -4,10 +4,14 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='skills',
-    name='activate',
-    handler='handle',
-    docs={'desc': 'Activate/load the best matching installed skill for the current task.', 'args': 'query/name', 'body': 'optional query'},
+    tool_class="skills",
+    name="activate",
+    handler="handle",
+    docs={
+        "desc": "Activate/load the best matching installed skill for the current task.",
+        "args": "query/name",
+        "body": "optional query",
+    },
 )
 
 

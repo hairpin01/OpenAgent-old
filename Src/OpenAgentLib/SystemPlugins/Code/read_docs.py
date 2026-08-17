@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='code',
-    name='read_docs',
-    handler='handle',
-    docs={'desc': 'Read bundled/remote MCUB API documentation.'},
+    tool_class="code",
+    name="read_docs",
+    handler="handle",
+    docs={"desc": "Read bundled/remote MCUB API documentation."},
 )
 
 

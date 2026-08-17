@@ -10,6 +10,7 @@ import time
 import uuid
 import asyncio
 
+
 class _OpenAgentResponseMixin:
     """Response formatting, answer delivery, follow-up and regeneration."""
 
@@ -60,7 +61,9 @@ class _OpenAgentResponseMixin:
         content = f"{title}\n\n{self.strings('answer_file_request')}:\n{prompt}\n\n{self.strings('answer_file_answer')}:\n{answer}"
         content += "\n\nThinking:\n" + self._format_thinking_notes(thinking_notes)
         if agent_log:
-            content += "\n\nAgent Log:\n" + "\n".join(self._compact_agent_log(agent_log))
+            content += "\n\nAgent Log:\n" + "\n".join(
+                self._compact_agent_log(agent_log)
+            )
         data = content.encode("utf-8")
 
         def make_buf() -> io.BytesIO:
@@ -71,7 +74,9 @@ class _OpenAgentResponseMixin:
         total_len = len(content)
         self.log.debug(
             "OA send_answer_file: chat_id=%s content_len=%d has_edit=%s",
-            getattr(event, "chat_id", None), total_len, hasattr(event, "edit"),
+            getattr(event, "chat_id", None),
+            total_len,
+            hasattr(event, "edit"),
         )
         caption = f"{title}\n\n{self.strings('answer_file_too_long')}"
         last_error: Exception | None = None
@@ -87,7 +92,11 @@ class _OpenAgentResponseMixin:
                 last_error = exc
             else:
                 return
-        error = f"\n\n<code>{html.escape(str(last_error)[:500])}</code>" if last_error else ""
+        error = (
+            f"\n\n<code>{html.escape(str(last_error)[:500])}</code>"
+            if last_error
+            else ""
+        )
         fallback = html.escape(content[:3000])
         await self.edit(
             event,
@@ -113,12 +122,17 @@ class _OpenAgentResponseMixin:
         request_label = self._request_label(thinking_notes=thinking_notes)
         response_label = self._response_label(thinking_notes=thinking_notes)
         agent_log_html = self._agent_log_html(agent_log or [])
-        total_formatted_len = len(formatted) + len(formatted_prompt) + len(agent_log_html)
-        chat_id = getattr(event, "chat_id", None) or getattr(event, "_openagent_source_chat_id", None)
+        total_formatted_len = (
+            len(formatted) + len(formatted_prompt) + len(agent_log_html)
+        )
+        chat_id = getattr(event, "chat_id", None) or getattr(
+            event, "_openagent_source_chat_id", None
+        )
         if total_formatted_len > 3500:
             self.log.debug(
                 "OA reply_text TOO_LONG→FILE: chat_id=%s total_len=%d limit=3500",
-                chat_id, total_formatted_len,
+                chat_id,
+                total_formatted_len,
             )
             await self._send_answer_file(
                 event,
@@ -130,9 +144,15 @@ class _OpenAgentResponseMixin:
                 buttons,
             )
             return
-        chunks = [formatted[i : i + 3500] for i in range(0, len(formatted), 3500)] or [""]
+        chunks = [formatted[i : i + 3500] for i in range(0, len(formatted), 3500)] or [
+            ""
+        ]
         for index, chunk in enumerate(chunks):
-            header = title if index == 0 else f"{title} <i>{html.escape(self.strings('continued'))}</i>"
+            header = (
+                title
+                if index == 0
+                else f"{title} <i>{html.escape(self.strings('continued'))}</i>"
+            )
             if index == 0:
                 body = (
                     f"{header}\n\n"
@@ -152,13 +172,19 @@ class _OpenAgentResponseMixin:
                     )
                     self.log.debug(
                         "OA reply_text EDIT_OK: index=%d/%d chat_id=%s chunk_len=%d",
-                        index, len(chunks) - 1, chat_id, len(chunk),
+                        index,
+                        len(chunks) - 1,
+                        chat_id,
+                        len(chunk),
                     )
                     continue
                 except Exception as exc:
                     self.log.debug(
                         "OA reply_text EDIT_FAIL: index=%d/%d chat_id=%s error=%s",
-                        index, len(chunks) - 1, chat_id, exc,
+                        index,
+                        len(chunks) - 1,
+                        chat_id,
+                        exc,
                     )
             if chat_id is not None:
                 if buttons and index == len(chunks) - 1:
@@ -173,18 +199,23 @@ class _OpenAgentResponseMixin:
                         )
                         self.log.debug(
                             "OA reply_text NEW_INLINE: chat_id=%s chunk_len=%d",
-                            chat_id, len(chunk),
+                            chat_id,
+                            len(chunk),
                         )
                     except Exception as exc:
                         self.log.debug(
                             "OA reply_text INLINE_FAIL→SEND_MSG: chat_id=%s error=%s",
-                            chat_id, exc,
+                            chat_id,
+                            exc,
                         )
                         await self.client.send_message(chat_id, body, parse_mode="html")
                 else:
                     self.log.debug(
                         "OA reply_text SEND_MSG: chat_id=%s has_buttons=%s index=%d/%d",
-                        chat_id, bool(buttons), index, len(chunks) - 1,
+                        chat_id,
+                        bool(buttons),
+                        index,
+                        len(chunks) - 1,
                     )
                     await self.client.send_message(
                         chat_id,
@@ -221,7 +252,9 @@ class _OpenAgentResponseMixin:
     ) -> None:
         """Render an exception as the final OpenAgent answer instead of a raw edit."""
         with contextlib.suppress(Exception):
-            await self.kernel.handle_error(exc, source=source, event=source_event or event)
+            await self.kernel.handle_error(
+                exc, source=source, event=source_event or event
+            )
         elapsed = (time.monotonic() - started_at) if started_at else 0.0
         error_text = self.strings("error", error=str(exc))
         await self._reply_text(
@@ -241,7 +274,9 @@ class _OpenAgentResponseMixin:
             edit_current=True,
         )
 
-    async def _on_runtime_comment_input(self, event: Any, text: str, token: str) -> None:
+    async def _on_runtime_comment_input(
+        self, event: Any, text: str, token: str
+    ) -> None:
         """Collect a user comment while an agent run is still active."""
         token = str(token or "").strip()
         comment = (text or "").strip()
@@ -311,7 +346,9 @@ class _OpenAgentResponseMixin:
                     f"result:\n{str(result or '').strip()[:3000]}"
                 )
                 if not self.add_runtime_comment(token, comment):
-                    self.log.info("OpenAgent background task %s finished: %s", task_id, clean_tool)
+                    self.log.info(
+                        "OpenAgent background task %s finished: %s", task_id, clean_tool
+                    )
             except Exception as exc:
                 elapsed = time.monotonic() - started
                 comment = (
@@ -322,7 +359,11 @@ class _OpenAgentResponseMixin:
                 )
                 self.add_runtime_comment(token, comment)
                 with contextlib.suppress(Exception):
-                    await self.kernel.handle_error(exc, source=f"OpenAgent:bg_tool:{clean_tool}", event=source_event)
+                    await self.kernel.handle_error(
+                        exc,
+                        source=f"OpenAgent:bg_tool:{clean_tool}",
+                        event=source_event,
+                    )
             finally:
                 self._background_tool_tasks.pop(task_id, None)
 
@@ -330,7 +371,9 @@ class _OpenAgentResponseMixin:
         self._background_tool_tasks[task_id] = task
         return task_id
 
-    def _runtime_control_buttons(self, token: str, source_event: Any | None = None) -> list[list[Any]]:
+    def _runtime_control_buttons(
+        self, token: str, source_event: Any | None = None
+    ) -> list[list[Any]]:
         """Buttons shown while a generation is running."""
         allow_user = getattr(source_event, "sender_id", None)
         comment_button = self.Button.input(
@@ -389,12 +432,29 @@ class _OpenAgentResponseMixin:
 
     def _direct_button(self, text: str, kind: str, payload: dict[str, Any]) -> Any:
         if kind == "cancel":
-            return self.Button.inline(text, self._cancel_generation, args=(payload.get("token", ""),), style="danger")
+            return self.Button.inline(
+                text,
+                self._cancel_generation,
+                args=(payload.get("token", ""),),
+                style="danger",
+            )
         if kind == "clear":
-            return self.Button.inline(text, self._clear_context, args=(payload.get("chat_id"),), style="danger")
+            return self.Button.inline(
+                text,
+                self._clear_context,
+                args=(payload.get("chat_id"),),
+                style="danger",
+            )
         if kind == "regen":
-            return self.Button.inline(text, self._regenerate_response, args=(payload.get("token", ""),), style="primary")
-        return self.Button.inline(text, self._clear_context, args=(None,), style="danger")
+            return self.Button.inline(
+                text,
+                self._regenerate_response,
+                args=(payload.get("token", ""),),
+                style="primary",
+            )
+        return self.Button.inline(
+            text, self._clear_context, args=(None,), style="danger"
+        )
 
     def _final_buttons(
         self,
@@ -434,8 +494,12 @@ class _OpenAgentResponseMixin:
             args=(chat_id,),
             style="primary",
         )
-        clear_button = self._direct_button(self.strings("clear_button"), "clear", {"chat_id": chat_id})
-        regen_button = self._direct_button(self.strings("regenerate_button"), "regen", {"token": regen_token})
+        clear_button = self._direct_button(
+            self.strings("clear_button"), "clear", {"chat_id": chat_id}
+        )
+        regen_button = self._direct_button(
+            self.strings("regenerate_button"), "regen", {"token": regen_token}
+        )
         rows: list[list[Any]] = []
         if source_event is not None:
             input_key = str(uuid.uuid4())
@@ -563,7 +627,9 @@ class _OpenAgentResponseMixin:
                 source="OpenAgent:follow_up",
             )
 
-    async def _on_regenerate_prompt_input(self, event: Any, text: str, token: str) -> None:
+    async def _on_regenerate_prompt_input(
+        self, event: Any, text: str, token: str
+    ) -> None:
         """Regenerate the previous answer using a user-provided replacement prompt."""
         # Button.input delivers UpdateBotInlineSend as event — it has no .chat_id / .edit().
         # Extract source_event and chat_id from the payload first so that show_feedback
@@ -577,12 +643,16 @@ class _OpenAgentResponseMixin:
             escaped = html.escape(message)
             if hasattr(source_event, "edit"):
                 with contextlib.suppress(Exception):
-                    await source_event.edit(f"<blockquote>{escaped}</blockquote>", parse_mode="html")
+                    await source_event.edit(
+                        f"<blockquote>{escaped}</blockquote>", parse_mode="html"
+                    )
                     self.log.debug("OA regen_prompt: feedback edit ok token=%s", token)
                     return
             with contextlib.suppress(Exception):
                 await self.edit(source_event, escaped, as_html=True)
-                self.log.debug("OA regen_prompt: feedback fallback edit ok token=%s", token)
+                self.log.debug(
+                    "OA regen_prompt: feedback fallback edit ok token=%s", token
+                )
 
         self.log.debug(
             "OA regen_prompt: input token=%s payload=%s prompt_len=%d event=%s",
@@ -612,7 +682,9 @@ class _OpenAgentResponseMixin:
                     buttons=buttons,
                     parse_mode="html",
                 )
-                loading = edited if edited and not isinstance(edited, bool) else source_event
+                loading = (
+                    edited if edited and not isinstance(edited, bool) else source_event
+                )
                 self.log.debug(
                     "OA regen_prompt: status edit ok token=%s loading=%s",
                     token,
@@ -623,11 +695,20 @@ class _OpenAgentResponseMixin:
                 with contextlib.suppress(Exception):
                     setattr(loading, "_openagent_source_chat_id", chat_id)
             except Exception as exc:
-                self.log.debug("OA regen_prompt: status edit failed token=%s error=%s", token, exc)
-                loading = await self._start_inline_status(source_event, self._thinking_text(), buttons)
+                self.log.debug(
+                    "OA regen_prompt: status edit failed token=%s error=%s", token, exc
+                )
+                loading = await self._start_inline_status(
+                    source_event, self._thinking_text(), buttons
+                )
         else:
-            self.log.debug("OA regen_prompt: no source_event.edit token=%s, using inline status", token)
-            loading = await self._start_inline_status(source_event, self._thinking_text(), buttons)
+            self.log.debug(
+                "OA regen_prompt: no source_event.edit token=%s, using inline status",
+                token,
+            )
+            loading = await self._start_inline_status(
+                source_event, self._thinking_text(), buttons
+            )
 
         started = time.monotonic()
         try:
@@ -733,7 +814,13 @@ class _OpenAgentResponseMixin:
                 started_at=started,
             )
             elapsed = time.monotonic() - started
-            self._remember_context(payload.get("chat_id"), payload["full_prompt"], answer, tool_trace, thinking_notes)
+            self._remember_context(
+                payload.get("chat_id"),
+                payload["full_prompt"],
+                answer,
+                tool_trace,
+                thinking_notes,
+            )
             await self._reply_text(
                 loading or event,
                 answer,
@@ -769,6 +856,7 @@ class _OpenAgentResponseMixin:
                 source="OpenAgent:regenerate",
             )
 
+
 __all__ = [
-    '_OpenAgentResponseMixin',
+    "_OpenAgentResponseMixin",
 ]

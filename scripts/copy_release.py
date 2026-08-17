@@ -21,7 +21,10 @@ def main() -> int:
         print(f"release artifact does not exist: {artifact}", file=sys.stderr)
         return 1
     if destination_input.is_symlink():
-        print(f"release destination must not be a symlink: {destination_input}", file=sys.stderr)
+        print(
+            f"release destination must not be a symlink: {destination_input}",
+            file=sys.stderr,
+        )
         return 1
 
     destination_parent = destination_input.parent.resolve()

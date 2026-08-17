@@ -32,6 +32,7 @@ _DEFAULT_TODO_STATUS_MAP = {
 }
 _WHITESPACE_RE = re.compile(r"\s+")
 
+
 class OpenAgentTodoService:
     """Pure TODO parsing/formatting logic, isolated from MCUB runtime."""
 
@@ -60,7 +61,9 @@ class OpenAgentTodoService:
         status = (status or "").strip().lower()
         return _TODO_STATUS_ALIASES.get(status, "pending")
 
-    def clean_items(self, items: list[dict[str, str]] | list[Any]) -> list[dict[str, str]]:
+    def clean_items(
+        self, items: list[dict[str, str]] | list[Any]
+    ) -> list[dict[str, str]]:
         cleaned: list[dict[str, str]] = []
         for item in items:
             if not isinstance(item, dict):
@@ -71,14 +74,18 @@ class OpenAgentTodoService:
             cleaned.append(
                 {
                     "text": text[:500],
-                    "status": self.normalize_status(str(item.get("status", "pending") or "pending")),
+                    "status": self.normalize_status(
+                        str(item.get("status", "pending") or "pending")
+                    ),
                 }
             )
         return cleaned
 
     def status_map(self, raw: str | None) -> dict[str, str]:
         raw_text = str(raw or "")
-        if raw_text == self._status_map_raw and isinstance(self._status_map_cache, dict):
+        if raw_text == self._status_map_raw and isinstance(
+            self._status_map_cache, dict
+        ):
             return dict(self._status_map_cache)
         mapping = dict(_DEFAULT_TODO_STATUS_MAP)
         for line in raw_text.splitlines():
@@ -93,13 +100,14 @@ class OpenAgentTodoService:
         self._status_map_cache = dict(mapping)
         return dict(mapping)
 
-    def format_placeholder(self, items: list[dict[str, str]], raw_status_map: str | None = None) -> str:
+    def format_placeholder(
+        self, items: list[dict[str, str]], raw_status_map: str | None = None
+    ) -> str:
         if not items:
             return "TODO empty"
         status_map = self.status_map(raw_status_map)
         return "\n".join(
-            f"{status_map.get(item['status'], '...')} {item['text']}"
-            for item in items
+            f"{status_map.get(item['status'], '...')} {item['text']}" for item in items
         )
 
     def target_index(
@@ -173,7 +181,9 @@ class _OpenAgentTodoMixin:
         raw = str(self.config.get("todo_status_emojis", "") or "")
         return self._todo_service().format_placeholder(self._todo_items(), raw)
 
-    async def _save_todo_items(self, items: list[dict[str, str]]) -> list[dict[str, str]]:
+    async def _save_todo_items(
+        self, items: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
         cleaned = self._todo_service().clean_items(items)
         self._todo_items_cache = cleaned
         await asyncio.sleep(0)
@@ -194,10 +204,11 @@ class _OpenAgentTodoMixin:
             allow_body_text=allow_body_text,
         )
 
+
 __all__ = [
-     'OpenAgentTodoService',
-     '_OpenAgentTodoMixin',
-     '_TODO_STATUS_ALIASES',
-     '_DEFAULT_TODO_STATUS_MAP',
-     '_WHITESPACE_RE',
+    "OpenAgentTodoService",
+    "_OpenAgentTodoMixin",
+    "_TODO_STATUS_ALIASES",
+    "_DEFAULT_TODO_STATUS_MAP",
+    "_WHITESPACE_RE",
 ]

@@ -5,9 +5,7 @@
 from __future__ import annotations
 
 from .Manager import Session as Session
-from .Manager.OASession import (
-    OASession
-)
+from .Manager.OASession import OASession
 from .Manager.Session import (
     _SESSION_PREFERENCES,
     SessionManager,
@@ -27,9 +25,7 @@ from .TodoService import (
     _DEFAULT_TODO_STATUS_MAP,
     _WHITESPACE_RE,
 )
-from .Lifecycle import (
-    _OpenAgentLifecycleMixin
-)
+from .Lifecycle import _OpenAgentLifecycleMixin
 from .Placeholders import (
     _PLACEHOLDER_RE,
     OpenAgentProviderService,
@@ -48,40 +44,38 @@ from .ContextService import (
     OpenAgentContextService,
     _OpenAgentContextMixin,
 )
-from .ResponseAgent import (
-    _OpenAgentResponseMixin
-)
+from .ResponseAgent import _OpenAgentResponseMixin
 
-OPENAGENT_LIB_VERSION = '0.8.0-main.build:1043' # fallback
+OPENAGENT_LIB_VERSION = "0.8.0-main.build:1043"  # fallback
 
 __all__ = [
-    'OPENAGENT_LIB_VERSION',
-    '_WHITESPACE_RE',
-    '_PLACEHOLDER_RE',
-    '_TODO_STATUS_ALIASES',
-    '_DEFAULT_TODO_STATUS_MAP',
-    '_SESSION_PREFERENCES',
-    '_TOOL_GROUP_ALIASES',
-    '_DEFAULT_TOOL_STATUS_EMOJIS',
-    'OASession',
-    'Session',
-    'OpenAgentPlugin',
-    '_OpenAgentLifecycleMixin',
-    'OpenAgentProviderService',
-    'OpenAgentTemplateService',
-    '_OpenAgentProviderMixin',
-    'OpenAgentTodoService',
-    '_OpenAgentTodoMixin',
-    'OpenAgentToolDisplayService',
-    '_OpenAgentToolDisplayMixin',
-    'OpenAgentContextService',
-    '_OpenAgentContextMixin',
-    '_OpenAgentSessionsMixin',
-    '_OpenAgentPluginSkillMixin',
-    '_OpenAgentRuntimeToolsMixin',
-    '_OpenAgentTelegramMediaMixin',
-    '_OpenAgentStatusMixin',
-    '_OpenAgentAgentLoopMixin',
-    '_OpenAgentResponseMixin',
-    '_OpenAgentToolRegistryMixin',
+    "OPENAGENT_LIB_VERSION",
+    "_WHITESPACE_RE",
+    "_PLACEHOLDER_RE",
+    "_TODO_STATUS_ALIASES",
+    "_DEFAULT_TODO_STATUS_MAP",
+    "_SESSION_PREFERENCES",
+    "_TOOL_GROUP_ALIASES",
+    "_DEFAULT_TOOL_STATUS_EMOJIS",
+    "OASession",
+    "Session",
+    "OpenAgentPlugin",
+    "_OpenAgentLifecycleMixin",
+    "OpenAgentProviderService",
+    "OpenAgentTemplateService",
+    "_OpenAgentProviderMixin",
+    "OpenAgentTodoService",
+    "_OpenAgentTodoMixin",
+    "OpenAgentToolDisplayService",
+    "_OpenAgentToolDisplayMixin",
+    "OpenAgentContextService",
+    "_OpenAgentContextMixin",
+    "_OpenAgentSessionsMixin",
+    "_OpenAgentPluginSkillMixin",
+    "_OpenAgentRuntimeToolsMixin",
+    "_OpenAgentTelegramMediaMixin",
+    "_OpenAgentStatusMixin",
+    "_OpenAgentAgentLoopMixin",
+    "_OpenAgentResponseMixin",
+    "_OpenAgentToolRegistryMixin",
 ]

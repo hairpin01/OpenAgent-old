@@ -15,16 +15,6 @@ release_output = 'dist/OpenAgent-MCUB-repo.py'
 sign = true
 fail_on_secrets = true
 
-[hooks]
-pre_check = [
-    ['python', 'scripts/check_locales.py'],
-    ['cubkit', 'lint', '.'],
-]
-pre_build = [
-    ['python', 'scripts/check_locales.py'],
-    ['cubkit', 'lint', '.'],
-]
-
 [hooks.debug]
 post_build = ['python', 'scripts/notify_build.py']
 
@@ -38,3 +28,21 @@ post_build = [
     ],
     ['python', 'scripts/notify_build.py'],
 ]
+[lint]
+auto = true
+check_imports = true
+strict_imports = true
+enable = ["async", "decorators", "locales", "hooks"]
+ignore = [".*", "dist/*"]
+mcub_modules = ['aiohttp', 'core', 'telethon']
+runtime_modules = ["openagent_system_tool_api"]
+
+[lint.tools.debug]
+ruff = false
+black = true
+mypy = false
+
+[lint.tools.release]
+ruff = true
+black = true
+mypy = false

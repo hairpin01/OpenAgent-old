@@ -4,10 +4,14 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='code',
-    name='generate_file',
-    handler='handle',
-    docs={'desc': 'Generate a text/code file and keep it for sending/attaching.', 'args': 'name/path', 'body': 'file content'},
+    tool_class="code",
+    name="generate_file",
+    handler="handle",
+    docs={
+        "desc": "Generate a text/code file and keep it for sending/attaching.",
+        "args": "name/path",
+        "body": "file content",
+    },
 )
 
 
@@ -18,4 +22,6 @@ async def handle(
     body: str = "",
     source_event=None,
 ) -> str:
-    return await agent._code_registry_tool(tool_name, attrs_raw, body, source_event=source_event)
+    return await agent._code_registry_tool(
+        tool_name, attrs_raw, body, source_event=source_event
+    )

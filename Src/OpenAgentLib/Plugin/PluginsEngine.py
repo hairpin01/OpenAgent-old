@@ -77,7 +77,9 @@ class _OpenAgentPluginSkillMixin:
             raw = data.get("disabled", data) if isinstance(data, dict) else data
             if not isinstance(raw, list):
                 return set()
-            return {self._safe_plugin_name(item) for item in raw if str(item or "").strip()}
+            return {
+                self._safe_plugin_name(item) for item in raw if str(item or "").strip()
+            }
         except Exception as exc:
             self.log.warning(f"OpenAgent: failed to load disabled plugins: {exc}")
             return set()
@@ -126,7 +128,9 @@ class _OpenAgentPluginSkillMixin:
             self._system_tools = {}
         self._tool_map_cache = None
         self._tool_registry_cache = None
-        self.log.info("System tools registered: %s", len(getattr(self, "_system_tools", {})))
+        self.log.info(
+            "System tools registered: %s", len(getattr(self, "_system_tools", {}))
+        )
 
     async def _load_installed_plugins(self) -> None:
         """Scan bundled + external plugin directories and register all plugins.
@@ -135,7 +139,10 @@ class _OpenAgentPluginSkillMixin:
             for fpath in sorted(plugins_dir.glob("*.py")):
                 if fpath.name.startswith("_") or fpath.name == "__init__.py":
                     continue
-                if self._is_builtin_plugin_file(fpath) and self._safe_plugin_name(fpath.stem) in self._disabled_plugins:
+                if (
+                    self._is_builtin_plugin_file(fpath)
+                    and self._safe_plugin_name(fpath.stem) in self._disabled_plugins
+                ):
                     self.log.debug(f"Plugin skipped (disabled): {fpath.stem}")
                     continue
                 try:
@@ -171,7 +178,9 @@ class _OpenAgentPluginSkillMixin:
 
     async def _register_plugin_from_file(self, fpath: Path) -> None:
         """Import a .py file, find *Plugin class, register it."""
-        module_name = f"openagent_plugins_{fpath.parent.name}_{fpath.stem}_{uuid.uuid4().hex[:8]}"
+        module_name = (
+            f"openagent_plugins_{fpath.parent.name}_{fpath.stem}_{uuid.uuid4().hex[:8]}"
+        )
         spec = importlib.util.spec_from_file_location(module_name, fpath)
         if not spec or not spec.loader:
             raise ImportError(f"Cannot load {fpath}")
@@ -185,7 +194,11 @@ class _OpenAgentPluginSkillMixin:
         plugin_cls = None
         for attr_name in dir(mod):
             attr = getattr(mod, attr_name)
-            if isinstance(attr, type) and attr_name.endswith("Plugin") and attr is not OpenAgentPlugin:
+            if (
+                isinstance(attr, type)
+                and attr_name.endswith("Plugin")
+                and attr is not OpenAgentPlugin
+            ):
                 plugin_cls = attr
                 break
         if not plugin_cls:
@@ -211,7 +224,9 @@ class _OpenAgentPluginSkillMixin:
             name = plugin.__class__.__name__.replace("Plugin", "").strip().lower()
         plugin.name = name
         if name in self._plugins:
-            self.log.debug(f"Plugin {name} already registered, external overrides bundled")
+            self.log.debug(
+                f"Plugin {name} already registered, external overrides bundled"
+            )
         # Set default config values if not already set
         for key, value in getattr(plugin, "config_defaults", {}).items():
             if key not in self.config.keys():
@@ -267,9 +282,7 @@ class _OpenAgentPluginSkillMixin:
 
     def _iter_hook_plugins(self) -> list[OpenAgentPlugin]:
         indexed = list(enumerate((getattr(self, "_plugins", {}) or {}).values()))
-        indexed.sort(
-            key=lambda item: (-self._plugin_hook_priority(item[1]), item[0])
-        )
+        indexed.sort(key=lambda item: (-self._plugin_hook_priority(item[1]), item[0]))
         return [plugin for _index, plugin in indexed]
 
     def _is_default_plugin_hook(self, method: object, hook_name: str) -> bool:
@@ -317,13 +330,19 @@ class _OpenAgentPluginSkillMixin:
                 if hasattr(context, "result"):
                     setattr(context, "result", result.result)
                 if hasattr(context, "answer"):
-                    setattr(context, "answer", "" if result.result is None else str(result.result))
+                    setattr(
+                        context,
+                        "answer",
+                        "" if result.result is None else str(result.result),
+                    )
                 last_result = result
             if result.cancel:
                 return result
         return last_result
 
-    def _restore_plugin_patches(self, plugin: OpenAgentPlugin, plugin_name: str) -> None:
+    def _restore_plugin_patches(
+        self, plugin: OpenAgentPlugin, plugin_name: str
+    ) -> None:
         restore = getattr(plugin, "restore_patches", None)
         if not callable(restore):
             return
@@ -338,7 +357,9 @@ class _OpenAgentPluginSkillMixin:
 
     def _schedule_plugin_unload(self, plugin: OpenAgentPlugin) -> None:
         on_unload = getattr(plugin, "on_unload", None)
-        has_custom_unload = callable(on_unload) and not self._is_default_plugin_hook(on_unload, "on_unload")
+        has_custom_unload = callable(on_unload) and not self._is_default_plugin_hook(
+            on_unload, "on_unload"
+        )
         plugin_name = getattr(plugin, "name", plugin.__class__.__name__)
         if not has_custom_unload:
             self._restore_plugin_patches(plugin, plugin_name)
@@ -440,7 +461,11 @@ class _OpenAgentPluginSkillMixin:
             docs[tool_name] = self._normalize_tool_doc_entry(
                 tool_name,
                 entry,
-                handler=tool.handler if isinstance(tool.handler, str) else getattr(tool.handler, "__name__", "callable"),
+                handler=(
+                    tool.handler
+                    if isinstance(tool.handler, str)
+                    else getattr(tool.handler, "__name__", "callable")
+                ),
                 source="system",
             )
         return docs
@@ -476,7 +501,9 @@ class _OpenAgentPluginSkillMixin:
             return default
         if isinstance(value, (list, tuple, set)):
             text = ", ".join(
-                item for item in (self._doc_text(item, default="") for item in value) if item
+                item
+                for item in (self._doc_text(item, default="") for item in value)
+                if item
             )
         else:
             text = _WHITESPACE_RE.sub(" ", str(value or "")).strip()
@@ -520,15 +547,21 @@ class _OpenAgentPluginSkillMixin:
 
     def _plugin_meta_text(self, plugin: object, key: str, *, default: str = "") -> str:
         manifest = self._plugin_manifest(plugin)
-        return self._doc_text(manifest.get(key, getattr(plugin, key, None)), default=default)
+        return self._doc_text(
+            manifest.get(key, getattr(plugin, key, None)), default=default
+        )
 
     def _plugin_permissions(self, plugin: object) -> list[str]:
         manifest = self._plugin_manifest(plugin)
-        return self._string_list(manifest.get("permissions", getattr(plugin, "permissions", ())))
+        return self._string_list(
+            manifest.get("permissions", getattr(plugin, "permissions", ()))
+        )
 
     def _plugin_requirements(self, plugin: object) -> list[str]:
         manifest = self._plugin_manifest(plugin)
-        return self._string_list(manifest.get("requirements", getattr(plugin, "requirements", ())))
+        return self._string_list(
+            manifest.get("requirements", getattr(plugin, "requirements", ()))
+        )
 
     def _schema_text(self, value: object) -> str:
         if value in (None, "", {}, [], ()):  # type: ignore[comparison-overlap]
@@ -558,7 +591,9 @@ class _OpenAgentPluginSkillMixin:
                     if isinstance(field_schema, dict):
                         field_type = self._doc_text(field_schema.get("type", ""))
                         field_desc = self._doc_text(
-                            field_schema.get("description") or field_schema.get("desc") or ""
+                            field_schema.get("description")
+                            or field_schema.get("desc")
+                            or ""
                         )
                     else:
                         field_desc = self._doc_text(field_schema)
@@ -576,14 +611,18 @@ class _OpenAgentPluginSkillMixin:
             with contextlib.suppress(Exception):
                 return json.dumps(value, ensure_ascii=False, sort_keys=True)
         if isinstance(value, (list, tuple, set)):
-            return ", ".join(item for item in (self._schema_text(item) for item in value) if item)
+            return ", ".join(
+                item for item in (self._schema_text(item) for item in value) if item
+            )
         return self._doc_text(value)
 
     def _tool_schema_doc(self, raw_schema: object) -> dict[str, str]:
         if not isinstance(raw_schema, dict):
             return {}
         entry: dict[str, str] = {}
-        desc = self._doc_text(raw_schema.get("desc") or raw_schema.get("description") or "")
+        desc = self._doc_text(
+            raw_schema.get("desc") or raw_schema.get("description") or ""
+        )
         if desc:
             entry["desc"] = desc
         for source_key, target_key in (
@@ -606,7 +645,9 @@ class _OpenAgentPluginSkillMixin:
                 text = self._schema_text(raw_schema.get(source_key))
                 if text:
                     entry[target_key] = text
-        if not entry and any(key in raw_schema for key in ("type", "properties", "required")):
+        if not entry and any(
+            key in raw_schema for key in ("type", "properties", "required")
+        ):
             text = self._schema_text(raw_schema)
             if text:
                 entry["args"] = text
@@ -633,7 +674,9 @@ class _OpenAgentPluginSkillMixin:
                         docs[clean] = {}
         return docs
 
-    def _plugin_tool_names(self, plugin: object, *, include_aliases: bool = True) -> list[str]:
+    def _plugin_tool_names(
+        self, plugin: object, *, include_aliases: bool = True
+    ) -> list[str]:
         names: set[str] = set()
         for tool_name in getattr(plugin, "tool_registry", ()) or ():
             clean = str(tool_name or "").strip().lower()
@@ -694,7 +737,9 @@ class _OpenAgentPluginSkillMixin:
             entry = {}
 
         clean = str(tool_name or "").strip().lower()
-        entry.setdefault("desc", f"Tool handled by {handler}" if handler else "No documentation yet")
+        entry.setdefault(
+            "desc", f"Tool handled by {handler}" if handler else "No documentation yet"
+        )
         entry.setdefault("args", "none")
         entry.setdefault("body", "not used")
         entry["tool"] = clean
@@ -704,16 +749,23 @@ class _OpenAgentPluginSkillMixin:
             entry.setdefault("handler", handler)
 
         if plugin is not None:
-            plugin_name = self._plugin_meta_text(plugin, "name", default=self._tool_group(clean))
+            plugin_name = self._plugin_meta_text(
+                plugin, "name", default=self._tool_group(clean)
+            )
             entry["plugin"] = plugin_name
-            entry["plugin_version"] = self._plugin_meta_text(plugin, "version", default="?")
+            entry["plugin_version"] = self._plugin_meta_text(
+                plugin, "version", default="?"
+            )
             author = self._plugin_meta_text(plugin, "author")
             if author:
                 entry["plugin_author"] = author
             plugin_desc = self._plugin_meta_text(plugin, "description")
             if plugin_desc:
                 entry["plugin_desc"] = plugin_desc
-            dangerous = {str(item).strip().lower() for item in getattr(plugin, "dangerous_tools", set()) or set()}
+            dangerous = {
+                str(item).strip().lower()
+                for item in getattr(plugin, "dangerous_tools", set()) or set()
+            }
             if clean in dangerous:
                 entry.setdefault("dangerous", "true")
         return entry
@@ -737,15 +789,23 @@ class _OpenAgentPluginSkillMixin:
             schema_doc = self._tool_schema_doc(manifest_doc)
             schema_doc.update(self._tool_schema_doc(tool_schemas.get(tool_name)))
             if raw_doc is None:
-                raw_doc = manifest_doc if manifest_doc not in (None, "", {}, []) else None
+                raw_doc = (
+                    manifest_doc if manifest_doc not in (None, "", {}, []) else None
+                )
             if isinstance(raw_doc, dict):
                 raw_doc = {**schema_doc, **raw_doc}
             elif raw_doc is None:
                 raw_doc = {
                     "desc": f"Plugin tool from {self._plugin_meta_text(plugin, 'name', default=self._tool_group(tool_name))}",
-                    "args": schema_doc.get("args", "see plugin implementation or call utility.plugin_docs"),
+                    "args": schema_doc.get(
+                        "args", "see plugin implementation or call utility.plugin_docs"
+                    ),
                     "body": schema_doc.get("body", "optional, depends on tool"),
-                    **{key: value for key, value in schema_doc.items() if key not in {"args", "body"}},
+                    **{
+                        key: value
+                        for key, value in schema_doc.items()
+                        if key not in {"args", "body"}
+                    },
                 }
             elif schema_doc:
                 raw_doc = {**schema_doc, "desc": self._doc_text(raw_doc)}
@@ -768,7 +828,13 @@ class _OpenAgentPluginSkillMixin:
                 continue
             docs[clean] = self._normalize_tool_doc_entry(
                 clean,
-                core_docs.get(clean, {"desc": f"Tool handled by {handler}", "args": "see core handler docs"}),
+                core_docs.get(
+                    clean,
+                    {
+                        "desc": f"Tool handled by {handler}",
+                        "args": "see core handler docs",
+                    },
+                ),
                 handler=str(handler or ""),
                 source="core",
             )
@@ -776,7 +842,17 @@ class _OpenAgentPluginSkillMixin:
             docs.update(self._plugin_tool_docs(plugin))
         if tool_name:
             clean = str(tool_name).lower().strip()
-            return {clean: docs.get(clean, {"tool": clean, "desc": f"No documentation for {clean}", "args": "unknown", "body": "unknown"})}
+            return {
+                clean: docs.get(
+                    clean,
+                    {
+                        "tool": clean,
+                        "desc": f"No documentation for {clean}",
+                        "args": "unknown",
+                        "body": "unknown",
+                    },
+                )
+            }
         return docs
 
     def _format_tool_doc(self, tool_name: str, entry: dict[str, str]) -> str:
@@ -808,14 +884,19 @@ class _OpenAgentPluginSkillMixin:
             lines.append("   ⚠️ requires confirmation")
         return "\n".join(lines)
 
-    def _format_plugin_docs(self, plugin_name: str | None = None, *, max_tools: int | None = None) -> str:
+    def _format_plugin_docs(
+        self, plugin_name: str | None = None, *, max_tools: int | None = None
+    ) -> str:
         plugins = getattr(self, "_plugins", {}) or {}
         if not plugins:
             return "No activated plugins."
         selected: list[tuple[str, object]] = []
         query = str(plugin_name or "").strip().lower()
         for name, plugin in sorted(plugins.items(), key=lambda item: str(item[0])):
-            aliases = {str(name).strip().lower(), self._doc_text(getattr(plugin, "name", "")).lower()}
+            aliases = {
+                str(name).strip().lower(),
+                self._doc_text(getattr(plugin, "name", "")).lower(),
+            }
             if query and query not in aliases:
                 continue
             selected.append((str(name), plugin))
@@ -826,10 +907,16 @@ class _OpenAgentPluginSkillMixin:
         for name, plugin in selected:
             docs = self._plugin_tool_docs(plugin)
             display_name = self._plugin_meta_text(plugin, "name", default=name)
-            desc = self._plugin_meta_text(plugin, "description", default="no description")
+            desc = self._plugin_meta_text(
+                plugin, "description", default="no description"
+            )
             version = self._plugin_meta_text(plugin, "version", default="?")
             author = self._plugin_meta_text(plugin, "author")
-            title = display_name if display_name.lower() == name.lower() else f"{display_name} ({name})"
+            title = (
+                display_name
+                if display_name.lower() == name.lower()
+                else f"{display_name} ({name})"
+            )
             header = f"\n{title} v{version} — {desc}"
             if author:
                 header += f" (author: {author})"
@@ -859,7 +946,9 @@ class _OpenAgentPluginSkillMixin:
                     bits.append("⚠️ confirmation")
                 lines.append(" | ".join(bits))
             if hidden:
-                lines.append(f"  · ...(+{hidden} more; call utility.plugin_docs plugin={name})")
+                lines.append(
+                    f"  · ...(+{hidden} more; call utility.plugin_docs plugin={name})"
+                )
         return "\n".join(lines)
 
     async def _fetch_repo_plugins(self) -> list[dict]:
@@ -867,7 +956,9 @@ class _OpenAgentPluginSkillMixin:
         url = "https://api.github.com/repos/hairpin01/repo-MCUB-fork/contents/OpenAgent/plugins"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
                     if resp.status != 200:
                         return []
                     files = await resp.json()
@@ -901,7 +992,9 @@ class _OpenAgentPluginSkillMixin:
         }
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(raw_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(
+                    raw_url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
                     if resp.status != 200:
                         return meta
                     code = await resp.text()
@@ -953,8 +1046,12 @@ class _OpenAgentPluginSkillMixin:
             text = self._doc_text(manifest.get(key, values.get(key, "")))
             if text:
                 meta[key] = text
-        permissions = self._string_list(manifest.get("permissions", values.get("permissions")))
-        requirements = self._string_list(manifest.get("requirements", values.get("requirements")))
+        permissions = self._string_list(
+            manifest.get("permissions", values.get("permissions"))
+        )
+        requirements = self._string_list(
+            manifest.get("requirements", values.get("requirements"))
+        )
         if permissions:
             meta["permissions"] = permissions
         if requirements:
@@ -963,7 +1060,9 @@ class _OpenAgentPluginSkillMixin:
         tools: set[str] = set()
         raw_tools = manifest.get("tools", values.get("tools"))
         if isinstance(raw_tools, dict):
-            tools.update(str(tool).strip().lower() for tool in raw_tools if str(tool).strip())
+            tools.update(
+                str(tool).strip().lower() for tool in raw_tools if str(tool).strip()
+            )
         elif isinstance(raw_tools, (list, tuple, set)):
             for item in raw_tools:
                 if isinstance(item, dict):
@@ -976,20 +1075,35 @@ class _OpenAgentPluginSkillMixin:
         for attr_name in ("tool_registry", "tool_docs", "tool_schemas"):
             raw_items = values.get(attr_name)
             if isinstance(raw_items, dict):
-                tools.update(str(tool).strip().lower() for tool in raw_items if str(tool).strip())
+                tools.update(
+                    str(tool).strip().lower() for tool in raw_items if str(tool).strip()
+                )
             elif isinstance(raw_items, (list, tuple, set)):
-                tools.update(str(tool).strip().lower() for tool in raw_items if str(tool).strip())
+                tools.update(
+                    str(tool).strip().lower() for tool in raw_items if str(tool).strip()
+                )
         raw_tool_map = values.get("tool_map")
         if isinstance(raw_tool_map, dict):
-            tools.update(str(tool).strip().lower() for tool in raw_tool_map if str(tool).strip())
+            tools.update(
+                str(tool).strip().lower() for tool in raw_tool_map if str(tool).strip()
+            )
 
-        name_m = re.search(r'name\s*=\s*["](.+?)["]', code) or re.search(r"name\s*=\s*['](.+?)[']", code)
-        ver_m = re.search(r'version\s*=\s*["](.+?)["]', code) or re.search(r"version\s*=\s*['](.+?)[']", code)
-        author_m = re.search(r'author\s*=\s*["](.+?)["]', code) or re.search(r"author\s*=\s*['](.+?)[']", code)
+        name_m = re.search(r'name\s*=\s*["](.+?)["]', code) or re.search(
+            r"name\s*=\s*['](.+?)[']", code
+        )
+        ver_m = re.search(r'version\s*=\s*["](.+?)["]', code) or re.search(
+            r"version\s*=\s*['](.+?)[']", code
+        )
+        author_m = re.search(r'author\s*=\s*["](.+?)["]', code) or re.search(
+            r"author\s*=\s*['](.+?)[']", code
+        )
         desc_m = re.search(r'"ru"\s*:\s*"(.+?)"', code)
         if not desc_m:
             desc_m = re.search(r'"en"\s*:\s*"(.+?)"', code)
-        tools_m = re.findall(r'"((?:terminal|web|mcub|message|file|dialog|chat|moderation|profile|contacts|creation|account|code|utility|skills|context|todo|thinking)\.[\w.]+)"', code)
+        tools_m = re.findall(
+            r'"((?:terminal|web|mcub|message|file|dialog|chat|moderation|profile|contacts|creation|account|code|utility|skills|context|todo|thinking)\.[\w.]+)"',
+            code,
+        )
 
         if name_m and meta["name"] == "?":
             meta["name"] = name_m.group(1)
@@ -1011,7 +1125,9 @@ class _OpenAgentPluginSkillMixin:
         safe_name = self._safe_plugin_name(name)
         raw_url = f"https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/plugins/{safe_name}.py"
         async with aiohttp.ClientSession() as session:
-            async with session.get(raw_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(
+                raw_url, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
                 if resp.status != 200:
                     raise ValueError(f"Plugin {safe_name} not found in repo")
                 code = await resp.text()
@@ -1025,7 +1141,10 @@ class _OpenAgentPluginSkillMixin:
             with contextlib.suppress(Exception):
                 fpath.unlink()
             raise
-        return next((pname for pname, path in self._plugin_files.items() if path == fpath), safe_name)
+        return next(
+            (pname for pname, path in self._plugin_files.items() if path == fpath),
+            safe_name,
+        )
 
     def _safe_plugin_name(self, name: str) -> str:
         name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(name or "").strip()).strip("._")
@@ -1048,7 +1167,10 @@ class _OpenAgentPluginSkillMixin:
             with contextlib.suppress(Exception):
                 fpath.unlink()
             raise
-        return next((pname for pname, path in self._plugin_files.items() if path == fpath), safe_name)
+        return next(
+            (pname for pname, path in self._plugin_files.items() if path == fpath),
+            safe_name,
+        )
 
     async def _install_plugin_from_reply(self, event: Event) -> str:
         reply = await event.get_reply_message()
@@ -1070,7 +1192,9 @@ class _OpenAgentPluginSkillMixin:
             name = Path(file_name).stem
         if not name:
             class_match = re.search(r"class\s+(\w+Plugin)\b", code)
-            name = class_match.group(1).replace("Plugin", "") if class_match else "plugin"
+            name = (
+                class_match.group(1).replace("Plugin", "") if class_match else "plugin"
+            )
         return await self._install_plugin_from_code(name, code)
 
     def _repo_context_prompt(self) -> str:
@@ -1095,7 +1219,13 @@ class _OpenAgentPluginSkillMixin:
             lines.append(f"Top-level unavailable: {exc}")
             return "\n".join(lines)[:max_chars]
 
-        key_files = ["README.md", "pyproject.toml", "requirements.txt", "config.example.json", "modules.ini"]
+        key_files = [
+            "README.md",
+            "pyproject.toml",
+            "requirements.txt",
+            "config.example.json",
+            "modules.ini",
+        ]
         for name in key_files:
             file_path = workspace / name
             if not file_path.is_file():
@@ -1183,7 +1313,11 @@ class _OpenAgentPluginSkillMixin:
         if not bool(self.config.get("skills_enabled", True)):
             return False
 
-        mode = str(self.config.get("skills_trigger_mode", "auto") or "auto").strip().lower()
+        mode = (
+            str(self.config.get("skills_trigger_mode", "auto") or "auto")
+            .strip()
+            .lower()
+        )
         if mode in {"off", "false", "disabled", "disable", "never", "0"}:
             return False
         if mode in {"always", "all", "on", "true", "1"}:
@@ -1224,7 +1358,9 @@ class _OpenAgentPluginSkillMixin:
         keywords: list[str] = []
 
         if raw.startswith("[") and raw.endswith("]"):
-            keywords.extend(part.strip().strip("'\"") for part in raw.strip("[]").split(","))
+            keywords.extend(
+                part.strip().strip("'\"") for part in raw.strip("[]").split(",")
+            )
         else:
             for line in raw.splitlines():
                 cleaned = line.strip().lstrip("-").strip().strip("'\"")
@@ -1246,11 +1382,17 @@ class _OpenAgentPluginSkillMixin:
             skill_text = path.read_text(encoding="utf-8", errors="replace")[:2000]
         except Exception:
             return False
-        keywords = self._skill_keywords_from_text(skill_text, self._skill_name_from_path(path))
+        keywords = self._skill_keywords_from_text(
+            skill_text, self._skill_name_from_path(path)
+        )
         return any(keyword in text for keyword in keywords)
 
     def _matching_skill_paths(self, prompt: str = "") -> list[Path]:
-        mode = str(self.config.get("skills_trigger_mode", "auto") or "auto").strip().lower()
+        mode = (
+            str(self.config.get("skills_trigger_mode", "auto") or "auto")
+            .strip()
+            .lower()
+        )
         skills = self._list_skills()
         if mode in {"always", "all", "on", "true", "1"}:
             return skills
@@ -1277,7 +1419,9 @@ class _OpenAgentPluginSkillMixin:
         except Exception:
             skill_text = ""
         frontmatter = self._skill_frontmatter(skill_text)
-        keywords = self._skill_keywords_from_text(skill_text, self._skill_name_from_path(path))
+        keywords = self._skill_keywords_from_text(
+            skill_text, self._skill_name_from_path(path)
+        )
         query_words = set(re.findall(r"[\wА-Яа-яЁё.-]{3,}", query))
         for keyword in keywords:
             keyword = keyword.lower().strip()
@@ -1288,8 +1432,7 @@ class _OpenAgentPluginSkillMixin:
             if keyword in query_words:
                 score = max(score, 70)
         haystack = " ".join(
-            [name, frontmatter.get("description", "")]
-            + keywords
+            [name, frontmatter.get("description", "")] + keywords
         ).lower()
         overlap = sum(1 for word in query_words if word in haystack)
         if overlap:
@@ -1301,7 +1444,11 @@ class _OpenAgentPluginSkillMixin:
             (self._installed_skill_match_score(path, query), path)
             for path in self._list_skills()
         ]
-        return [path for score, path in sorted(ranked, key=lambda item: item[0], reverse=True) if score > 0]
+        return [
+            path
+            for score, path in sorted(ranked, key=lambda item: item[0], reverse=True)
+            if score > 0
+        ]
 
     def _activate_skill_text(self, query: str) -> str:
         query = (query or "").strip()
@@ -1309,11 +1456,17 @@ class _OpenAgentPluginSkillMixin:
             return "skill name or query is required"
         candidates = self._installed_skill_candidates(query)
         if not candidates:
-            installed = ", ".join(self._skill_name_from_path(path) for path in self._list_skills())
-            return "No installed skill matched. Installed skills: " + (installed or "none")
+            installed = ", ".join(
+                self._skill_name_from_path(path) for path in self._list_skills()
+            )
+            return "No installed skill matched. Installed skills: " + (
+                installed or "none"
+            )
         path = candidates[0]
         text = path.read_text(encoding="utf-8", errors="replace")[:16000]
-        return f"Activated OpenAgent skill: {self._skill_name_from_path(path)}\n\n{text}"
+        return (
+            f"Activated OpenAgent skill: {self._skill_name_from_path(path)}\n\n{text}"
+        )
 
     def _load_skills_prompt(self, prompt: str = "") -> str:
         if not self._should_load_skills(prompt):
@@ -1328,7 +1481,9 @@ class _OpenAgentPluginSkillMixin:
             chunks.append(f"## Skill: {self._skill_name_from_path(path)}\n{text}")
         if not chunks:
             return ""
-        return "\n\nLoaded OpenAgent skills. Use them when relevant:\n" + "\n\n".join(chunks)
+        return "\n\nLoaded OpenAgent skills. Use them when relevant:\n" + "\n\n".join(
+            chunks
+        )
 
     def _normalize_skill_content(self, name: str, content: str) -> str:
         text = content.strip()
@@ -1339,10 +1494,7 @@ class _OpenAgentPluginSkillMixin:
         first_heading = re.search(r"^#\s+(.+)$", text, flags=re.MULTILINE)
         description = first_heading.group(1).strip() if first_heading else safe_name
         frontmatter = (
-            "---\n"
-            f"name: {safe_name}\n"
-            f"description: {description}\n"
-            "---\n\n"
+            "---\n" f"name: {safe_name}\n" f"description: {description}\n" "---\n\n"
         )
         return frontmatter + text + "\n"
 
@@ -1350,17 +1502,23 @@ class _OpenAgentPluginSkillMixin:
         safe_name = self._safe_skill_name(name)
         path = self._skill_path(safe_name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._normalize_skill_content(safe_name, content), encoding="utf-8")
+        path.write_text(
+            self._normalize_skill_content(safe_name, content), encoding="utf-8"
+        )
         return safe_name
 
     def _skill_repo_base_url(self) -> str:
-        return str(
-            self.config.get(
-                "skill_repo_url",
-                "https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/skills",
+        return (
+            str(
+                self.config.get(
+                    "skill_repo_url",
+                    "https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/skills",
+                )
+                or ""
             )
-            or ""
-        ).strip().rstrip("/")
+            .strip()
+            .rstrip("/")
+        )
 
     async def _fetch_text_url(self, url: str, *, max_chars: int = 120000) -> str:
         timeout = aiohttp.ClientTimeout(total=int(self.config["timeout"]))
@@ -1409,11 +1567,12 @@ class _OpenAgentPluginSkillMixin:
 
     async def _repo_skill_candidates(self, query: str) -> list[dict[str, Any]]:
         index = await self._fetch_skill_repo_index()
-        ranked = [
-            (self._repo_skill_match_score(query, item), item)
-            for item in index
+        ranked = [(self._repo_skill_match_score(query, item), item) for item in index]
+        return [
+            item
+            for score, item in sorted(ranked, key=lambda pair: pair[0], reverse=True)
+            if score > 0
         ]
-        return [item for score, item in sorted(ranked, key=lambda pair: pair[0], reverse=True) if score > 0]
 
     async def _install_repo_skill(self, name: str) -> str:
         query = (name or "").strip()
@@ -1424,8 +1583,13 @@ class _OpenAgentPluginSkillMixin:
         if not candidates:
             raise RuntimeError(self.strings("skill_not_found_repo", query=query))
         item = candidates[0]
-        path = str(item.get("path") or f"{self._safe_skill_name(str(item.get('name') or query))}/SKILL.md").lstrip("/")
-        content = await self._fetch_text_url(f"{base_url}/{quote(path)}", max_chars=200000)
+        path = str(
+            item.get("path")
+            or f"{self._safe_skill_name(str(item.get('name') or query))}/SKILL.md"
+        ).lstrip("/")
+        content = await self._fetch_text_url(
+            f"{base_url}/{quote(path)}", max_chars=200000
+        )
         saved_name = self._save_skill(str(item.get("name") or query), content)
         return saved_name
 
@@ -1435,10 +1599,16 @@ class _OpenAgentPluginSkillMixin:
             return "No skills in repository"
         lines = []
         for item in items:
-            name = str(item.get("name") or item.get("id") or Path(str(item.get("path") or "")).parent.name or "skill")
+            name = str(
+                item.get("name")
+                or item.get("id")
+                or Path(str(item.get("path") or "")).parent.name
+                or "skill"
+            )
             description = str(item.get("description") or "").strip()
             lines.append(f"- {name}: {description}" if description else f"- {name}")
         return "\n".join(lines)
+
 
 class _OpenAgentTelegramMediaMixin:
     """Telegram entities, files, media and reply-context helpers."""
@@ -1454,14 +1624,18 @@ class _OpenAgentTelegramMediaMixin:
 
     def _format_entity_profile(self, entity: Any) -> str:
         username = f"@{entity.username}" if getattr(entity, "username", None) else ""
-        name = " ".join(
-            p
-            for p in (
-                getattr(entity, "first_name", None),
-                getattr(entity, "last_name", None),
+        name = (
+            " ".join(
+                p
+                for p in (
+                    getattr(entity, "first_name", None),
+                    getattr(entity, "last_name", None),
+                )
+                if p
             )
-            if p
-        ) or getattr(entity, "title", None) or "Unknown"
+            or getattr(entity, "title", None)
+            or "Unknown"
+        )
         return (
             f"Name: {name}\n"
             f"Username: {username}\n"
@@ -1533,9 +1707,17 @@ class _OpenAgentTelegramMediaMixin:
             if common:
                 formatted = []
                 for chat in common:
-                    title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or "Unknown"
-                    username = f"@{chat.username}" if getattr(chat, "username", None) else ""
-                    formatted.append(f"{title} {username} [id={getattr(chat, 'id', None)}]".strip())
+                    title = (
+                        getattr(chat, "title", None)
+                        or getattr(chat, "first_name", None)
+                        or "Unknown"
+                    )
+                    username = (
+                        f"@{chat.username}" if getattr(chat, "username", None) else ""
+                    )
+                    formatted.append(
+                        f"{title} {username} [id={getattr(chat, 'id', None)}]".strip()
+                    )
                 lines.append("Common chats:\n" + "\n".join(formatted))
         except Exception:
             pass
@@ -1551,10 +1733,14 @@ class _OpenAgentTelegramMediaMixin:
             filename += ".py"
         return filename[:96]
 
-    def _extract_generated_file(self, answer: str, fallback_name: str = "generated.py") -> tuple[str, str]:
+    def _extract_generated_file(
+        self, answer: str, fallback_name: str = "generated.py"
+    ) -> tuple[str, str]:
         match = self.GENERATED_FILE_RE.search(answer or "")
         if match:
-            return self._safe_generated_filename(match.group(1)), match.group(2).strip("\n")
+            return self._safe_generated_filename(match.group(1)), match.group(2).strip(
+                "\n"
+            )
 
         fence = re.search(r"```([A-Za-z0-9_+.-]*)\n(.*?)```", answer or "", re.DOTALL)
         if fence:
@@ -1577,7 +1763,9 @@ class _OpenAgentTelegramMediaMixin:
                 "md": ".md",
                 "markdown": ".md",
             }.get(lang, Path(fallback_name).suffix or ".txt")
-            return self._safe_generated_filename("generated" + ext), fence.group(2).strip("\n")
+            return self._safe_generated_filename("generated" + ext), fence.group(
+                2
+            ).strip("\n")
 
         return self._safe_generated_filename(fallback_name), (answer or "").strip()
 
@@ -1637,9 +1825,7 @@ class _OpenAgentTelegramMediaMixin:
                 return None
             return dst.read_bytes()
 
-    async def _reply_context(
-        self, event: Event
-    ) -> tuple[str, list[dict[str, str]]]:
+    async def _reply_context(self, event: Event) -> tuple[str, list[dict[str, str]]]:
         reply = await event.get_reply_message()
         if not reply:
             return "", []
@@ -1651,9 +1837,13 @@ class _OpenAgentTelegramMediaMixin:
         except Exception:
             sender = None
         if sender is not None:
-            parts.append("Replied sender profile:\n" + self._format_entity_profile(sender))
+            parts.append(
+                "Replied sender profile:\n" + self._format_entity_profile(sender)
+            )
 
-        reply_text = getattr(reply, "raw_text", None) or getattr(reply, "text", "") or ""
+        reply_text = (
+            getattr(reply, "raw_text", None) or getattr(reply, "text", "") or ""
+        )
         if reply_text:
             parts.append(f"Replied message text:\n{reply_text[:12000]}")
 
@@ -1662,7 +1852,11 @@ class _OpenAgentTelegramMediaMixin:
 
         file_obj = getattr(reply, "file", None)
         file_name = getattr(file_obj, "name", None) or "attachment"
-        mime_type = getattr(file_obj, "mime_type", None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+        mime_type = (
+            getattr(file_obj, "mime_type", None)
+            or mimetypes.guess_type(file_name)[0]
+            or "application/octet-stream"
+        )
         size = getattr(file_obj, "size", None) or 0
         parts.append(f"Replied media: name={file_name}, mime={mime_type}, size={size}")
 
@@ -1681,11 +1875,15 @@ class _OpenAgentTelegramMediaMixin:
             return "\n\n".join(parts), attachments
 
         if len(data) > int(self.config["media_max_bytes"]):
-            parts.append("Media is too large to send to AI; metadata only was included.")
+            parts.append(
+                "Media is too large to send to AI; metadata only was included."
+            )
             return "\n\n".join(parts), attachments
 
         if mime_type.startswith("video/"):
-            frame = await self._extract_video_frame(data, Path(file_name).suffix or ".webm")
+            frame = await self._extract_video_frame(
+                data, Path(file_name).suffix or ".webm"
+            )
             if frame:
                 attachments.append(
                     {
@@ -1694,7 +1892,9 @@ class _OpenAgentTelegramMediaMixin:
                         "data": base64.b64encode(frame).decode("ascii"),
                     }
                 )
-                parts.append("First frame extracted from replied video/sticker and attached as image.")
+                parts.append(
+                    "First frame extracted from replied video/sticker and attached as image."
+                )
             else:
                 attachments.append(
                     {
@@ -1703,7 +1903,9 @@ class _OpenAgentTelegramMediaMixin:
                         "data": base64.b64encode(data).decode("ascii"),
                     }
                 )
-                parts.append("Could not extract video frame; raw video attached only for providers that support it.")
+                parts.append(
+                    "Could not extract video frame; raw video attached only for providers that support it."
+                )
         elif mime_type.startswith(("image/", "audio/")):
             attachments.append(
                 {
@@ -1712,7 +1914,9 @@ class _OpenAgentTelegramMediaMixin:
                     "data": base64.b64encode(data).decode("ascii"),
                 }
             )
-            parts.append("Media bytes attached to AI request when provider supports it.")
+            parts.append(
+                "Media bytes attached to AI request when provider supports it."
+            )
         else:
             parts.append("Unsupported binary media type; metadata only was included.")
         return "\n\n".join(parts), attachments
@@ -1730,15 +1934,16 @@ class _OpenAgentTelegramMediaMixin:
                 content.append(
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime_type};base64,{item['data']}"
-                        },
+                        "image_url": {"url": f"data:{mime_type};base64,{item['data']}"},
                     }
                 )
             else:
                 skipped.append(f"{item['name']} ({mime_type})")
         if skipped:
-            content[0]["text"] += "\n\nProvider note: non-image media not sent to OpenAI-compatible endpoint: " + ", ".join(skipped)
+            content[0]["text"] += (
+                "\n\nProvider note: non-image media not sent to OpenAI-compatible endpoint: "
+                + ", ".join(skipped)
+            )
         return content
 
     def _build_google_parts(
@@ -1773,7 +1978,9 @@ class _OpenAgentTelegramMediaMixin:
 
     def _parse_xml_attrs(self, attrs: str) -> dict[str, str]:
         parsed: dict[str, str] = {}
-        for key, value in re.findall(r"([a-zA-Z_][\w.-]*)=[\"']([^\"']*)[\"']", attrs or ""):
+        for key, value in re.findall(
+            r"([a-zA-Z_][\w.-]*)=[\"']([^\"']*)[\"']", attrs or ""
+        ):
             parsed[key.lower()] = html.unescape(value.strip())
         return parsed
 
@@ -1784,7 +1991,9 @@ class _OpenAgentTelegramMediaMixin:
                 if resp.status >= 400:
                     return None
                 data = await resp.read()
-                content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0]
+                content_type = resp.headers.get("Content-Type", "image/jpeg").split(
+                    ";"
+                )[0]
                 return data, content_type
 
     async def _set_channel_avatar(
@@ -1795,12 +2004,18 @@ class _OpenAgentTelegramMediaMixin:
     ) -> str | None:
         data: bytes | None = None
         mime_type = "image/jpeg"
-        avatar_url = attrs.get("avatar_url") or attrs.get("avatar") or attrs.get("photo_url")
+        avatar_url = (
+            attrs.get("avatar_url") or attrs.get("avatar") or attrs.get("photo_url")
+        )
         if avatar_url:
             fetched = await self._fetch_url_bytes(avatar_url)
             if fetched:
                 data, mime_type = fetched
-        elif source_event is not None and attrs.get("avatar_reply", "").lower() in {"1", "true", "yes"}:
+        elif source_event is not None and attrs.get("avatar_reply", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
             reply = await source_event.get_reply_message()
             if reply and getattr(reply, "media", None):
                 data = await reply.download_media(file=bytes)
@@ -1818,7 +2033,9 @@ class _OpenAgentTelegramMediaMixin:
         await self.client(EditPhotoRequest(channel=channel, photo=uploaded))
         return "avatar set"
 
-    async def _resolve_tool_chat(self, chat: str | None, source_event: Any | None) -> Any:
+    async def _resolve_tool_chat(
+        self, chat: str | None, source_event: Any | None
+    ) -> Any:
         await asyncio.sleep(0)
         chat = (chat or "").strip()
         if not chat or chat.lower() in {"current", "this", "here"}:
@@ -1831,7 +2048,9 @@ class _OpenAgentTelegramMediaMixin:
         except ValueError:
             return chat
 
-    async def _resolve_tool_user(self, user: str | None, source_event: Any | None) -> Any:
+    async def _resolve_tool_user(
+        self, user: str | None, source_event: Any | None
+    ) -> Any:
         user = (user or "").strip()
         if user:
             try:
@@ -1850,11 +2069,18 @@ class _OpenAgentTelegramMediaMixin:
         if sender is None:
             return "Unknown"
         username = f"@{sender.username}" if getattr(sender, "username", None) else ""
-        name = " ".join(
-            p
-            for p in (getattr(sender, "first_name", None), getattr(sender, "last_name", None))
-            if p
-        ) or getattr(sender, "title", None) or "Unknown"
+        name = (
+            " ".join(
+                p
+                for p in (
+                    getattr(sender, "first_name", None),
+                    getattr(sender, "last_name", None),
+                )
+                if p
+            )
+            or getattr(sender, "title", None)
+            or "Unknown"
+        )
         return f"{name} {username}".strip()
 
     async def _message_id_from_attrs(
@@ -1901,18 +2127,24 @@ class _OpenAgentStatusMixin:
             if buttons is not None and hasattr(event, "edit"):
                 self.log.debug(
                     "OA show_action EDIT_FORM: tool=%s has_buttons=%s title_len=%d",
-                    tool_name, bool(buttons), len(text),
+                    tool_name,
+                    bool(buttons),
+                    len(text),
                 )
                 await event.edit(text, buttons=buttons, parse_mode="html")
             else:
                 self.log.debug(
                     "OA show_action FALLBACK_EDIT: tool=%s has_edit=%s has_buttons=%s",
-                    tool_name, hasattr(event, "edit"), buttons is not None,
+                    tool_name,
+                    hasattr(event, "edit"),
+                    buttons is not None,
                 )
                 await self.edit(event, text, as_html=True)
         except Exception as exc:
             self.log.debug(
-                "OA show_action EXCEPTION: tool=%s error=%s", tool_name, exc,
+                "OA show_action EXCEPTION: tool=%s error=%s",
+                tool_name,
+                exc,
             )
             await self.edit(event, html.escape(title), as_html=True)
 
@@ -1932,7 +2164,9 @@ class _OpenAgentStatusMixin:
         ]
         return any(re.search(pattern, compact) for pattern in dangerous_patterns)
 
-    def _requires_tool_confirmation(self, tool_name: str, attrs_raw: str = "", body: str = "") -> bool:
+    def _requires_tool_confirmation(
+        self, tool_name: str, attrs_raw: str = "", body: str = ""
+    ) -> bool:
         if not bool(self.config.get("tool_confirmation_enabled", True)):
             return False
         name = (tool_name or "").lower().strip()
@@ -1952,53 +2186,146 @@ class _OpenAgentStatusMixin:
         if system_tool is not None and system_tool.dangerous:
             return True
         safe_read_tools = {
-            "message.get", "message.search", "message.history", "message.typing",
-            "dialog.list_private", "dialog.list_groups", "dialog.list_all", "dialog.search",
-            "chat.info", "chat.participants", "chat.admins", "chat.permissions", "chat.common_with_user",
-            "profile.get", "profile.get_full", "profile.get_me", "profile.get_photos", "profile.common_chats",
-            "context.reply_context", "context.media_context", "skills.list", "skills.read", "skills.activate",
-            "skills.repo_list", "utility.token_usage", "utility.placeholders", "utility.random_template",
-            "todo.add", "todo.delete", "todo.edit", "todo.current", "todo.close", "todo.closeall", "todo.clear",
+            "message.get",
+            "message.search",
+            "message.history",
+            "message.typing",
+            "dialog.list_private",
+            "dialog.list_groups",
+            "dialog.list_all",
+            "dialog.search",
+            "chat.info",
+            "chat.participants",
+            "chat.admins",
+            "chat.permissions",
+            "chat.common_with_user",
+            "profile.get",
+            "profile.get_full",
+            "profile.get_me",
+            "profile.get_photos",
+            "profile.common_chats",
+            "context.reply_context",
+            "context.media_context",
+            "skills.list",
+            "skills.read",
+            "skills.activate",
+            "skills.repo_list",
+            "utility.token_usage",
+            "utility.placeholders",
+            "utility.random_template",
+            "todo.add",
+            "todo.delete",
+            "todo.edit",
+            "todo.current",
+            "todo.close",
+            "todo.closeall",
+            "todo.clear",
             "thinking.note",
         }
         if name in safe_read_tools:
             return False
 
-        mode = str(self.config.get("tool_confirmation_mode", "medium") or "medium").lower().strip()
+        mode = (
+            str(self.config.get("tool_confirmation_mode", "medium") or "medium")
+            .lower()
+            .strip()
+        )
         attrs = self._parse_xml_attrs(attrs_raw)
-        command = body.strip() or attrs.get("command") or attrs.get("cmd") or attrs.get("query") or attrs.get("text") or ""
+        command = (
+            body.strip()
+            or attrs.get("command")
+            or attrs.get("cmd")
+            or attrs.get("query")
+            or attrs.get("text")
+            or ""
+        )
         low_tools = {
-            "profile.update_name", "profile.update_bio", "profile.update_username", "profile.set_photo",
-            "contacts.add", "contacts.delete", "contacts.block", "contacts.unblock",
+            "profile.update_name",
+            "profile.update_bio",
+            "profile.update_username",
+            "profile.set_photo",
+            "contacts.add",
+            "contacts.delete",
+            "contacts.block",
+            "contacts.unblock",
         }
         critical_tools = {
-            "terminal.run", "terminal.inspect",
-            "mcub.command", "mcub.install", "mcub.reload",
-            "message.send_current", "message.send_target", "message.edit", "message.delete",
-            "message.forward", "message.pin", "message.schedule", "message.draft",
-            "file.send", "file.download_media", "file.attach_image", "file.attach_video",
-            "moderation.mute", "moderation.unmute", "moderation.ban", "moderation.unban",
-            "moderation.kick", "moderation.promote", "moderation.demote", "moderation.pin",
+            "terminal.run",
+            "terminal.inspect",
+            "mcub.command",
+            "mcub.install",
+            "mcub.reload",
+            "message.send_current",
+            "message.send_target",
+            "message.edit",
+            "message.delete",
+            "message.forward",
+            "message.pin",
+            "message.schedule",
+            "message.draft",
+            "file.send",
+            "file.download_media",
+            "file.attach_image",
+            "file.attach_video",
+            "moderation.mute",
+            "moderation.unmute",
+            "moderation.ban",
+            "moderation.unban",
+            "moderation.kick",
+            "moderation.promote",
+            "moderation.demote",
+            "moderation.pin",
             "moderation.delete_messages",
-            "profile.update_name", "profile.update_bio", "profile.update_username", "profile.set_photo",
-            "contacts.add", "contacts.delete", "contacts.block", "contacts.unblock",
-            "creation.channel", "creation.group", "creation.bot", "creation.channel_avatar", "creation.private_invite",
-            "chat.set_title", "chat.set_about", "chat.set_username", "chat.slowmode", "chat.invite_link",
-            "dialog.archive", "dialog.unarchive", "dialog.leave", "dialog.set_photo",
+            "profile.update_name",
+            "profile.update_bio",
+            "profile.update_username",
+            "profile.set_photo",
+            "contacts.add",
+            "contacts.delete",
+            "contacts.block",
+            "contacts.unblock",
+            "creation.channel",
+            "creation.group",
+            "creation.bot",
+            "creation.channel_avatar",
+            "creation.private_invite",
+            "chat.set_title",
+            "chat.set_about",
+            "chat.set_username",
+            "chat.slowmode",
+            "chat.invite_link",
+            "dialog.archive",
+            "dialog.unarchive",
+            "dialog.leave",
+            "dialog.set_photo",
             "context.clear",
-            "skills.install", "skills.import_md", "skills.save_from_ai",
-            "code.generate_file", "code.generate_mcub_module", "code.attach_result",
+            "skills.install",
+            "skills.import_md",
+            "skills.save_from_ai",
+            "code.generate_file",
+            "code.generate_mcub_module",
+            "code.attach_result",
         }
         medium_groups = {
-            "terminal", "mcub", "message", "file", "moderation", "profile",
-            "contacts", "creation", "chat", "dialog", "context", "skills", "code",
+            "terminal",
+            "mcub",
+            "message",
+            "file",
+            "moderation",
+            "profile",
+            "contacts",
+            "creation",
+            "chat",
+            "dialog",
+            "context",
+            "skills",
+            "code",
         }
         if mode == "low":
             return name in low_tools or self._dangerous_terminal_command(command)
         if mode == "high":
             return group not in {"utility", "thinking"}
         return name in critical_tools or group in medium_groups
-
 
     async def _confirm_dangerous_tool(
         self,
@@ -2018,7 +2345,7 @@ class _OpenAgentStatusMixin:
         elapsed_line = f"\n⏳ {elapsed_value}s" if elapsed is not None else ""
         template = str(self.config.get("tool_confirmation_template", "") or "").strip()
         if not template:
-            template = "<blockquote><a href=\"tg://emoji?id=6010201728773790293\">😈</a> Continue?\n<a href=\"tg://emoji?id=6012317326584583729\">😐</a> Tool: {tool} • {elapsed}s</blockquote>\n<blockquote expandable><a href=\"tg://emoji?id=6010394680179562842\">😶</a> <b>What will be completed</b>\n<a href=\"tg://emoji?id=6010292550152230657\">☀️</a> <code>{value}</code></blockquote>"
+            template = '<blockquote><a href="tg://emoji?id=6010201728773790293">😈</a> Continue?\n<a href="tg://emoji?id=6012317326584583729">😐</a> Tool: {tool} • {elapsed}s</blockquote>\n<blockquote expandable><a href="tg://emoji?id=6010394680179562842">😶</a> <b>What will be completed</b>\n<a href="tg://emoji?id=6010292550152230657">☀️</a> <code>{value}</code></blockquote>'
         body = template
         for key, item in {
             "tool": safe_tool,
@@ -2027,20 +2354,28 @@ class _OpenAgentStatusMixin:
             "elapsed_line": elapsed_line,
         }.items():
             body = body.replace("{" + key + "}", item)
-        buttons = [[
-            self.Button.inline(
-                str(self.config.get("tool_confirmation_yes_text", "") or self.strings("tool_confirmation_yes_text")),
-                self._confirm_tool_action,
-                args=(token, True),
-                style="primary",
-            ),
-            self.Button.inline(
-                str(self.config.get("tool_confirmation_no_text", "") or self.strings("tool_confirmation_no_text")),
-                self._confirm_tool_action,
-                args=(token, False),
-                style="danger",
-            ),
-        ]]
+        buttons = [
+            [
+                self.Button.inline(
+                    str(
+                        self.config.get("tool_confirmation_yes_text", "")
+                        or self.strings("tool_confirmation_yes_text")
+                    ),
+                    self._confirm_tool_action,
+                    args=(token, True),
+                    style="primary",
+                ),
+                self.Button.inline(
+                    str(
+                        self.config.get("tool_confirmation_no_text", "")
+                        or self.strings("tool_confirmation_no_text")
+                    ),
+                    self._confirm_tool_action,
+                    args=(token, False),
+                    style="danger",
+                ),
+            ]
+        ]
         try:
             if hasattr(event, "edit"):
                 await event.edit(body, buttons=buttons, parse_mode="html")
@@ -2056,7 +2391,6 @@ class _OpenAgentStatusMixin:
             return False
         finally:
             self._tool_confirmation_waiters.pop(token, None)
-
 
     async def _start_inline_status(
         self,
@@ -2083,10 +2417,16 @@ class _OpenAgentStatusMixin:
                 with contextlib.suppress(Exception):
                     setattr(candidate, "_openagent_status_buttons", buttons)
                 with contextlib.suppress(Exception):
-                    setattr(candidate, "_openagent_source_chat_id", getattr(event, "chat_id", None))
+                    setattr(
+                        candidate,
+                        "_openagent_source_chat_id",
+                        getattr(event, "chat_id", None),
+                    )
             return result or target_event
 
-        chat_id = getattr(event, "chat_id", None) or getattr(event, "_openagent_source_chat_id", None)
+        chat_id = getattr(event, "chat_id", None) or getattr(
+            event, "_openagent_source_chat_id", None
+        )
         target = await self._inline_target(event, chat_id)
         if not target:
             return await edit_with_status_buttons(event)
@@ -2099,13 +2439,24 @@ class _OpenAgentStatusMixin:
             _unit, sms = await self.inline(
                 target,
                 text,
-                buttons=[[self.Button.inline(" ", self._activate_inline_status, args=(token,), style="primary")]],
+                buttons=[
+                    [
+                        self.Button.inline(
+                            " ",
+                            self._activate_inline_status,
+                            args=(token,),
+                            style="primary",
+                        )
+                    ]
+                ],
                 ttl=900,
                 parse_mode="html",
                 reply_to=getattr(event, "reply_to", None),
             )
             self.log.debug(
-                "OA inline_status: chat_id=%s inline_sms=%s ttl=900", chat_id, bool(sms),
+                "OA inline_status: chat_id=%s inline_sms=%s ttl=900",
+                chat_id,
+                bool(sms),
             )
             if sms:
                 with contextlib.suppress(Exception):
@@ -2120,7 +2471,8 @@ class _OpenAgentStatusMixin:
             result = call or sms or event
             self.log.debug(
                 "OA inline_status OK: chat_id=%s result_type=%s has_edit=%s has_buttons=%s",
-                chat_id, type(result).__name__,
+                chat_id,
+                type(result).__name__,
                 hasattr(result, "edit"),
                 hasattr(result, "_openagent_status_buttons"),
             )
@@ -2128,7 +2480,8 @@ class _OpenAgentStatusMixin:
         except Exception as exc:
             self.log.debug(
                 "OA inline_status FALLBACK: chat_id=%s error=%s",
-                chat_id, exc,
+                chat_id,
+                exc,
             )
             return await edit_with_status_buttons(event)
         finally:
@@ -2140,7 +2493,11 @@ class _OpenAgentAgentLoopMixin:
 
     def _is_provider_timeout_error(self, exc: BaseException) -> bool:
         text = str(exc).lower()
-        return isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or "timed out" in text or "timeout" in text
+        return (
+            isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+            or "timed out" in text
+            or "timeout" in text
+        )
 
     async def _ask_provider_once(
         self,
@@ -2163,7 +2520,9 @@ class _OpenAgentAgentLoopMixin:
                 api_key,
                 max_tokens_override=max_tokens_override,
             )
-        raise RuntimeError(self.strings("bad_provider", providers=", ".join(self.PROVIDERS)))
+        raise RuntimeError(
+            self.strings("bad_provider", providers=", ".join(self.PROVIDERS))
+        )
 
     async def _ask_provider_with_reconnect(
         self,
@@ -2177,7 +2536,9 @@ class _OpenAgentAgentLoopMixin:
         thinking_notes: list[str] | None = None,
         max_tokens_override: int | None = None,
     ) -> str:
-        max_reconnects = max(0, min(int(self.config.get("provider_reconnect_attempts", 5) or 0), 5))
+        max_reconnects = max(
+            0, min(int(self.config.get("provider_reconnect_attempts", 5) or 0), 5)
+        )
         attempt = 0
         while True:
             try:
@@ -2188,7 +2549,10 @@ class _OpenAgentAgentLoopMixin:
                     max_tokens_override=max_tokens_override,
                 )
             except Exception as exc:
-                if not self._is_provider_timeout_error(exc) or attempt >= max_reconnects:
+                if (
+                    not self._is_provider_timeout_error(exc)
+                    or attempt >= max_reconnects
+                ):
                     raise
                 attempt += 1
                 reconnect_label = f"provider.reconnect {attempt}/{max_reconnects}"
@@ -2202,7 +2566,9 @@ class _OpenAgentAgentLoopMixin:
                             str(exc),
                             agent_log or [reconnect_label],
                             tool_name="reconnect",
-                            elapsed=(time.monotonic() - started_at) if started_at else None,
+                            elapsed=(
+                                (time.monotonic() - started_at) if started_at else None
+                            ),
                             thinking_notes=thinking_notes,
                         )
                 await asyncio.sleep(1)
@@ -2238,7 +2604,9 @@ class _OpenAgentAgentLoopMixin:
             tool_trace=tool_trace,
         )
 
-        async def finish_agent(raw_answer: str) -> tuple[str, list[str], list[str], list[dict[str, str]]]:
+        async def finish_agent(
+            raw_answer: str,
+        ) -> tuple[str, list[str], list[str], list[dict[str, str]]]:
             agent_context.answer = (raw_answer or "").strip()
             agent_context.agent_log = agent_log
             agent_context.thinking_notes = thinking_notes
@@ -2246,22 +2614,33 @@ class _OpenAgentAgentLoopMixin:
             after_hook = await self._run_plugin_hooks("after_agent", agent_context)
             if after_hook is not None:
                 if after_hook.has_result:
-                    agent_context.answer = "" if after_hook.result is None else str(after_hook.result)
+                    agent_context.answer = (
+                        "" if after_hook.result is None else str(after_hook.result)
+                    )
                 elif after_hook.cancel and after_hook.reason:
                     agent_context.answer = after_hook.reason
-            return (agent_context.answer or "").strip(), agent_log, thinking_notes, tool_trace
+            return (
+                (agent_context.answer or "").strip(),
+                agent_log,
+                thinking_notes,
+                tool_trace,
+            )
 
         before_agent = await self._run_plugin_hooks("before_agent", agent_context)
         if before_agent is not None and before_agent.cancel:
             if before_agent.has_result:
-                raw_answer = "" if before_agent.result is None else str(before_agent.result)
+                raw_answer = (
+                    "" if before_agent.result is None else str(before_agent.result)
+                )
             elif agent_context.answer:
                 raw_answer = agent_context.answer
             else:
                 raw_answer = before_agent.reason or ""
             return await finish_agent(raw_answer)
 
-        requested_provider = self._normalize_provider(str(agent_context.provider or provider))
+        requested_provider = self._normalize_provider(
+            str(agent_context.provider or provider)
+        )
         if requested_provider in self.PROVIDERS:
             provider = requested_provider
         else:
@@ -2287,12 +2666,20 @@ class _OpenAgentAgentLoopMixin:
             user_content = self._build_openai_content(prompt, attachments)
 
         chat_id = self._event_chat_id(source_event)
-        compacted_context = False if flash_mode else await self._compact_chat_history_if_needed(chat_id, provider, api_key)
+        compacted_context = (
+            False
+            if flash_mode
+            else await self._compact_chat_history_if_needed(chat_id, provider, api_key)
+        )
         history = self._history_for_chat(chat_id)
         if flash_mode:
             history = history[-2:]
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_override or self._system_prompt(prompt, flash_mode=flash_mode)}
+            {
+                "role": "system",
+                "content": system_override
+                or self._system_prompt(prompt, flash_mode=flash_mode),
+            }
         ]
         tool_memory = "" if flash_mode else self._tool_memory_prompt(chat_id)
         if tool_memory:
@@ -2302,23 +2689,32 @@ class _OpenAgentAgentLoopMixin:
 
         if compacted_context:
             agent_log.append("context.compact")
-        max_steps = self.AGENT_MAX_STEPS  # Architectural limit for tool chaining in 0.5.0
+        max_steps = (
+            self.AGENT_MAX_STEPS
+        )  # Architectural limit for tool chaining in 0.5.0
         invalid_tool_retries = 0
         answer = ""
 
         if cancel_token and cancel_token in self._cancelled_generations:
             raise RuntimeError("Generation cancelled")
         think_messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self._thinking_system_prompt(flash_mode=flash_mode)}
+            {
+                "role": "system",
+                "content": self._thinking_system_prompt(flash_mode=flash_mode),
+            }
         ]
         think_messages.extend(history)
         think_messages.append({"role": "user", "content": user_content})
         agent_context.messages = messages
         agent_context.thinking_messages = think_messages
-        messages_hook = await self._run_plugin_hooks("before_agent_messages", agent_context)
+        messages_hook = await self._run_plugin_hooks(
+            "before_agent_messages", agent_context
+        )
         if messages_hook is not None and messages_hook.cancel:
             if messages_hook.has_result:
-                raw_answer = "" if messages_hook.result is None else str(messages_hook.result)
+                raw_answer = (
+                    "" if messages_hook.result is None else str(messages_hook.result)
+                )
             elif agent_context.answer:
                 raw_answer = agent_context.answer
             else:
@@ -2369,14 +2765,16 @@ class _OpenAgentAgentLoopMixin:
             think_assistant_msg = {"role": "assistant", "content": think_answer or ""}
             think_output_msg = {
                 "role": "user",
-                "content": "\n\n".join(thinking_outputs) + "\n\nNow proceed with the actual task.",
+                "content": "\n\n".join(thinking_outputs)
+                + "\n\nNow proceed with the actual task.",
             }
             messages.append(think_assistant_msg)
             messages.append(think_output_msg)
             tool_trace.append(
                 {
                     "role": "assistant",
-                    "content": "OpenAgent tool trace:\n" + "\n\n".join(thinking_outputs),
+                    "content": "OpenAgent tool trace:\n"
+                    + "\n\n".join(thinking_outputs),
                 }
             )
 
@@ -2503,7 +2901,11 @@ class _OpenAgentAgentLoopMixin:
             thinking_notes=thinking_notes,
         )
         clean = (answer or "").strip()
-        if not clean and provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other") and self._uses_completion_tokens(provider):
+        if (
+            not clean
+            and provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other")
+            and self._uses_completion_tokens(provider)
+        ):
             max_tokens = int(self.config["max_tokens"])
             if int(self._last_token_usage.get("output_tokens", 0) or 0) >= max_tokens:
                 messages.append(
@@ -2534,9 +2936,13 @@ class _OpenAgentAgentLoopMixin:
         """Single whitelist source for executable tool names and aliases."""
         return set(self._get_tool_map())
 
-    def _json_tool_to_legacy(self, payload: dict[str, Any]) -> tuple[str, str, str] | None:
+    def _json_tool_to_legacy(
+        self, payload: dict[str, Any]
+    ) -> tuple[str, str, str] | None:
         """Convert the new JSON tool protocol into legacy attrs/body for handlers."""
-        tool_name = str(payload.get("tool") or payload.get("name") or "").lower().strip()
+        tool_name = (
+            str(payload.get("tool") or payload.get("name") or "").lower().strip()
+        )
         if tool_name not in self._tool_names():
             return None
         args_raw = payload.get("args") or {}
@@ -2544,7 +2950,15 @@ class _OpenAgentAgentLoopMixin:
             args_raw = {}
         body_value = payload.get("body")
         if body_value is None:
-            for key in ("body", "content", "text", "message", "command", "query", "prompt"):
+            for key in (
+                "body",
+                "content",
+                "text",
+                "message",
+                "command",
+                "query",
+                "prompt",
+            ):
                 if key in args_raw:
                     body_value = args_raw.get(key)
                     break
@@ -2575,7 +2989,7 @@ class _OpenAgentAgentLoopMixin:
         match = re.search(r"(?:^|\s)to=([^\s<]+)", header or "")
         if not match:
             return ""
-        recipient = match.group(1).strip().strip('"\'').lower()
+        recipient = match.group(1).strip().strip("\"'").lower()
         aliases = {
             "tool.send_message": "message.send_current",
             "tool.send_current": "message.send_current",
@@ -2636,12 +3050,16 @@ class _OpenAgentAgentLoopMixin:
         for match in self.TOOL_CALL_JSON_RE.finditer(text or ""):
             raw = match.group(1).strip()
             for item in self._iter_json_tool_payloads(raw):
-                tool_name = str(item.get("tool") or item.get("name") or "").lower().strip()
+                tool_name = (
+                    str(item.get("tool") or item.get("name") or "").lower().strip()
+                )
                 if tool_name == "thinking.note":
                     note_val = ""
                     args = item.get("args") or {}
                     if isinstance(args, dict):
-                        note_val = str(args.get("note") or args.get("text") or "").strip()
+                        note_val = str(
+                            args.get("note") or args.get("text") or ""
+                        ).strip()
                     if not note_val:
                         note_val = str(item.get("body") or "").strip()
                     embedded = self._extract_json_tool_calls(note_val)
@@ -2652,10 +3070,10 @@ class _OpenAgentAgentLoopMixin:
                             f"[FORMAT ERROR] You put tool call(s) ({names}) inside thinking.note. "
                             "They were NOT executed. Each tool must be its own separate ```tool_call``` block:\n"
                             "```tool_call\n"
-                            "{\"tool\":\"thinking.note\",\"args\":{\"note\":\"your plain-text note\"}}\n"
+                            '{"tool":"thinking.note","args":{"note":"your plain-text note"}}\n'
                             "```\n"
                             "```tool_call\n"
-                            f"{{\"tool\":\"{real[0][0]}\",\"args\":{{...}}}}\n"
+                            f'{{"tool":"{real[0][0]}","args":{{...}}}}\n'
                             "```\n"
                             "Retry now with separate blocks."
                         )
@@ -2663,25 +3081,40 @@ class _OpenAgentAgentLoopMixin:
         stripped = (text or "").strip()
         if stripped.startswith("{") or stripped.startswith("["):
             raw_items.append(stripped)
-        raw_items.extend(match.group(1).strip() for match in self.TOOL_CALL_JSON_RE.finditer(text or ""))
+        raw_items.extend(
+            match.group(1).strip()
+            for match in self.TOOL_CALL_JSON_RE.finditer(text or "")
+        )
         for raw in raw_items:
             try:
                 payload = json.loads(raw)
             except Exception as exc:
                 preview = raw.strip().replace("\n", " ")[:500]
-                return self.strings("tool_call_bad_json", error=str(exc), preview=preview)
+                return self.strings(
+                    "tool_call_bad_json", error=str(exc), preview=preview
+                )
             payloads = payload if isinstance(payload, list) else [payload]
             for item in payloads:
                 if not isinstance(item, dict):
                     return self.strings("tool_call_not_object")
-                tool_name = str(item.get("tool") or item.get("name") or "").lower().strip()
+                tool_name = (
+                    str(item.get("tool") or item.get("name") or "").lower().strip()
+                )
                 if not tool_name:
                     continue
                 if tool_name not in self._tool_names():
                     candidates = sorted(self._tool_names())
-                    nearest = ", ".join(difflib.get_close_matches(tool_name, candidates, n=5, cutoff=0.45))
+                    nearest = ", ".join(
+                        difflib.get_close_matches(
+                            tool_name, candidates, n=5, cutoff=0.45
+                        )
+                    )
                     available = ", ".join(candidates[:30])
-                    hint = self.strings("tool_call_nearest", nearest=nearest) if nearest else ""
+                    hint = (
+                        self.strings("tool_call_nearest", nearest=nearest)
+                        if nearest
+                        else ""
+                    )
                     return self.strings(
                         "tool_call_unknown",
                         tool_name=tool_name,
@@ -2690,7 +3123,9 @@ class _OpenAgentAgentLoopMixin:
                     )
                 args_raw = item.get("args") or {}
                 if not isinstance(args_raw, dict):
-                    return self.strings("tool_call_args_not_object", tool_name=tool_name)
+                    return self.strings(
+                        "tool_call_args_not_object", tool_name=tool_name
+                    )
         return ""
 
     def _extract_json_tool_call(self, text: str) -> tuple[str, str, str] | None:
@@ -2703,7 +3138,11 @@ class _OpenAgentAgentLoopMixin:
         calls: list[tuple[str, str, str]] = []
         for match in self.TOOL_CALL_RE.finditer(text or ""):
             if match.group(1):
-                tool_name, attrs_raw, body = match.group(1), match.group(2), match.group(3)
+                tool_name, attrs_raw, body = (
+                    match.group(1),
+                    match.group(2),
+                    match.group(3),
+                )
             else:
                 tool_name, attrs_raw, body = match.group(4), match.group(5), ""
             tool_name = (tool_name or "").lower().strip()
@@ -2737,7 +3176,9 @@ class _OpenAgentAgentLoopMixin:
                 if not raw:
                     try:
                         for item in self._iter_json_tool_payloads(attrs_raw):
-                            raw = str(item.get("note") or item.get("text") or "").strip()
+                            raw = str(
+                                item.get("note") or item.get("text") or ""
+                            ).strip()
                             if raw:
                                 break
                     except Exception:
@@ -2800,7 +3241,9 @@ class _OpenAgentAgentLoopMixin:
         )
 
     def _reasoning_effort(self) -> str:
-        effort = str(self.config.get("reasoning_effort", "off") or "off").lower().strip()
+        effort = (
+            str(self.config.get("reasoning_effort", "off") or "off").lower().strip()
+        )
         return effort if effort in {"low", "medium", "high", "xhigh"} else "off"
 
     def _set_token_usage(self, usage: dict[str, Any] | None, provider: str) -> None:
@@ -2808,15 +3251,19 @@ class _OpenAgentAgentLoopMixin:
         if provider == "google":
             input_tokens = int(usage.get("promptTokenCount") or 0)
             output_tokens = int(usage.get("candidatesTokenCount") or 0)
-            total_tokens = int(usage.get("totalTokenCount") or input_tokens + output_tokens)
-        else:
-            input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
-            output_tokens = int(
-                usage.get("completion_tokens")
-                or usage.get("output_tokens")
-                or 0
+            total_tokens = int(
+                usage.get("totalTokenCount") or input_tokens + output_tokens
             )
-            total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens)
+        else:
+            input_tokens = int(
+                usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+            )
+            output_tokens = int(
+                usage.get("completion_tokens") or usage.get("output_tokens") or 0
+            )
+            total_tokens = int(
+                usage.get("total_tokens") or input_tokens + output_tokens
+            )
         self._last_token_usage = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -2849,7 +3296,10 @@ class _OpenAgentAgentLoopMixin:
         else:
             payload["max_tokens"] = max_tokens
 
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
         try:
             data = await self._post_json(url, payload, headers=headers)
         except RuntimeError as exc:
@@ -2891,7 +3341,9 @@ class _OpenAgentAgentLoopMixin:
     ) -> str:
         model = self._model("google")
         url = f"{self._base_url('google')}/models/{model}:generateContent?key={api_key}"
-        system_text = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        system_text = "\n\n".join(
+            m["content"] for m in messages if m["role"] == "system"
+        )
         contents = []
         for msg in messages:
             if msg["role"] == "system":
@@ -2904,7 +3356,9 @@ class _OpenAgentAgentLoopMixin:
             "contents": contents,
             "generationConfig": {
                 "temperature": float(self.config["temperature"]),
-                "maxOutputTokens": int(max_tokens_override or self.config["max_tokens"]),
+                "maxOutputTokens": int(
+                    max_tokens_override or self.config["max_tokens"]
+                ),
             },
         }
         if system_text:
@@ -2935,17 +3389,20 @@ class _OpenAgentAgentLoopMixin:
                     try:
                         return await resp.json()
                     except Exception as exc:
-                        raise RuntimeError(f"Invalid JSON response: {text[:800]}") from exc
+                        raise RuntimeError(
+                            f"Invalid JSON response: {text[:800]}"
+                        ) from exc
         except TimeoutError as exc:
             raise RuntimeError(
                 f"Provider request timed out after {timeout_seconds}s. "
                 "Increase OpenAgent timeout or use a faster model for this task."
             ) from exc
 
+
 __all__ = [
-    'OpenAgentPlugin',
-    '_OpenAgentPluginSkillMixin',
-    '_OpenAgentTelegramMediaMixin',
-    '_OpenAgentAgentLoopMixin',
-    '_OpenAgentStatusMixin',
+    "OpenAgentPlugin",
+    "_OpenAgentPluginSkillMixin",
+    "_OpenAgentTelegramMediaMixin",
+    "_OpenAgentAgentLoopMixin",
+    "_OpenAgentStatusMixin",
 ]

@@ -61,12 +61,16 @@ class _OpenAgentToolRegistryMixin:
                 return value.strip()
         return (body or "").strip()
 
-    async def _skills_registry_tool(self, tool_name: str, attrs_raw: str, body: str) -> str:
+    async def _skills_registry_tool(
+        self, tool_name: str, attrs_raw: str, body: str
+    ) -> str:
         await asyncio.sleep(0)
         attrs = self._parse_xml_attrs(attrs_raw)
         if tool_name == "skills.list":
             skills = self._list_skills()
-            return "\n".join(self._skill_name_from_path(path) for path in skills) or self.strings("skills_empty")
+            return "\n".join(
+                self._skill_name_from_path(path) for path in skills
+            ) or self.strings("skills_empty")
         if tool_name == "skills.repo_list":
             return await self._format_skill_repo_list()
         if tool_name == "skills.install":
@@ -86,7 +90,12 @@ class _OpenAgentToolRegistryMixin:
             if not path.exists():
                 return self.strings("skill_not_found")
             return path.read_text(encoding="utf-8", errors="replace")[:12000]
-        if tool_name in {"skills.save_from_ai", "skills.import_md", "skill.save", "skill"}:
+        if tool_name in {
+            "skills.save_from_ai",
+            "skills.import_md",
+            "skill.save",
+            "skill",
+        }:
             name = attrs.get("name") or attrs.get("title") or "skill"
             if not body.strip():
                 return self.strings("skill_empty")
@@ -104,7 +113,12 @@ class _OpenAgentToolRegistryMixin:
         """Handle code tools advertised in the OpenAgent tool registry."""
         await asyncio.sleep(0)
         attrs = self._parse_xml_attrs(attrs_raw)
-        name = attrs.get("name") or attrs.get("path") or attrs.get("file") or "generated.py"
+        name = (
+            attrs.get("name")
+            or attrs.get("path")
+            or attrs.get("file")
+            or "generated.py"
+        )
         content = body or attrs.get("content") or ""
 
         if tool_name == "code.choose_filename":
@@ -132,7 +146,9 @@ class _OpenAgentToolRegistryMixin:
             latest = getattr(self, "_last_generated_file", None)
             if not latest:
                 return "No generated file is available to attach"
-            filename = self._safe_generated_filename(str(latest.get("name") or "generated.py"))
+            filename = self._safe_generated_filename(
+                str(latest.get("name") or "generated.py")
+            )
             content = str(latest.get("content") or "")
             if not content:
                 return "Generated file is empty"
@@ -162,10 +178,14 @@ class _OpenAgentToolRegistryMixin:
                 return getattr(self, "_sessions", {}).get(active_id)
         return None
 
-    async def _prune_context_tool(self, attrs_raw: str, body: str, source_event: Any | None) -> str:
+    async def _prune_context_tool(
+        self, attrs_raw: str, body: str, source_event: Any | None
+    ) -> str:
         attrs = self._parse_xml_attrs(attrs_raw)
         chat_id = self._event_chat_id(source_event)
-        target_raw = attrs.get("target") or attrs.get("targets") or body.strip() or "all"
+        target_raw = (
+            attrs.get("target") or attrs.get("targets") or body.strip() or "all"
+        )
         targets = {
             item.strip().lower()
             for item in re.split(r"[,\s]+", target_raw)
@@ -175,7 +195,9 @@ class _OpenAgentToolRegistryMixin:
             targets.update({"history", "tools", "tool_memory", "runtime_comments"})
         keep = max(0, int(attrs.get("keep", "0") or 0))
         changed: list[str] = []
-        session = self._active_session_readonly(int(chat_id)) if chat_id is not None else None
+        session = (
+            self._active_session_readonly(int(chat_id)) if chat_id is not None else None
+        )
 
         if "history" in targets:
             if session is not None:
@@ -192,7 +214,8 @@ class _OpenAgentToolRegistryMixin:
             if session is not None:
                 before = len(session.messages)
                 session.messages = [
-                    msg for msg in session.messages
+                    msg
+                    for msg in session.messages
                     if "OpenAgent tool trace:" not in str(msg.get("content", ""))
                     and "Tool <" not in str(msg.get("content", ""))
                 ]
@@ -209,7 +232,9 @@ class _OpenAgentToolRegistryMixin:
                 changed.append("tool_memory:no chat")
 
         if "runtime_comments" in targets or "comments" in targets:
-            token = attrs.get("token") or getattr(self, "_placeholder_context", {}).get("cancel_token")
+            token = attrs.get("token") or getattr(self, "_placeholder_context", {}).get(
+                "cancel_token"
+            )
             if token:
                 removed = len(self._runtime_comments.pop(str(token), []))
             else:
@@ -217,9 +242,13 @@ class _OpenAgentToolRegistryMixin:
                 self._runtime_comments.clear()
             changed.append(f"runtime_comments:{removed} removed")
 
-        return "Context prune complete: " + ("; ".join(changed) if changed else "nothing matched")
+        return "Context prune complete: " + (
+            "; ".join(changed) if changed else "nothing matched"
+        )
 
-    async def _context_registry_tool(self, tool_name: str, attrs_raw: str, body: str, source_event: Any | None) -> str:
+    async def _context_registry_tool(
+        self, tool_name: str, attrs_raw: str, body: str, source_event: Any | None
+    ) -> str:
         chat_id = self._event_chat_id(source_event)
         if tool_name in {"context.prune", "context.discard"}:
             return await self._prune_context_tool(attrs_raw, body, source_event)
@@ -235,14 +264,19 @@ class _OpenAgentToolRegistryMixin:
                 return "No chat context available"
             self._remember_context(chat_id, "Memory note", body.strip())
             return "Remembered in current chat context"
-        if tool_name in {"context.reply_context", "context.media_context"} and source_event is not None:
+        if (
+            tool_name in {"context.reply_context", "context.media_context"}
+            and source_event is not None
+        ):
             reply_context, _attachments = await self._reply_context(source_event)
             return reply_context or "No reply/media context available"
         if tool_name == "context.regenerate":
             return "Use the regenerate button under the last OpenAgent response"
         return f"Unknown context tool: {tool_name}"
 
-    async def _utility_registry_tool(self, tool_name: str, attrs_raw: str, body: str) -> str:
+    async def _utility_registry_tool(
+        self, tool_name: str, attrs_raw: str, body: str
+    ) -> str:
         await asyncio.sleep(0)
         if tool_name == "utility.placeholders":
             return self._format_placeholders()
@@ -275,23 +309,47 @@ class _OpenAgentToolRegistryMixin:
             for group in sorted(groups):
                 names = sorted(groups[group])
                 emoji = {
-                    "thinking": "❔", "terminal": "🖥", "web": "🌐", "file": "📦",
-                    "mcub": "🧲", "message": "💬", "dialog": "🗂", "chat": "🐈‍⬛",
-                    "moderation": "🛡", "profile": "👤", "contacts": "👥",
-                    "creation": "✨", "skills": "🧠", "code": "🧬",
-                    "context": "🧾", "todo": "📝", "utility": "🛠",
+                    "thinking": "❔",
+                    "terminal": "🖥",
+                    "web": "🌐",
+                    "file": "📦",
+                    "mcub": "🧲",
+                    "message": "💬",
+                    "dialog": "🗂",
+                    "chat": "🐈‍⬛",
+                    "moderation": "🛡",
+                    "profile": "👤",
+                    "contacts": "👥",
+                    "creation": "✨",
+                    "skills": "🧠",
+                    "code": "🧬",
+                    "context": "🧾",
+                    "todo": "📝",
+                    "utility": "🛠",
                 }.get(group, "🛠")
-                items = "\n".join(f"  · {n} — {all_docs.get(n, {}).get('desc', '')}" for n in names)
+                items = "\n".join(
+                    f"  · {n} — {all_docs.get(n, {}).get('desc', '')}" for n in names
+                )
                 lines.append(f"\n{emoji} {group} ({len(names)}):\n{items}")
-            lines.append("\nTip: call utility.tool_help tool=<tool.name> for arguments/body; call utility.plugin_docs for plugin docs.")
+            lines.append(
+                "\nTip: call utility.tool_help tool=<tool.name> for arguments/body; call utility.plugin_docs for plugin docs."
+            )
             return "\n".join(lines)[:9000]
         if tool_name == "utility.plugin_docs":
             attrs = self._parse_xml_attrs(attrs_raw)
-            query = body.strip() or attrs.get("plugin") or attrs.get("name") or attrs.get("tool") or ""
+            query = (
+                body.strip()
+                or attrs.get("plugin")
+                or attrs.get("name")
+                or attrs.get("tool")
+                or ""
+            )
             return self._format_plugin_docs(query or None)
         return f"Unknown utility tool: {tool_name}"
 
-    async def _todo_registry_tool(self, tool_name: str, attrs_raw: str, body: str) -> str:
+    async def _todo_registry_tool(
+        self, tool_name: str, attrs_raw: str, body: str
+    ) -> str:
         await asyncio.sleep(0)
         attrs = self._parse_xml_attrs(attrs_raw)
         items = self._todo_items()
@@ -307,7 +365,9 @@ class _OpenAgentToolRegistryMixin:
             text = self._todo_parse_html_text(text)
             if not text:
                 return "todo text is required"
-            status = self._todo_normalize_status(attrs.get("status") or attrs.get("state") or "pending")
+            status = self._todo_normalize_status(
+                attrs.get("status") or attrs.get("state") or "pending"
+            )
             items.append({"text": text[:500], "status": status})
             await self._save_todo_items(items)
             return "TODO item added\n" + self._format_todo_placeholder()
@@ -335,7 +395,10 @@ class _OpenAgentToolRegistryMixin:
                     item["status"] = "pending"
             items[idx]["status"] = "open"
             await self._save_todo_items(items)
-            return f"Current TODO: {items[idx]['text']}\n" + self._format_todo_placeholder()
+            return (
+                f"Current TODO: {items[idx]['text']}\n"
+                + self._format_todo_placeholder()
+            )
 
         if tool_name == "todo.delete":
             idx, error = self._todo_target_index(items, attrs, body)
@@ -343,7 +406,9 @@ class _OpenAgentToolRegistryMixin:
                 return error
             removed = items.pop(idx)
             await self._save_todo_items(items)
-            return f"TODO deleted: {removed['text']}\n" + self._format_todo_placeholder()
+            return (
+                f"TODO deleted: {removed['text']}\n" + self._format_todo_placeholder()
+            )
 
         if tool_name == "todo.close":
             idx, error = self._todo_target_index(items, attrs, body)
@@ -351,15 +416,14 @@ class _OpenAgentToolRegistryMixin:
                 return error
             items[idx]["status"] = "closed"
             await self._save_todo_items(items)
-            return f"TODO closed: {items[idx]['text']}\n" + self._format_todo_placeholder()
+            return (
+                f"TODO closed: {items[idx]['text']}\n" + self._format_todo_placeholder()
+            )
 
         if tool_name == "todo.edit":
             target_body = body
             new_text = (
-                attrs.get("new")
-                or attrs.get("value")
-                or attrs.get("text")
-                or ""
+                attrs.get("new") or attrs.get("value") or attrs.get("text") or ""
             ).strip()
             if not attrs.get("index") and "|" in (body or ""):
                 target_part, new_part = body.split("|", 1)
@@ -376,9 +440,14 @@ class _OpenAgentToolRegistryMixin:
                 return "new todo text is empty"
             items[idx]["text"] = parsed_text[:500]
             if attrs.get("status") or attrs.get("state"):
-                items[idx]["status"] = self._todo_normalize_status(attrs.get("status") or attrs.get("state") or "")
+                items[idx]["status"] = self._todo_normalize_status(
+                    attrs.get("status") or attrs.get("state") or ""
+                )
             await self._save_todo_items(items)
-            return f"TODO updated: {items[idx]['text']}\n" + self._format_todo_placeholder()
+            return (
+                f"TODO updated: {items[idx]['text']}\n"
+                + self._format_todo_placeholder()
+            )
 
         return f"Unknown todo tool: {tool_name}"
 
@@ -412,7 +481,9 @@ class _OpenAgentToolRegistryMixin:
         if fenced:
             text = fenced.group(1).strip()
         else:
-            text = re.sub(r"^```(?:tool_call|json)?\s*|\s*```$", "", text, flags=re.I | re.S).strip()
+            text = re.sub(
+                r"^```(?:tool_call|json)?\s*|\s*```$", "", text, flags=re.I | re.S
+            ).strip()
 
         json_text = text
         if not json_text.startswith("{"):
@@ -433,7 +504,9 @@ class _OpenAgentToolRegistryMixin:
                             or text
                         ).strip()
                     else:
-                        text = str(payload.get("note") or payload.get("text") or text).strip()
+                        text = str(
+                            payload.get("note") or payload.get("text") or text
+                        ).strip()
             except Exception:
                 pass
         return text
@@ -484,7 +557,9 @@ class _OpenAgentToolRegistryMixin:
                 return "" if before_hook.result is None else str(before_hook.result)
             if tool_context.result is not HOOK_NO_RESULT:
                 return "" if tool_context.result is None else str(tool_context.result)
-            return before_hook.reason or f"Tool <{name}> was cancelled by a plugin hook."
+            return (
+                before_hook.reason or f"Tool <{name}> was cancelled by a plugin hook."
+            )
 
         name = str(tool_context.tool_name or "").lower().strip()
         attrs_raw = str(tool_context.attrs_raw or "")
@@ -522,7 +597,9 @@ class _OpenAgentToolRegistryMixin:
             handler_method = getattr(self, method_name, None)
         if not handler_method:
             candidates = sorted(self._tool_names())
-            nearest = ", ".join(difflib.get_close_matches(name, candidates, n=5, cutoff=0.45))
+            nearest = ", ".join(
+                difflib.get_close_matches(name, candidates, n=5, cutoff=0.45)
+            )
             suggestion = f" Closest matches: {nearest}." if nearest else ""
             return f"Error: Tool <{name}> not found in registry.{suggestion}"
 
@@ -542,7 +619,8 @@ class _OpenAgentToolRegistryMixin:
             elapsed = time.monotonic() - started_at if started_at is not None else None
             self.log.debug(
                 "OA dispatch CONFIRM_TOOL: tool=%s status_has_edit=%s",
-                name, hasattr(status_event, "edit"),
+                name,
+                hasattr(status_event, "edit"),
             )
             approved = await self._confirm_dangerous_tool(
                 status_event,
@@ -591,17 +669,13 @@ class _OpenAgentToolRegistryMixin:
             if "thinking_notes" in params:
                 kwargs["thinking_notes"] = thinking_notes
             if "runtime_token" in params:
-                kwargs["runtime_token"] = self._placeholder_context.get(
-                                              "cancel_token"
-                                          )
+                kwargs["runtime_token"] = self._placeholder_context.get("cancel_token")
             if "agent" in params:
                 kwargs["agent"] = self
             if "attrs" in params:
                 kwargs["attrs"] = attrs
             if "kind" in params:
-                kwargs["kind"] = "group" if name.endswith(
-                    "group"
-                ) else "channel"
+                kwargs["kind"] = "group" if name.endswith("group") else "channel"
             if "command" in params:
                 # for _run_terminal
                 kwargs["command"] = body.strip()
@@ -614,9 +688,7 @@ class _OpenAgentToolRegistryMixin:
                 elif name.endswith("list_all"):
                     kwargs["mode"] = "all"
                 else:
-                    kwargs["mode"] = body.strip() or attrs.get(
-                        "mode"
-                    ) or "private"
+                    kwargs["mode"] = body.strip() or attrs.get("mode") or "private"
             if "target" in params:
                 kwargs["target"] = body.strip() or attrs.get("target", "")
 
@@ -637,7 +709,9 @@ class _OpenAgentToolRegistryMixin:
                 )
                 result = await handler_method(**kwargs)
             elif method_name == "_save_skill":
-                result = await self._skills_registry_tool(name, attrs_raw, body or attrs.get("content", ""))
+                result = await self._skills_registry_tool(
+                    name, attrs_raw, body or attrs.get("content", "")
+                )
             else:
                 result = await handler_method(**kwargs)
 
@@ -652,10 +726,16 @@ class _OpenAgentToolRegistryMixin:
             result = "" if result is None else str(result)
 
             if status_event:
-                elapsed = time.monotonic() - started_at if started_at is not None else None
+                elapsed = (
+                    time.monotonic() - started_at if started_at is not None else None
+                )
                 await self._show_agent_action(
                     status_event,
-                    f"Updated {name}" if name.startswith("todo.") else f"Completed {name}",
+                    (
+                        f"Updated {name}"
+                        if name.startswith("todo.")
+                        else f"Completed {name}"
+                    ),
                     result,
                     agent_log,
                     tool_name=name,
@@ -684,6 +764,7 @@ class _OpenAgentToolRegistryMixin:
                 return "" if tool_context.result is None else str(tool_context.result)
             return error_result
 
+
 class OpenAgentToolDisplayService:
     """Tool status/rendering helpers that can be tested without MCUB runtime."""
 
@@ -701,7 +782,9 @@ class OpenAgentToolDisplayService:
 
     def status_emoji_map(self, raw: str | None) -> dict[str, str]:
         raw_text = str(raw or "")
-        if raw_text == self._status_emojis_raw and isinstance(self._status_emojis_cache, dict):
+        if raw_text == self._status_emojis_raw and isinstance(
+            self._status_emojis_cache, dict
+        ):
             return dict(self._status_emojis_cache)
         configured: dict[str, str] = {}
         for line in raw_text.splitlines():
@@ -734,13 +817,12 @@ class OpenAgentToolDisplayService:
         if group == "reconnect":
             return emoji_getter("reconnect", "🔄")
         return _DEFAULT_TOOL_STATUS_EMOJIS.get(
-            group,
-            _DEFAULT_TOOL_STATUS_EMOJIS[
-                "default"
-            ]
+            group, _DEFAULT_TOOL_STATUS_EMOJIS["default"]
         )
 
-    def status_text(self, tool_name: str, title: str, strings_getter: Callable[..., str]) -> str:
+    def status_text(
+        self, tool_name: str, title: str, strings_getter: Callable[..., str]
+    ) -> str:
         tool_name = (tool_name or "").lower().strip()
         group = self.tool_group(tool_name)
         if tool_name == "thinking.note":
@@ -770,7 +852,9 @@ class OpenAgentToolDisplayService:
         return "▰" * filled + "▱" * (width - filled)
 
     @staticmethod
-    def display_text(value: str, log: list[str], max_chars: int, log_lines: int) -> tuple[str, str]:
+    def display_text(
+        value: str, log: list[str], max_chars: int, log_lines: int
+    ) -> tuple[str, str]:
         safe_value = value if len(value) <= max_chars else value[:max_chars] + "..."
         log_text = "\n".join(log[-log_lines:]) if log_lines > 0 else ""
         if len(log_text) > 1800:
@@ -804,7 +888,11 @@ class OpenAgentToolDisplayService:
         status_emoji = self.status_emoji(tool_name, raw_status_emojis, emoji_getter)
         status_text = self.status_text(tool_name, title, strings_getter)
         log_lines = html.escape(log_text)
-        tool_input = "" if (tool_name or "").lower().strip() == "thinking.note" else html.escape(safe_value)
+        tool_input = (
+            ""
+            if (tool_name or "").lower().strip() == "thinking.note"
+            else html.escape(safe_value)
+        )
         tool_input_block = (
             f"<blockquote expandable><b>{emoji_getter('bubble', '📦')} Tool input</b>\n"
             f"<code>{tool_input}</code></blockquote>"
@@ -829,10 +917,14 @@ class OpenAgentToolDisplayService:
         )
         tool_running_emoji = "✍️"
         tool_done_emoji = "🌙"
-        tool_running_emoji_html = '<tg-emoji emoji-id="5220046725493828505">✍️</tg-emoji>'
+        tool_running_emoji_html = (
+            '<tg-emoji emoji-id="5220046725493828505">✍️</tg-emoji>'
+        )
         tool_done_emoji_html = '<tg-emoji emoji-id="5253521692008917018">🌙</tg-emoji>'
         tool_state_emoji = tool_done_emoji if tool_done else tool_running_emoji
-        tool_state_emoji_html = tool_done_emoji_html if tool_done else tool_running_emoji_html
+        tool_state_emoji_html = (
+            tool_done_emoji_html if tool_done else tool_running_emoji_html
+        )
         progress_percent = str(int(round(100 * min(step, total) / max(1, total))))
         return {
             "round": str(step),
@@ -887,12 +979,18 @@ class _OpenAgentToolDisplayMixin:
         return self._tool_display_service().tool_group(tool_name)
 
     def _tool_status_emoji_map(self) -> dict[str, str]:
-        raw = self.config.get("tool_status_emojis", "") if hasattr(self, "config") else ""
+        raw = (
+            self.config.get("tool_status_emojis", "") if hasattr(self, "config") else ""
+        )
         return self._tool_display_service().status_emoji_map(str(raw or ""))
 
     def _tool_status_emoji(self, tool_name: str) -> str:
-        raw = self.config.get("tool_status_emojis", "") if hasattr(self, "config") else ""
-        return self._tool_display_service().status_emoji(tool_name, str(raw or ""), self._emoji)
+        raw = (
+            self.config.get("tool_status_emojis", "") if hasattr(self, "config") else ""
+        )
+        return self._tool_display_service().status_emoji(
+            tool_name, str(raw or ""), self._emoji
+        )
 
     def _tool_status_text(self, tool_name: str, title: str) -> str:
         return self._tool_display_service().status_text(tool_name, title, self.strings)
@@ -912,7 +1010,9 @@ class _OpenAgentToolDisplayMixin:
         thinking_notes: list[str] | None,
         tool_done: bool = False,
     ) -> dict[str, str]:
-        raw = self.config.get("tool_status_emojis", "") if hasattr(self, "config") else ""
+        raw = (
+            self.config.get("tool_status_emojis", "") if hasattr(self, "config") else ""
+        )
         return self._tool_display_service().semantic_values(
             title=title,
             tool_name=tool_name,
@@ -945,10 +1045,12 @@ class _OpenAgentToolDisplayMixin:
     ) -> str:
         max_chars = int(self.config.get("tool_display_max_chars", 30) or 30)
         log_lines = int(self.config.get("tool_display_log_lines", 8) or 8)
-        safe_value, log_text = self._tool_display_service().display_text(value, log, max_chars, log_lines)
+        safe_value, log_text = self._tool_display_service().display_text(
+            value, log, max_chars, log_lines
+        )
         template = str(self.config.get("tool_display_template", "") or "")
         if not template:
-            template = "<blockquote expandable><i>{thinking_line}</i></blockquote>\n<blockquote expandable><strong>┌|</strong> {tool_state_emoji_html} {status_emoji_html} <em>{status_text}</em> <code>{tool}</code>\n<strong>└|</strong> <a href=\"tg://emoji?id=6010570945637392851\">🥳</a>  <b>Round:</b> <code>{round}/{round_total}</code> • <b>Reasoning:</b>\n<code>{reasoning_effort}</code>\n</blockquote><blockquote><a href=\"tg://emoji?id=5310041868191407556\">🩸</a> <strong>{activity_line}</strong></blockquote>\n<blockquote expandable><a href=\"tg://emoji?id=6012361831035705571\">😪</a> <strong>Log tools</strong>\n<code>{log_lines}</code></blockquote>"
+            template = '<blockquote expandable><i>{thinking_line}</i></blockquote>\n<blockquote expandable><strong>┌|</strong> {tool_state_emoji_html} {status_emoji_html} <em>{status_text}</em> <code>{tool}</code>\n<strong>└|</strong> <a href="tg://emoji?id=6010570945637392851">🥳</a>  <b>Round:</b> <code>{round}/{round_total}</code> • <b>Reasoning:</b>\n<code>{reasoning_effort}</code>\n</blockquote><blockquote><a href="tg://emoji?id=5310041868191407556">🩸</a> <strong>{activity_line}</strong></blockquote>\n<blockquote expandable><a href="tg://emoji?id=6012361831035705571">😪</a> <strong>Log tools</strong>\n<code>{log_lines}</code></blockquote>'
         template_keys = self._template_placeholder_keys(template)
         placeholder_keys = set(template_keys)
         if "todo_html" in placeholder_keys:
@@ -959,21 +1061,20 @@ class _OpenAgentToolDisplayMixin:
             thinking_notes=thinking_notes,
             keys=placeholder_keys,
         )
-        values = {
-            key: html.escape(value)
-            for key, value in placeholder_values.items()
-        }
+        values = {key: html.escape(value) for key, value in placeholder_values.items()}
         todo_raw = placeholder_values.get("todo", "")
         values["todo"] = todo_raw
         values["todo_html"] = todo_raw
-        values.update({
-            "title": html.escape(title),
-            "tool": html.escape(tool_name or title),
-            "value": html.escape(safe_value),
-            "log": html.escape(log_text),
-            "step": str(len(log)),
-            "tool_count": str(len(log)),
-        })
+        values.update(
+            {
+                "title": html.escape(title),
+                "tool": html.escape(tool_name or title),
+                "value": html.escape(safe_value),
+                "log": html.escape(log_text),
+                "step": str(len(log)),
+                "tool_count": str(len(log)),
+            }
+        )
         values.update(
             self._tool_display_semantic_values(
                 title=title,
@@ -1023,7 +1124,11 @@ class _OpenAgentRuntimeToolsMixin:
         return "\n".join(lines)
 
     def _thinking_system_prompt(self, flash_mode: bool = False) -> str:
-        base = self._flash_system_prompt() if flash_mode else str(self.config["system_prompt"]).strip()
+        base = (
+            self._flash_system_prompt()
+            if flash_mode
+            else str(self.config["system_prompt"]).strip()
+        )
         effort = self._reasoning_effort()
         profiles = {
             "off": (
@@ -1057,7 +1162,7 @@ class _OpenAgentRuntimeToolsMixin:
             "Do NOT write a generic heartbeat. Do NOT put any tool call JSON inside the note text.\n\n"
             "If useful, output only this shape:\n"
             "```tool_call\n"
-            "{\"tool\":\"thinking.note\",\"args\":{\"note\":\"<your own short note>\"}}\n"
+            '{"tool":"thinking.note","args":{"note":"<your own short note>"}}\n'
             "```"
         )
 
@@ -1077,38 +1182,38 @@ class _OpenAgentRuntimeToolsMixin:
             "\n## Tool call format\n"
             "Output one or more fenced JSON blocks. Each block is ONE tool call:\n"
             "```tool_call\n"
-            "{\"tool\":\"tool.name\",\"args\":{\"key\":\"value\"},\"body\":\"optional long text\"}\n"
+            '{"tool":"tool.name","args":{"key":"value"},"body":"optional long text"}\n'
             "```\n"
             "Use `args` for structured parameters. Use `body` for commands, messages, file content, or long text.\n"
             "\n## Batching — emit multiple blocks in ONE turn to save steps\n"
             "```tool_call\n"
-            "{\"tool\":\"thinking.note\",\"args\":{\"note\":\"Listing files to find the config\"}}\n"
+            '{"tool":"thinking.note","args":{"note":"Listing files to find the config"}}\n'
             "```\n"
             "```tool_call\n"
-            "{\"tool\":\"terminal.run\",\"args\":{\"cmd\":\"ls -la\"}}\n"
+            '{"tool":"terminal.run","args":{"cmd":"ls -la"}}\n'
             "```\n"
             "RULE: thinking.note body/note MUST be plain text. NEVER put a tool call JSON inside thinking.note.\n"
-            "WRONG: {\"tool\":\"thinking.note\",\"args\":{\"note\":\"{\\\"tool\\\":\\\"terminal.run\\\",\\\"args\\\":{\\\"cmd\\\":\\\"ls\\\"}}\"}}\n"
+            'WRONG: {"tool":"thinking.note","args":{"note":"{\\"tool\\":\\"terminal.run\\",\\"args\\":{\\"cmd\\":\\"ls\\"}}"}}\n'
             "RIGHT: two separate ```tool_call``` blocks as shown above.\n"
             "\n## Format rules\n"
             "- ONLY ```tool_call``` fenced JSON blocks. No XML tags. No plain JSON outside fences.\n"
             "- When no tool is needed: reply in plain text with no ```tool_call``` blocks at all.\n"
-             f"Available tool names: {tlist}\n"
-             "\n## Tool discovery and docs\n"
-             "- Call utility.list_tools to get the current list of core and plugin tools grouped by category.\n"
-             "- Call utility.tool_help with args {\"tool\":\"tool.name\"} to get one tool's description, arguments, and body usage.\n"
-             "- Call utility.plugin_docs with optional args {\"plugin\":\"plugin_name\"} to inspect activated plugin docs and tools.\n"
-             "- These discovery utilities are tools too: call them with ```tool_call``` blocks instead of guessing.\n"
-             "\n## Guidelines\n"
-             "1. Use only tools from 'Available tool names'. Wrong names fail immediately.\n"
-             "2. mcub.* tools: omit the userbot prefix (body='ping', not '.ping').\n"
-             "3. Unknown domain? Call skills.activate first. To persist knowledge: skills.save_from_ai.\n"
-             "4. Simple greetings/questions: answer in plain text, no tools.\n"
-             "5. thinking.note: use for meaningful progress updates only — findings, risky actions, approach changes.\n"
-             "6. Multi-step tasks: keep todo.* in sync (todo.add → todo.current → todo.close → todo.clear).\n"
-             "7. Don't know how to use a tool? Call utility.tool_help tool=<name> to see its arguments and description.\n"
-             "   Or utility.list_tools to browse all tools by category, utility.plugin_docs for plugin docs.\n"
-             "Never explain tool calls. Output the block(s) and wait for results."
+            f"Available tool names: {tlist}\n"
+            "\n## Tool discovery and docs\n"
+            "- Call utility.list_tools to get the current list of core and plugin tools grouped by category.\n"
+            '- Call utility.tool_help with args {"tool":"tool.name"} to get one tool\'s description, arguments, and body usage.\n'
+            '- Call utility.plugin_docs with optional args {"plugin":"plugin_name"} to inspect activated plugin docs and tools.\n'
+            "- These discovery utilities are tools too: call them with ```tool_call``` blocks instead of guessing.\n"
+            "\n## Guidelines\n"
+            "1. Use only tools from 'Available tool names'. Wrong names fail immediately.\n"
+            "2. mcub.* tools: omit the userbot prefix (body='ping', not '.ping').\n"
+            "3. Unknown domain? Call skills.activate first. To persist knowledge: skills.save_from_ai.\n"
+            "4. Simple greetings/questions: answer in plain text, no tools.\n"
+            "5. thinking.note: use for meaningful progress updates only — findings, risky actions, approach changes.\n"
+            "6. Multi-step tasks: keep todo.* in sync (todo.add → todo.current → todo.close → todo.clear).\n"
+            "7. Don't know how to use a tool? Call utility.tool_help tool=<name> to see its arguments and description.\n"
+            "   Or utility.list_tools to browse all tools by category, utility.plugin_docs for plugin docs.\n"
+            "Never explain tool calls. Output the block(s) and wait for results."
         )
         prompt += "\n\nCurrent TODO state:\n" + todo_snapshot
         prompt += self._load_skills_prompt(user_prompt)
@@ -1143,10 +1248,10 @@ class _OpenAgentRuntimeToolsMixin:
 
 
 __all__ = [
-    '_DEFAULT_TOOL_STATUS_EMOJIS',
-    '_TOOL_GROUP_ALIASES',
-    'OpenAgentToolDisplayService',
-    '_OpenAgentToolDisplayMixin',
-    '_OpenAgentRuntimeToolsMixin',
-    '_OpenAgentToolRegistryMixin'
+    "_DEFAULT_TOOL_STATUS_EMOJIS",
+    "_TOOL_GROUP_ALIASES",
+    "OpenAgentToolDisplayService",
+    "_OpenAgentToolDisplayMixin",
+    "_OpenAgentRuntimeToolsMixin",
+    "_OpenAgentToolRegistryMixin",
 ]

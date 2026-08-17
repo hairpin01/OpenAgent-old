@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 import asyncio
 
+
 class _MCUBEvent:
     def __init__(self, outer: "OpenAgent", source_event: Any, text: str) -> None:
         self._outer = outer
@@ -69,6 +70,5 @@ class _MCUBEvent:
     def output(self) -> str:
         return "\n\n".join(self._outputs).strip()
 
-__all__ = [
-    '_MCUBEvent'
-]
+
+__all__ = ["_MCUBEvent"]

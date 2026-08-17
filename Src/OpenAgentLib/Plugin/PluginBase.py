@@ -173,7 +173,9 @@ class OpenAgentPlugin:
             self._method_patches = patches
         return patches
 
-    def _should_bind_patch(self, target: Any, replacement: Any, bind: bool | None) -> bool:
+    def _should_bind_patch(
+        self, target: Any, replacement: Any, bind: bool | None
+    ) -> bool:
         if bind is not None:
             return bind
         if isinstance(target, type):
@@ -280,9 +282,12 @@ class OpenAgentPlugin:
         should_bind = self._should_bind_patch(target, wrapper, bind)
 
         if should_bind:
+
             def patched(_patched_self: Any, *args: Any, **kwargs: Any) -> Any:
                 return wrapper(original, *args, **kwargs)
+
         else:
+
             def patched(*args: Any, **kwargs: Any) -> Any:
                 return wrapper(original, *args, **kwargs)
 
@@ -356,7 +361,9 @@ class OpenAgentPlugin:
         """Called before prompt attachments are converted into provider messages."""
         return None
 
-    async def before_agent_messages(self, context: AgentHookContext) -> PluginHookResult | None:
+    async def before_agent_messages(
+        self, context: AgentHookContext
+    ) -> PluginHookResult | None:
         """Called after provider messages are built, before provider requests."""
         return None
 

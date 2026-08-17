@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='todo',
-    name='delete',
-    handler='handle',
-    docs={'desc': 'Delete a TODO item.', 'args': 'id/index/text'},
+    tool_class="todo",
+    name="delete",
+    handler="handle",
+    docs={"desc": "Delete a TODO item.", "args": "id/index/text"},
 )
 
 

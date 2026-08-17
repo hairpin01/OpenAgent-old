@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='context',
-    name='regenerate',
-    handler='handle',
-    docs={'desc': 'Explain that regeneration is available via the response button.'},
+    tool_class="context",
+    name="regenerate",
+    handler="handle",
+    docs={"desc": "Explain that regeneration is available via the response button."},
 )
 
 

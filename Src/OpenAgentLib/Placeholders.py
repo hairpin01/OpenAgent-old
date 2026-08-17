@@ -9,6 +9,7 @@ import time
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
 
+
 class OpenAgentProviderService:
     """Provider/model config helpers independent from MCUB runtime."""
 
@@ -77,7 +78,9 @@ class OpenAgentTemplateService:
         empty_text: str,
         bullet: str,
     ) -> str:
-        notes = [str(note).strip() for note in (thinking_notes or []) if str(note).strip()]
+        notes = [
+            str(note).strip() for note in (thinking_notes or []) if str(note).strip()
+        ]
         if display_limit > 0:
             notes = notes[-display_limit:]
         else:
@@ -111,7 +114,9 @@ class OpenAgentTemplateService:
     def event_chat_id(event: Any | None) -> int | None:
         if event is None:
             return None
-        chat_id = getattr(event, "chat_id", None) or getattr(event, "_openagent_source_chat_id", None)
+        chat_id = getattr(event, "chat_id", None) or getattr(
+            event, "_openagent_source_chat_id", None
+        )
         with contextlib.suppress(Exception):
             return int(chat_id) if chat_id is not None else None
         return None
@@ -148,13 +153,17 @@ class _OpenAgentProviderMixin:
 
     def _model(self, provider: str | None = None) -> str:
         provider = provider or self._provider()
-        return self._provider_service().model(self.config, self.DEFAULT_MODELS, provider)
+        return self._provider_service().model(
+            self.config, self.DEFAULT_MODELS, provider
+        )
 
     def _api_key(self) -> str:
         return self._provider_service().api_key(self.config)
 
     def _provider_label(self) -> str:
-        return self._provider_service().provider_label(self._provider(), self.PROVIDER_LABELS)
+        return self._provider_service().provider_label(
+            self._provider(), self.PROVIDER_LABELS
+        )
 
     def _response_title(
         self,
@@ -165,7 +174,7 @@ class _OpenAgentProviderMixin:
     ) -> str:
         return self._render_template(
             str(self.config.get("response_header", ""))
-            or "<blockquote><a href=\"tg://emoji?id=6010179991944305029\">☺️</a> <strong>OpenAgent</strong>: <a href=\"tg://emoji?id=5325872701032635449\">⏳</a>  <em>{elapsed}</em>s\n• <u>{provider}/{model}</u>  •  <code>{reasoning_effort}</code>\n| | | | | | | | | | | | | | | | | | | | | | | | | | |\n<a href=\"tg://emoji?id=5408994848084624514\">💸</a> <strong>in</strong> <em>{input_tokens}</em>, <strong>out</strong> <em>{output_tokens}</em> | <b>total</b>\n<i>{total_tokens}</i> | <strong>tool use:</strong> <em>{tool_count}</em></blockquote>\n<blockquote expandable><i>{thinking}</i></blockquote>",
+            or '<blockquote><a href="tg://emoji?id=6010179991944305029">☺️</a> <strong>OpenAgent</strong>: <a href="tg://emoji?id=5325872701032635449">⏳</a>  <em>{elapsed}</em>s\n• <u>{provider}/{model}</u>  •  <code>{reasoning_effort}</code>\n| | | | | | | | | | | | | | | | | | | | | | | | | | |\n<a href="tg://emoji?id=5408994848084624514">💸</a> <strong>in</strong> <em>{input_tokens}</em>, <strong>out</strong> <em>{output_tokens}</em> | <b>total</b>\n<i>{total_tokens}</i> | <strong>tool use:</strong> <em>{tool_count}</em></blockquote>\n<blockquote expandable><i>{thinking}</i></blockquote>',
             elapsed=elapsed,
             tool_count=tool_count,
             thinking_notes=thinking_notes,
@@ -175,7 +184,10 @@ class _OpenAgentProviderMixin:
         return self._template_service().format_thinking_notes(
             thinking_notes,
             display_limit=int(self.config.get("thinking_display_limit", 3) or 0),
-            empty_text=str(self.config.get("thinking_empty_text", "") or self.strings("thinking_empty_text")),
+            empty_text=str(
+                self.config.get("thinking_empty_text", "")
+                or self.strings("thinking_empty_text")
+            ),
             bullet=str(self.config.get("thinking_bullet", "•") or ""),
         )
 
@@ -238,13 +250,22 @@ class _OpenAgentProviderMixin:
                 with contextlib.suppress(Exception):
                     cid = int(chat_id)
                     active_id = getattr(self, "_active_session", {}).get(cid)
-                    session = getattr(self, "_sessions", {}).get(active_id) if active_id else None
+                    session = (
+                        getattr(self, "_sessions", {}).get(active_id)
+                        if active_id
+                        else None
+                    )
                     if session is None:
                         sessions = [
-                            item for item in getattr(self, "_sessions", {}).values()
+                            item
+                            for item in getattr(self, "_sessions", {}).values()
                             if getattr(item, "chat_id", None) == cid
                         ]
-                        session = max(sessions, key=lambda item: getattr(item, "updated_at", 0), default=None)
+                        session = max(
+                            sessions,
+                            key=lambda item: getattr(item, "updated_at", 0),
+                            default=None,
+                        )
                     if session is not None:
                         session_name = str(session.name or "")
                         session_messages = str(len(session.messages or []))
@@ -252,9 +273,16 @@ class _OpenAgentProviderMixin:
             put("session_messages", session_messages)
 
         if wants("runtime_comments_count") or wants("runtime_comments"):
-            runtime_comments = list(getattr(self, "_runtime_comments", {}).get(str(cancel_token), [])) if cancel_token else []
+            runtime_comments = (
+                list(getattr(self, "_runtime_comments", {}).get(str(cancel_token), []))
+                if cancel_token
+                else []
+            )
             put("runtime_comments_count", len(runtime_comments))
-            put("runtime_comments", "\n".join(str(item) for item in runtime_comments[-3:]))
+            put(
+                "runtime_comments",
+                "\n".join(str(item) for item in runtime_comments[-3:]),
+            )
 
         put("tool_count", tool_count if tool_count is not None else 0)
         if wants("available_tool_count"):
@@ -263,7 +291,9 @@ class _OpenAgentProviderMixin:
         if wants("input_tokens"):
             values["input_tokens"] = str(self._last_token_usage.get("input_tokens", 0))
         if wants("output_tokens"):
-            values["output_tokens"] = str(self._last_token_usage.get("output_tokens", 0))
+            values["output_tokens"] = str(
+                self._last_token_usage.get("output_tokens", 0)
+            )
         if wants("total_tokens"):
             values["total_tokens"] = str(self._last_token_usage.get("total_tokens", 0))
         if wants("thinking"):
@@ -298,12 +328,16 @@ class _OpenAgentProviderMixin:
     def _event_chat_id(self, event: Any | None) -> int | None:
         return self._template_service().event_chat_id(event)
 
-    def _set_placeholder_context(self, event: Any | None = None, cancel_token: str | None = None) -> None:
+    def _set_placeholder_context(
+        self, event: Any | None = None, cancel_token: str | None = None
+    ) -> None:
         chat_id = None
         user_id = None
         if event is not None:
             chat_id = self._event_chat_id(event)
-            user_id = getattr(event, "sender_id", None) or getattr(event, "user_id", None)
+            user_id = getattr(event, "sender_id", None) or getattr(
+                event, "user_id", None
+            )
         self._placeholder_context = {
             "chat_id": chat_id,
             "user_id": user_id,
@@ -329,15 +363,19 @@ class _OpenAgentProviderMixin:
 
     def _thinking_text(self) -> str:
         return self._render_template(
-            str(self.config.get("thinking_template", "") or self.strings("thinking_template_default"))
+            str(
+                self.config.get("thinking_template", "")
+                or self.strings("thinking_template_default")
+            )
         )
 
     def _format_placeholders(self) -> str:
         return self._template_service().format_placeholder_help()
 
+
 __all__ = [
-    '_PLACEHOLDER_RE',
-    'OpenAgentProviderService',
-    'OpenAgentTemplateService',
-    '_OpenAgentProviderMixin',
+    "_PLACEHOLDER_RE",
+    "OpenAgentProviderService",
+    "OpenAgentTemplateService",
+    "_OpenAgentProviderMixin",
 ]

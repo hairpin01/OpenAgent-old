@@ -4,10 +4,14 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='utility',
-    name='plugin_docs',
-    handler='handle',
-    docs={'desc': "Show activated plugin documentation and each plugin's tools.", 'args': 'plugin/name (str, optional) — plugin to inspect', 'body': 'optional plugin name'},
+    tool_class="utility",
+    name="plugin_docs",
+    handler="handle",
+    docs={
+        "desc": "Show activated plugin documentation and each plugin's tools.",
+        "args": "plugin/name (str, optional) — plugin to inspect",
+        "body": "optional plugin name",
+    },
 )
 
 

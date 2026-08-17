@@ -16,7 +16,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-
 CHAT_ID = "-1003588062415"
 MESSAGE_THREAD_ID = "11"
 TOKEN_KEY = "TELEGRAM_BOT_TOKEN"
@@ -88,6 +87,7 @@ def _bot_token() -> str:
         raise BuildNotificationError(f"{TOKEN_KEY} has an invalid format")
     return token
 
+
 def _format_size(size: int) -> str:
     if size < 1024:
         return f"{size} B"
@@ -142,7 +142,9 @@ def _telegram_response(
             f"Telegram API rejected {action}: {description}"
         ) from exc
     except URLError as exc:
-        raise BuildNotificationError(f"Telegram API is unavailable: {exc.reason}") from exc
+        raise BuildNotificationError(
+            f"Telegram API is unavailable: {exc.reason}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise BuildNotificationError("Telegram API returned invalid JSON") from exc
 
@@ -177,7 +179,9 @@ def _source_files(project_dir: Path) -> list[Path]:
             continue
         relative = Path(os.fsdecode(raw_path))
         if relative.is_absolute() or ".." in relative.parts:
-            raise BuildNotificationError(f"unsafe source path reported by git: {relative}")
+            raise BuildNotificationError(
+                f"unsafe source path reported by git: {relative}"
+            )
         if any(part in SOURCE_EXCLUDES for part in relative.parts):
             continue
         source = project_dir / relative
@@ -240,7 +244,9 @@ def _multipart_media_group(
         parts.extend(
             (
                 f"--{boundary}\r\n".encode("ascii"),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("ascii"),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(
+                    "ascii"
+                ),
                 value.encode("utf-8"),
                 b"\r\n",
             )
@@ -250,9 +256,7 @@ def _multipart_media_group(
         ("artifact", artifact),
         ("sources", source_archive),
     ):
-        filename = (
-            file_path.name.replace('"', "_").replace("\r", "").replace("\n", "")
-        )
+        filename = file_path.name.replace('"', "_").replace("\r", "").replace("\n", "")
         parts.extend(
             (
                 f"--{boundary}\r\n".encode("ascii"),
@@ -283,7 +287,9 @@ def _send_media_group(
     response = _telegram_response(request, "the media group", timeout=60)
     result = response.get("result")
     if not isinstance(result, list) or len(result) != 2:
-        raise BuildNotificationError("Telegram API response has no two-item media group")
+        raise BuildNotificationError(
+            "Telegram API response has no two-item media group"
+        )
 
     message_ids: list[int] = []
     for item in result:

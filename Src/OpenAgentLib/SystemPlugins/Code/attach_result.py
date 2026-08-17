@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='code',
-    name='attach_result',
-    handler='handle',
-    docs={'desc': 'Attach/send the latest generated code/file result.'},
+    tool_class="code",
+    name="attach_result",
+    handler="handle",
+    docs={"desc": "Attach/send the latest generated code/file result."},
 )
 
 
@@ -18,4 +18,6 @@ async def handle(
     body: str = "",
     source_event=None,
 ) -> str:
-    return await agent._code_registry_tool(tool_name, attrs_raw, body, source_event=source_event)
+    return await agent._code_registry_tool(
+        tool_name, attrs_raw, body, source_event=source_event
+    )

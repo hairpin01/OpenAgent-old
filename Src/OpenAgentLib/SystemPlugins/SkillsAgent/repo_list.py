@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='skills',
-    name='repo_list',
-    handler='handle',
-    docs={'desc': 'List skills available in the configured skill repository.'},
+    tool_class="skills",
+    name="repo_list",
+    handler="handle",
+    docs={"desc": "List skills available in the configured skill repository."},
 )
 
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='todo',
-    name='close',
-    handler='handle',
-    docs={'desc': 'Mark a TODO item as closed.', 'args': 'id/index/text'},
+    tool_class="todo",
+    name="close",
+    handler="handle",
+    docs={"desc": "Mark a TODO item as closed.", "args": "id/index/text"},
 )
 
 

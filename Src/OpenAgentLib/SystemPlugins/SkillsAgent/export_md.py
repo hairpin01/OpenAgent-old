@@ -4,10 +4,14 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='skills',
-    name='export_md',
-    handler='handle',
-    docs={'desc': 'Export/read an installed skill as markdown.', 'args': 'name', 'body': 'optional skill name'},
+    tool_class="skills",
+    name="export_md",
+    handler="handle",
+    docs={
+        "desc": "Export/read an installed skill as markdown.",
+        "args": "name",
+        "body": "optional skill name",
+    },
 )
 
 

@@ -4,10 +4,14 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='skills',
-    name='install',
-    handler='handle',
-    docs={'desc': 'Install a skill from the configured skill repository.', 'args': 'name', 'body': 'optional skill name'},
+    tool_class="skills",
+    name="install",
+    handler="handle",
+    docs={
+        "desc": "Install a skill from the configured skill repository.",
+        "args": "name",
+        "body": "optional skill name",
+    },
 )
 
 

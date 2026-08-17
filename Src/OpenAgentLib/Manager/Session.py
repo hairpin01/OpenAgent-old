@@ -71,7 +71,10 @@ class _OpenAgentSessionsMixin:
         }
 
     def _session_needs_auto_name(self, session: OASession) -> bool:
-        return bool(session.messages) and (session.name or "").strip() in self._session_default_names()
+        return (
+            bool(session.messages)
+            and (session.name or "").strip() in self._session_default_names()
+        )
 
     def _schedule_auto_name_session(self, session: OASession) -> None:
         if not self._session_needs_auto_name(session):
@@ -97,12 +100,17 @@ class _OpenAgentSessionsMixin:
         provider = self._provider()
         prompt = self.strings("auto_name_prompt", prompt=first_prompt[:200])
         messages = [
-            {"role": "system", "content": "Return only a short title, no quotes, no punctuation at the end."},
+            {
+                "role": "system",
+                "content": "Return only a short title, no quotes, no punctuation at the end.",
+            },
             {"role": "user", "content": prompt},
         ]
         try:
             if provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other"):
-                title = await self._ask_openai_compatible(provider, messages, api_key, max_tokens_override=32)
+                title = await self._ask_openai_compatible(
+                    provider, messages, api_key, max_tokens_override=32
+                )
             elif provider == "google":
                 title = await self._ask_google(messages, api_key)
             else:
@@ -144,7 +152,9 @@ class _OpenAgentSessionsMixin:
         for key in stale:
             self._session_input_events.pop(key, None)
 
-    def _make_session_input_token(self, chat_id: int, kind: str, source_event: Any | None = None) -> str:
+    def _make_session_input_token(
+        self, chat_id: int, kind: str, source_event: Any | None = None
+    ) -> str:
         token = str(uuid.uuid4())
         self._session_input_events[token] = {
             "event": source_event,
@@ -155,7 +165,9 @@ class _OpenAgentSessionsMixin:
         self._cleanup_session_inputs()
         return token
 
-    async def _inline_target(self, event: Any, chat_id: int | None = None) -> Any | None:
+    async def _inline_target(
+        self, event: Any, chat_id: int | None = None
+    ) -> Any | None:
         """Resolve a concrete entity for inline forms.
 
         Telethon's InlineResult.click requires a non-empty entity. Some callback
@@ -179,7 +191,11 @@ class _OpenAgentSessionsMixin:
 
     def _render_sessions_panel(self, chat_id: int) -> str:
         active_id = self._active_session.get(chat_id)
-        lines = [self.strings("chats_title"), html.escape(self.strings("oa_choose_chat")), ""]
+        lines = [
+            self.strings("chats_title"),
+            html.escape(self.strings("oa_choose_chat")),
+            "",
+        ]
         for session in self._get_chat_sessions(chat_id):
             marker = "●" if session.id == active_id else " "
             name = html.escape(session.name or self.strings("new_session_name"))
@@ -187,10 +203,14 @@ class _OpenAgentSessionsMixin:
             if session.messages:
                 lines.append(f"{marker} <b>{name}</b>     <i>{age}</i>")
             else:
-                lines.append(f"{marker} <b>{name}</b>     <i>{html.escape(self.strings('chat_empty'))}</i>")
+                lines.append(
+                    f"{marker} <b>{name}</b>     <i>{html.escape(self.strings('chat_empty'))}</i>"
+                )
         return "\n".join(lines)
 
-    def _last_saved_assistant_turn(self, chat_id: int) -> tuple[str, str, list[str]] | None:
+    def _last_saved_assistant_turn(
+        self, chat_id: int
+    ) -> tuple[str, str, list[str]] | None:
         """Return (prompt, answer, thinking_notes) from the active session history."""
         session = self._get_active_session(chat_id)
         messages = session.messages or []
@@ -210,54 +230,89 @@ class _OpenAgentSessionsMixin:
             return prompt, answer, list(getattr(session, "thinking_notes", []) or [])
         return None
 
-    def _sessions_panel_buttons(self, chat_id: int, source_event: Any | None = None) -> list[list[Any]]:
+    def _sessions_panel_buttons(
+        self, chat_id: int, source_event: Any | None = None
+    ) -> list[list[Any]]:
         rows: list[list[Any]] = []
         allow_user = getattr(source_event, "sender_id", None)
         for session in self._get_chat_sessions(chat_id):
             marker = "●" if self._active_session.get(chat_id) == session.id else " "
             label = f"{marker} {session.name or self.strings('new_session_name')}"
-            rows.append([self.Button.inline(label[:64], self._switch_session, args=(session.id,), style="primary")])
-        rows.append([
-            self.Button.input(
-                self.strings("new_chat_button"),
-                self._on_new_session_input,
-                placeholder=self.strings("new_chat_placeholder"),
-                allow_user=allow_user,
-                style="primary",
-                data=self._make_session_input_token(chat_id, "new", source_event),
+            rows.append(
+                [
+                    self.Button.inline(
+                        label[:64],
+                        self._switch_session,
+                        args=(session.id,),
+                        style="primary",
+                    )
+                ]
             )
-        ])
-        rows.append([
-            self.Button.input(
-                self.strings("ask_this_chat_button"),
-                self._on_ask_this_session_input,
-                placeholder=self.strings("ask_this_chat_placeholder"),
-                allow_user=allow_user,
-                style="primary",
-                data=self._make_session_input_token(chat_id, "ask", source_event),
-            )
-        ])
+        rows.append(
+            [
+                self.Button.input(
+                    self.strings("new_chat_button"),
+                    self._on_new_session_input,
+                    placeholder=self.strings("new_chat_placeholder"),
+                    allow_user=allow_user,
+                    style="primary",
+                    data=self._make_session_input_token(chat_id, "new", source_event),
+                )
+            ]
+        )
+        rows.append(
+            [
+                self.Button.input(
+                    self.strings("ask_this_chat_button"),
+                    self._on_ask_this_session_input,
+                    placeholder=self.strings("ask_this_chat_placeholder"),
+                    allow_user=allow_user,
+                    style="primary",
+                    data=self._make_session_input_token(chat_id, "ask", source_event),
+                )
+            ]
+        )
         if self._last_saved_assistant_turn(int(chat_id)) is not None:
-            rows.append([
+            rows.append(
+                [
+                    self.Button.inline(
+                        self.strings("return_to_chat_button"),
+                        self._return_to_last_response,
+                        args=(chat_id,),
+                        style="primary",
+                    )
+                ]
+            )
+        rows.append(
+            [
+                self.Button.input(
+                    self.strings("rename_chat_button"),
+                    self._on_rename_session_input,
+                    placeholder=self.strings("rename_chat_placeholder"),
+                    allow_user=allow_user,
+                    style="primary",
+                    data=self._make_session_input_token(
+                        chat_id, "rename", source_event
+                    ),
+                ),
                 self.Button.inline(
-                    self.strings("return_to_chat_button"),
-                    self._return_to_last_response,
+                    self.strings("delete_chat_button"),
+                    self._delete_active_session,
+                    args=(chat_id,),
+                    style="danger",
+                ),
+            ]
+        )
+        rows.append(
+            [
+                self.Button.inline(
+                    self.strings("remember_chat_button"),
+                    self._remember_session_choice,
                     args=(chat_id,),
                     style="primary",
                 )
-            ])
-        rows.append([
-            self.Button.input(
-                self.strings("rename_chat_button"),
-                self._on_rename_session_input,
-                placeholder=self.strings("rename_chat_placeholder"),
-                allow_user=allow_user,
-                style="primary",
-                data=self._make_session_input_token(chat_id, "rename", source_event),
-            ),
-            self.Button.inline(self.strings("delete_chat_button"), self._delete_active_session, args=(chat_id,), style="danger"),
-        ])
-        rows.append([self.Button.inline(self.strings("remember_chat_button"), self._remember_session_choice, args=(chat_id,), style="primary")])
+            ]
+        )
         return rows
 
     async def _show_sessions_panel(
@@ -286,7 +341,16 @@ class _OpenAgentSessionsMixin:
                 _unit, sms = await self.inline(
                     target,
                     text,
-                    buttons=[[self.Button.inline(" ", self._activate_inline_status, args=(token,), style="primary")]],
+                    buttons=[
+                        [
+                            self.Button.inline(
+                                " ",
+                                self._activate_inline_status,
+                                args=(token,),
+                                style="primary",
+                            )
+                        ]
+                    ],
                     ttl=900,
                     parse_mode="html",
                     reply_to=getattr(event, "reply_to", None),
@@ -299,7 +363,9 @@ class _OpenAgentSessionsMixin:
                     panel_event = await asyncio.wait_for(future, timeout=5)
                 except asyncio.TimeoutError:
                     panel_event = sms or event
-                buttons = self._sessions_panel_buttons(chat_id, source_event=panel_event)
+                buttons = self._sessions_panel_buttons(
+                    chat_id, source_event=panel_event
+                )
                 if hasattr(panel_event, "edit"):
                     await panel_event.edit(text, buttons=buttons, parse_mode="html")
                 with contextlib.suppress(Exception):
@@ -323,16 +389,19 @@ class _OpenAgentSessionsMixin:
             target = await self._inline_target(event, chat_id)
             if not target:
                 raise ValueError("chat target is missing")
-            _unit, _sms = await self.inline(target, text, buttons=buttons, ttl=900, parse_mode="html", reply_to=getattr(event, "reply_to", None))
+            _unit, _sms = await self.inline(
+                target,
+                text,
+                buttons=buttons,
+                ttl=900,
+                parse_mode="html",
+                reply_to=getattr(event, "reply_to", None),
+            )
             if hasattr(event, "delete"):
                 with contextlib.suppress(Exception):
                     await event.delete()
         except Exception:
             await self.edit(event, text, as_html=True)
-
-
-
-
 
     async def _on_new_session_input(self, event: Any, text: str, data: str) -> None:
         entry = self._session_input_events.pop(data, None)
@@ -342,7 +411,9 @@ class _OpenAgentSessionsMixin:
         name = (text or "").strip() or None
         session = self._new_session(chat_id, name=name)
         panel_event = entry.get("event") or event
-        await self._show_sessions_panel(panel_event, chat_id, alert=self.strings("chat_created", name=session.name))
+        await self._show_sessions_panel(
+            panel_event, chat_id, alert=self.strings("chat_created", name=session.name)
+        )
 
     async def _on_rename_session_input(self, event: Any, text: str, data: str) -> None:
         entry = self._session_input_events.pop(data, None)
@@ -356,9 +427,13 @@ class _OpenAgentSessionsMixin:
         session.name = name[:64]
         self._touch_session(session)
         panel_event = entry.get("event") or event
-        await self._show_sessions_panel(panel_event, chat_id, alert=self.strings("chat_renamed", name=session.name))
+        await self._show_sessions_panel(
+            panel_event, chat_id, alert=self.strings("chat_renamed", name=session.name)
+        )
 
-    async def _on_ask_this_session_input(self, event: Any, text: str, data: str) -> None:
+    async def _on_ask_this_session_input(
+        self, event: Any, text: str, data: str
+    ) -> None:
         entry = self._session_input_events.pop(data, None)
         prompt = (text or "").strip()
         if not entry or not prompt:
@@ -410,7 +485,9 @@ class _OpenAgentSessionsMixin:
                 age = html.escape(self._session_age_label(session.updated_at))
                 lines.append(f"{marker} <b>{name}</b>     <i>{age}</i>")
             else:
-                lines.append(f"{marker} <b>{name}</b>     <i>{html.escape(self.strings('chat_empty'))}</i>")
+                lines.append(
+                    f"{marker} <b>{name}</b>     <i>{html.escape(self.strings('chat_empty'))}</i>"
+                )
         return "\n".join(lines)
 
     def _oa_choice_buttons(
@@ -440,30 +517,34 @@ class _OpenAgentSessionsMixin:
                     style="primary",
                 )
             rows.append([btn])
-        rows.append([
-            self.Button.input(
-                self.strings("new_chat_button"),
-                self._on_new_session_for_pending,
-                placeholder=self.strings("new_chat_placeholder"),
-                allow_user=allow_user,
-                style="primary",
-                data=f"{prompt_token}:{chat_id}",
-            ),
-        ])
-        rows.append([
-            self.Button.inline(
-                self.strings("remember_pref_continue"),
-                self._remember_pref_continue,
-                args=(prompt_token, chat_id),
-                style="primary",
-            ),
-            self.Button.inline(
-                self.strings("remember_pref_new"),
-                self._remember_pref_new,
-                args=(prompt_token, chat_id),
-                style="primary",
-            ),
-        ])
+        rows.append(
+            [
+                self.Button.input(
+                    self.strings("new_chat_button"),
+                    self._on_new_session_for_pending,
+                    placeholder=self.strings("new_chat_placeholder"),
+                    allow_user=allow_user,
+                    style="primary",
+                    data=f"{prompt_token}:{chat_id}",
+                ),
+            ]
+        )
+        rows.append(
+            [
+                self.Button.inline(
+                    self.strings("remember_pref_continue"),
+                    self._remember_pref_continue,
+                    args=(prompt_token, chat_id),
+                    style="primary",
+                ),
+                self.Button.inline(
+                    self.strings("remember_pref_new"),
+                    self._remember_pref_new,
+                    args=(prompt_token, chat_id),
+                    style="primary",
+                ),
+            ]
+        )
         return rows
 
     async def _show_oa_choice_panel(
@@ -478,7 +559,14 @@ class _OpenAgentSessionsMixin:
             target = await self._inline_target(event, chat_id)
             if not target:
                 raise ValueError("chat target is missing")
-            _unit, _sms = await self.inline(target, text, buttons=buttons, ttl=900, parse_mode="html", reply_to=getattr(event, "reply_to", None))
+            _unit, _sms = await self.inline(
+                target,
+                text,
+                buttons=buttons,
+                ttl=900,
+                parse_mode="html",
+                reply_to=getattr(event, "reply_to", None),
+            )
             with contextlib.suppress(Exception):
                 await event.delete()
         except Exception:
@@ -495,7 +583,9 @@ class _OpenAgentSessionsMixin:
         chat_id = entry.get("chat_id") or getattr(event, "chat_id", None)
         source_event = entry.get("source_event") or event
         status_event = event
-        if getattr(status_event, "chat_id", None) is None and not hasattr(status_event, "edit"):
+        if getattr(status_event, "chat_id", None) is None and not hasattr(
+            status_event, "edit"
+        ):
             status_event = source_event
         cancel_token = str(uuid.uuid4())
         self._set_placeholder_context(source_event, cancel_token)
@@ -516,7 +606,9 @@ class _OpenAgentSessionsMixin:
             )
             self._last_request_at = time.time()
             elapsed = time.monotonic() - started
-            self._remember_context(chat_id, full_prompt, answer, tool_trace, thinking_notes)
+            self._remember_context(
+                chat_id, full_prompt, answer, tool_trace, thinking_notes
+            )
             await self._reply_text(
                 loading or status_event,
                 answer,
@@ -553,7 +645,9 @@ class _OpenAgentSessionsMixin:
                 source="OpenAgent:pending",
             )
 
-    async def _on_new_session_for_pending(self, event: Any, text: str, data: str) -> None:
+    async def _on_new_session_for_pending(
+        self, event: Any, text: str, data: str
+    ) -> None:
         """Button.input: create a new session then run the pending prompt."""
         parts = str(data).split(":", 1)
         if len(parts) != 2:
@@ -563,6 +657,7 @@ class _OpenAgentSessionsMixin:
         name = (text or "").strip() or None
         self._new_session(chat_id, name=name)
         await self._execute_pending(event, prompt_token)
+
 
 class SessionManager:
     """Plain service for OpenAgent chat sessions and persistence."""
@@ -635,7 +730,9 @@ class SessionManager:
                         self.log.warning("OpenAgent: restored sessions from backup")
                     return payload
             except Exception as exc:
-                self.log.warning(f"OpenAgent: failed to read sessions file {path}: {exc}")
+                self.log.warning(
+                    f"OpenAgent: failed to read sessions file {path}: {exc}"
+                )
         return None
 
     async def _load_payload(self) -> dict[str, Any] | None:
@@ -658,7 +755,10 @@ class SessionManager:
 
     @staticmethod
     def _json_bytes(data: dict[str, Any]) -> bytes:
-        return json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        return (
+            json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
 
     def _backup_current_sessions_file(self) -> None:
         if not self.sessions_file.exists():
@@ -667,7 +767,9 @@ class SessionManager:
         try:
             json.loads(current_payload.decode("utf-8"))
         except Exception:
-            self.log.warning("OpenAgent: current sessions file is invalid, keeping previous backup")
+            self.log.warning(
+                "OpenAgent: current sessions file is invalid, keeping previous backup"
+            )
         else:
             self._write_private_bytes(self._backup_file, current_payload)
 
@@ -695,7 +797,9 @@ class SessionManager:
 
     def _repair_active_sessions(self) -> bool:
         repaired = False
-        for session in sorted(self.sessions.values(), key=lambda item: item.updated_at, reverse=True):
+        for session in sorted(
+            self.sessions.values(), key=lambda item: item.updated_at, reverse=True
+        ):
             if session.chat_id and session.chat_id not in self.active_session:
                 self.active_session[session.chat_id] = session.id
                 repaired = True
@@ -730,7 +834,9 @@ class SessionManager:
             self._save_lock = asyncio.Lock()
         try:
             async with self._save_lock:
-                await asyncio.to_thread(self._save_payload_sync, self._session_payload())
+                await asyncio.to_thread(
+                    self._save_payload_sync, self._session_payload()
+                )
         except Exception as exc:
             self.log.warning(f"OpenAgent: failed to save sessions: {exc}")
 
@@ -808,7 +914,7 @@ class SessionManager:
     def enforce_limit(self, chat_id: int) -> None:
         """Keep at most session_limit sessions per chat, pruning oldest."""
         chat_sessions = self.get_chat_sessions(chat_id)
-        for session in chat_sessions[self._session_limit:]:
+        for session in chat_sessions[self._session_limit :]:
             self.sessions.pop(session.id, None)
 
     def touch_session(self, session: OASession) -> None:
@@ -830,8 +936,9 @@ class SessionManager:
         self.session_prefs[chat_id] = pref
         self.schedule_save()
 
+
 __all__ = [
-    'SessionManager',
-    '_OpenAgentSessionsMixin',
-    '_SESSION_PREFERENCES',
+    "SessionManager",
+    "_OpenAgentSessionsMixin",
+    "_SESSION_PREFERENCES",
 ]

@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='context',
-    name='clear',
-    handler='handle',
-    docs={'desc': 'Clear the active OpenAgent session context.'},
+    tool_class="context",
+    name="clear",
+    handler="handle",
+    docs={"desc": "Clear the active OpenAgent session context."},
 )
 
 

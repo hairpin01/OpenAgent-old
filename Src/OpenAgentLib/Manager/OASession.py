@@ -2,9 +2,11 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+
 @dataclass
 class OASession:
     """Single named conversation thread within a Telegram chat."""
+
     id: str
     name: str
     chat_id: int
@@ -21,7 +23,9 @@ class OASession:
             "chat_id": self.chat_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "messages": [dict(item) for item in self.messages if isinstance(item, dict)],
+            "messages": [
+                dict(item) for item in self.messages if isinstance(item, dict)
+            ],
             "model": self.model,
             "thinking_notes": list(self.thinking_notes),
         }
@@ -36,9 +40,12 @@ class OASession:
             updated_at=float(d.get("updated_at", 0)),
             messages=list(d.get("messages") or []),
             model=str(d.get("model") or "") or None,
-            thinking_notes=[str(item) for item in (d.get("thinking_notes") or []) if str(item).strip()],
+            thinking_notes=[
+                str(item)
+                for item in (d.get("thinking_notes") or [])
+                if str(item).strip()
+            ],
         )
 
-__all__ = [
-    'OASession'
-]
+
+__all__ = ["OASession"]

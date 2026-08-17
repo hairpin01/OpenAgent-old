@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='context',
-    name='remember',
-    handler='handle',
-    docs={'desc': 'Remember a note in the active chat context.', 'body': 'memory note'},
+    tool_class="context",
+    name="remember",
+    handler="handle",
+    docs={"desc": "Remember a note in the active chat context.", "body": "memory note"},
 )
 
 

@@ -4,10 +4,14 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='skills',
-    name='save_from_ai',
-    handler='handle',
-    docs={'desc': 'Persist useful knowledge as an OpenAgent skill.', 'args': 'name/title', 'body': 'skill content'},
+    tool_class="skills",
+    name="save_from_ai",
+    handler="handle",
+    docs={
+        "desc": "Persist useful knowledge as an OpenAgent skill.",
+        "args": "name/title",
+        "body": "skill content",
+    },
 )
 
 

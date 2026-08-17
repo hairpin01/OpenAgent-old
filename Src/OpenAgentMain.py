@@ -56,7 +56,7 @@ try:
         _OpenAgentToolRegistryMixin,
     )
 except Exception as e:
-    raise RuntimeError(e) from e # debug
+    raise RuntimeError(e) from e  # debug
 
 
 class OpenAgent(
@@ -266,9 +266,7 @@ class OpenAgent(
                     "reasoning_effort",
                     "off",
                     description="Reasoning effort for models/providers that support it: off, low, medium, high, xhigh",
-                    validator=Choice(
-                        choices=["off", "low", "medium", "high", "xhigh"]
-                    ),
+                    validator=Choice(choices=["off", "low", "medium", "high", "xhigh"]),
                 ),
                 ConfigValue(
                     "timeout",
@@ -622,9 +620,7 @@ class OpenAgent(
                     "tool_confirmation_mode",
                     "medium",
                     description="How often to ask before tools: low = only critical/destructive, medium = write/actions, high = almost every non-read tool",
-                    validator=Choice(
-                        choices=["low", "medium", "high"]
-                    ),
+                    validator=Choice(choices=["low", "medium", "high"]),
                 ),
                 ConfigValue(
                     "tool_confirmation_template",
@@ -656,7 +652,7 @@ class OpenAgent(
             key="confirmations",
         ),
         Row(),
-        Answer('❔ About', 'AI agent in userbot with refreshed tool architecture')
+        Answer("❔ About", "AI agent in userbot with refreshed tool architecture"),
     )
     SESSION_LIMIT = 20
     from .MCUBEvent import _MCUBEvent
@@ -1079,11 +1075,10 @@ class OpenAgent(
 
     def _rich_bot_system_prompt(self, prompt: str) -> str:
         return (
-            self._system_prompt(prompt)
-            + "\n\n## Bot command final answer format\n"
+            self._system_prompt(prompt) + "\n\n## Bot command final answer format\n"
             "For this bot command, the final answer is sent as Telegram Rich Message HTML. "
             "Use BlockRich/Rich HTML block formatting directly in the final answer: "
-            "<p>, <blockquote>, <pre><code class=\"language-python\">, <details><summary>, "
+            '<p>, <blockquote>, <pre><code class="language-python">, <details><summary>, '
             "<ul>/<ol>/<li>, <table>/<caption>/<tr>/<th>/<td>, <footer>, <tg-math>, "
             "<tg-math-block>, <tg-emoji>, <tg-reference>, <tg-time>, and media block tags when useful. "
             "Return only the answer body. Do not wrap it in Markdown fences. "
@@ -1730,10 +1725,14 @@ class OpenAgent(
                 tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
             text += f"\n🔧 <b>{html.escape(self.strings('plugin_tools_label'))}:</b> {tools_str}"
         if permissions:
-            perms_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in permissions)
+            perms_str = ", ".join(
+                f"<code>{html.escape(item)}</code>" for item in permissions
+            )
             text += f"\n🔐 <b>{html.escape(self.strings('plugin_permissions_label'))}:</b> {perms_str}"
         if requirements:
-            reqs_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in requirements)
+            reqs_str = ", ".join(
+                f"<code>{html.escape(item)}</code>" for item in requirements
+            )
             text += f"\n📦 <b>{html.escape(self.strings('plugin_requirements_label'))}:</b> {reqs_str}"
         text += f"\n\n🔢 {page + 1}/{len(plugins)}"
 
@@ -1864,7 +1863,9 @@ class OpenAgent(
         plugin_id = str(plugin_id or getattr(plugin, "name", "") or "?")
         display_name = self._plugin_meta_text(plugin, "name", default=plugin_id)
         version = self._plugin_meta_text(plugin, "version", default="?")
-        desc = self._plugin_meta_text(plugin, "description", default=self.strings("plugin_no_description"))
+        desc = self._plugin_meta_text(
+            plugin, "description", default=self.strings("plugin_no_description")
+        )
         author = self._plugin_meta_text(plugin, "author")
         tools = self._plugin_tool_names(plugin)
         permissions = self._plugin_permissions(plugin)
@@ -1879,15 +1880,23 @@ class OpenAgent(
         if desc:
             text += f"\n{html.escape(desc)}\n"
         if tools:
-            tools_str = ", ".join(f"<code>{html.escape(tool)}</code>" for tool in tools[:8])
+            tools_str = ", ".join(
+                f"<code>{html.escape(tool)}</code>" for tool in tools[:8]
+            )
             if len(tools) > 8:
                 tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
-            text += f"\n{html.escape(self.strings('plugin_tools_label'))}: {tools_str}\n"
+            text += (
+                f"\n{html.escape(self.strings('plugin_tools_label'))}: {tools_str}\n"
+            )
         if permissions:
-            perms_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in permissions)
+            perms_str = ", ".join(
+                f"<code>{html.escape(item)}</code>" for item in permissions
+            )
             text += f"{html.escape(self.strings('plugin_permissions_label'))}: {perms_str}\n"
         if requirements:
-            reqs_str = ", ".join(f"<code>{html.escape(item)}</code>" for item in requirements)
+            reqs_str = ", ".join(
+                f"<code>{html.escape(item)}</code>" for item in requirements
+            )
             text += f"{html.escape(self.strings('plugin_requirements_label'))}: {reqs_str}\n"
         text += "\n"
         text += self.strings("plugin_actions_title")

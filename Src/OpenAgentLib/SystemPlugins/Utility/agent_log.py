@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='utility',
-    name='agent_log',
-    handler='handle',
-    docs={'desc': 'Explain where the agent log is shown.'},
+    tool_class="utility",
+    name="agent_log",
+    handler="handle",
+    docs={"desc": "Explain where the agent log is shown."},
 )
 
 

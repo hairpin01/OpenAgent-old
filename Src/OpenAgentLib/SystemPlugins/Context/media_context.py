@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='context',
-    name='media_context',
-    handler='handle',
-    docs={'desc': 'Read replied media/message context.'},
+    tool_class="context",
+    name="media_context",
+    handler="handle",
+    docs={"desc": "Read replied media/message context."},
 )
 
 

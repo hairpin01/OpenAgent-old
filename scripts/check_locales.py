@@ -7,7 +7,6 @@ from pathlib import Path
 
 import yaml
 
-
 LOCALES = ("en", "ru", "uk")
 
 

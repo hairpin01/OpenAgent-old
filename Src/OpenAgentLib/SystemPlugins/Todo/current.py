@@ -4,10 +4,10 @@ from __future__ import annotations
 from openagent_system_tool_api import SystemTool
 
 SYSTEM_TOOL = SystemTool(
-    tool_class='todo',
-    name='current',
-    handler='handle',
-    docs={'desc': 'Show the current TODO list.'},
+    tool_class="todo",
+    name="current",
+    handler="handle",
+    docs={"desc": "Show the current TODO list."},
 )
 
 

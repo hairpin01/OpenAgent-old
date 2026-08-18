@@ -8,7 +8,6 @@ from .Manager import Session as Session
 from .Manager.OASession import OASession
 from .Manager.Session import (
     _SESSION_PREFERENCES,
-    SessionManager,
     _OpenAgentSessionsMixin,
 )
 from .Plugin.PluginBase import OpenAgentPlugin

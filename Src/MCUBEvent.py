@@ -6,7 +6,7 @@ import asyncio
 
 
 class _MCUBEvent:
-    def __init__(self, outer: "OpenAgent", source_event: Any, text: str) -> None:
+    def __init__(self, outer: Any, source_event: Any, text: str) -> None:
         self._outer = outer
         self._source_event = source_event
         self.text = text
@@ -26,23 +26,17 @@ class _MCUBEvent:
         self.no_add_args_to_input = False
         self._outputs: list[str] = []
 
-    async def edit(
-        self, text: str, *args: Any, **kwargs: Any
-    ) -> "OpenAgent._MCUBEvent":
+    async def edit(self, text: str, *args: Any, **kwargs: Any) -> _MCUBEvent:
         await asyncio.sleep(0)
         self._outputs.append(str(text))
         return self
 
-    async def reply(
-        self, text: str, *args: Any, **kwargs: Any
-    ) -> "OpenAgent._MCUBEvent":
+    async def reply(self, text: str, *args: Any, **kwargs: Any) -> _MCUBEvent:
         await asyncio.sleep(0)
         self._outputs.append(str(text))
         return self
 
-    async def respond(
-        self, text: str, *args: Any, **kwargs: Any
-    ) -> "OpenAgent._MCUBEvent":
+    async def respond(self, text: str, *args: Any, **kwargs: Any) -> _MCUBEvent:
         await asyncio.sleep(0)
         self._outputs.append(str(text))
         return self

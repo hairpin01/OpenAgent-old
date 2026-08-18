@@ -367,7 +367,7 @@ class _OpenAgentResponseMixin:
             finally:
                 self._background_tool_tasks.pop(task_id, None)
 
-        task = asyncio.create_task(runner())
+        task = asyncio.create_task(runner()) # cubkit: ignore[missing-cleanup]
         self._background_tool_tasks[task_id] = task
         return task_id
 

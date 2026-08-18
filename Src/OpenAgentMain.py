@@ -103,6 +103,25 @@ class OpenAgent(
         "xai": "xAI",
         "other": "Other",
     }
+
+    async def on_unload(self) -> None:
+        tasks = set(getattr(self, "_background_tool_tasks", {}).values())
+        tasks.update(getattr(self, "_plugin_unload_tasks", set()))
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        for waiters_name in (
+            "_inline_status_waiters",
+            "_tool_confirmation_waiters",
+        ):
+            for waiter in getattr(self, waiters_name, {}).values():
+                if not waiter.done():
+                    waiter.cancel()
+
+        await super().on_unload()
+
     DEFAULT_MODELS = {
         "openai": "gpt-5.5",
         "google": "gemini-1.5-flash",
@@ -1133,6 +1152,8 @@ class OpenAgent(
                 system_override=self._rich_bot_system_prompt(prompt),
             )
         )
+        task_id = f"bot_oa:{draft_id}"
+        self._background_tool_tasks[task_id] = task
 
         tick = 0
         try:
@@ -1170,6 +1191,12 @@ class OpenAgent(
                     await bot.send_rich_message(target, html=error_html, fallback=True)
                     return
             await event.reply(f"OpenAgent error: {exc}")
+        finally:
+            self._background_tool_tasks.pop(task_id, None)
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     @command(
         "oa",

@@ -993,7 +993,26 @@ class _OpenAgentToolDisplayMixin:
         )
 
     def _tool_status_text(self, tool_name: str, title: str) -> str:
-        return self._tool_display_service().status_text(tool_name, title, self.strings)
+        return self._tool_display_service().status_text(
+            tool_name, title, self._tool_status_string
+        )
+
+    def _tool_status_string(self, key: str, **kwargs: Any) -> str:
+        tool = str(kwargs.get("tool", "tool"))
+        statuses = {
+            "status_thinking": self.strings("status_thinking"),
+            "status_terminal": self.strings("status_terminal"),
+            "status_web": self.strings("status_web"),
+            "status_file": self.strings("status_file"),
+            "status_mcub": self.strings("status_mcub"),
+            "status_message": self.strings("status_message"),
+            "status_chat": self.strings("status_chat"),
+            "status_dialog": self.strings("status_dialog"),
+            "status_code": self.strings("status_code"),
+            "status_todo": self.strings("status_todo"),
+            "status_default": self.strings("status_default", tool=tool),
+        }
+        return statuses[key]
 
     def _progress_bar(self, step: int, total: int, width: int = 10) -> str:
         return self._tool_display_service().progress_bar(step, total, width)
@@ -1029,7 +1048,7 @@ class _OpenAgentToolDisplayMixin:
             model=self._model(),
             activity_text=self._random_placeholder(),
             emoji_getter=self._emoji,
-            strings_getter=self.strings,
+            strings_getter=self._tool_status_string,
         )
 
     def _render_tool_display(

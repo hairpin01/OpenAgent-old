@@ -385,7 +385,7 @@ class _OpenAgentPluginSkillMixin:
                     finally:
                         self._restore_plugin_patches(plugin, plugin_name)
 
-                task = loop.create_task(_run_unload())
+                task = loop.create_task(_run_unload()) # cubkit: ignore[missing-cleanup]
                 unload_tasks = getattr(self, "_plugin_unload_tasks", None)
                 if not isinstance(unload_tasks, set):
                     unload_tasks = set()
@@ -1124,7 +1124,7 @@ class _OpenAgentPluginSkillMixin:
         """Download a plugin from repo and install it."""
         safe_name = self._safe_plugin_name(name)
         raw_url = f"https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/plugins/{safe_name}.py"
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session: # cubkit: ignore[missing-cleanup]
             async with session.get(
                 raw_url, timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:

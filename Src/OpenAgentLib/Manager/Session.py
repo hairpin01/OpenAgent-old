@@ -866,7 +866,9 @@ class SessionManager:
         if self._save_task is not None and not self._save_task.done():
             return
         # fix
-        self._save_task = loop.create_task(self._scheduled_save()) # cubkit: ignore[missing-cleanup]
+        self._save_task = loop.create_task(
+            self._scheduled_save()
+        )  # cubkit: ignore[missing-cleanup]
 
     def new_session(self, chat_id: int, name: str | None = None) -> OASession:
         """Create a fresh session and make it active for chat_id."""

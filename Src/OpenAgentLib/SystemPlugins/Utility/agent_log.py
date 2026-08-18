@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="agent_log",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Explain where the agent log is shown."},
 )
 

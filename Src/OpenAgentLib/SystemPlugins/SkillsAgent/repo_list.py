@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="skills",
     name="repo_list",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "List skills available in the configured skill repository."},
 )
 

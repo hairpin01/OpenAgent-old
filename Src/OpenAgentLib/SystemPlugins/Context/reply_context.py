@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="context",
     name="reply_context",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Read context from the replied message."},
 )
 

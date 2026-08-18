@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="tool_help",
     handler="handle",
+    parallel_safe=True,
     docs={
         "desc": "Show normalized documentation for one core/plugin tool.",
         "args": "tool (str) — exact tool name",

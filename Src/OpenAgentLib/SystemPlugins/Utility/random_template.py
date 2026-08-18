@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="random_template",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Render the current thinking/random template."},
 )
 

@@ -26,6 +26,7 @@ post_build = [
         '{output}',
         '../repo-MCUB-fork/OpenAgent-MCUB-repo.py',
     ],
+    ['bash', 'scripts/release_github.sh', '{output}'],
     ['python', 'scripts/notify_build.py'],
 ]
 [lint]

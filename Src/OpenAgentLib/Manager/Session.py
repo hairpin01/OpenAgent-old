@@ -687,6 +687,8 @@ class SessionManager:
         self._save_generation = 0
         self._saved_generation = 0
         self._save_debounce_seconds = 0.4
+        self._closing = False
+        self._save_in_progress = False
 
     @property
     def _backup_file(self) -> Path:
@@ -834,11 +836,32 @@ class SessionManager:
             self._save_lock = asyncio.Lock()
         try:
             async with self._save_lock:
-                await asyncio.to_thread(
-                    self._save_payload_sync, self._session_payload()
-                )
+                self._save_in_progress = True
+                try:
+                    await asyncio.to_thread(
+                        self._save_payload_sync, self._session_payload()
+                    )
+                finally:
+                    self._save_in_progress = False
         except Exception as exc:
             self.log.warning(f"OpenAgent: failed to save sessions: {exc}")
+
+    async def close(self) -> None:
+        """Flush pending changes and stop the debounced save task."""
+
+        self._closing = True
+        task = self._save_task
+        if task is not None and not task.done():
+            if self._save_in_progress:
+                await task
+            else:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._save_task = None
+        if self._saved_generation < self._save_generation:
+            await self.save()
+            self._saved_generation = self._save_generation
 
     async def _scheduled_save(self) -> None:
         try:
@@ -849,10 +872,12 @@ class SessionManager:
                 self._saved_generation = max(self._saved_generation, generation)
         finally:
             self._save_task = None
-            if self._saved_generation < self._save_generation:
+            if not self._closing and self._saved_generation < self._save_generation:
                 self.schedule_save(mark_dirty=False)
 
     def schedule_save(self, *, mark_dirty: bool = True) -> None:
+        if self._closing:
+            return
         if mark_dirty:
             self._save_generation += 1
         loop: asyncio.AbstractEventLoop | None = None
@@ -865,10 +890,9 @@ class SessionManager:
             return
         if self._save_task is not None and not self._save_task.done():
             return
-        # fix
-        self._save_task = loop.create_task(
+        self._save_task = loop.create_task(  # cubkit: ignore[missing-cleanup]
             self._scheduled_save()
-        )  # cubkit: ignore[missing-cleanup]
+        )
 
     def new_session(self, chat_id: int, name: str | None = None) -> OASession:
         """Create a fresh session and make it active for chat_id."""

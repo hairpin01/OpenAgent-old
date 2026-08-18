@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="context",
     name="media_context",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Read replied media/message context."},
 )
 

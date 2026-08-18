@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="token_usage",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Show token usage from the last provider response."},
 )
 

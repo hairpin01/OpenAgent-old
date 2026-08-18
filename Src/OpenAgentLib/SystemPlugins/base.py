@@ -41,6 +41,7 @@ class SystemTool:
     docs: dict[str, str] = field(default_factory=dict)
     aliases: tuple[str, ...] = ()
     dangerous: bool = False
+    parallel_safe: bool = False
     input_schema: dict[str, Any] = field(default_factory=dict)
     output_schema: dict[str, Any] = field(default_factory=dict)
     api_version: str = "1"
@@ -149,6 +150,8 @@ class SystemToolRegistry:
             entry.setdefault("api_version", tool.api_version)
             if tool.dangerous:
                 entry.setdefault("dangerous", "true")
+            if tool.parallel_safe:
+                entry.setdefault("parallel_safe", "true")
             if tool_name != tool.full_name:
                 entry.setdefault("alias_of", tool.full_name)
             result[tool_name] = entry

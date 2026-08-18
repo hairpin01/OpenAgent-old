@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="skills",
     name="read",
     handler="handle",
+    parallel_safe=True,
     docs={
         "desc": "Read an installed OpenAgent skill.",
         "args": "name",

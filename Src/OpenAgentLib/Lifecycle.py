@@ -7,6 +7,7 @@ from typing import Any
 
 from .Plugin.PluginBase import OpenAgentPlugin
 from .Manager.Session import SessionManager
+from .HttpClient import OpenAgentHttpClient
 
 
 class _OpenAgentLifecycleMixin:
@@ -27,7 +28,12 @@ class _OpenAgentLifecycleMixin:
             "max_tokens": 1200,
             "reasoning_effort": "off",
             "timeout": 180,
-            "provider_reconnect_attempts": 5,
+            "provider_reconnect_attempts": 2,
+            "agent_max_steps": 6,
+            "agent_max_model_calls": 8,
+            "agent_deadline": 180,
+            "context_window_tokens": 16000,
+            "context_reserve_tokens": 2400,
             "terminal_enabled": True,
             "terminal_steps": 3,
             "terminal_timeout": 30,
@@ -50,6 +56,7 @@ class _OpenAgentLifecycleMixin:
             "context_turns": 10,
             "context_compaction_enabled": True,
             "context_compaction_chars": 18000,
+            "context_compaction_tokens": 10000,
             "context_compaction_keep_turns": 2,
             "context_compaction_max_tokens": 900,
             "tool_memory_enabled": False,
@@ -92,6 +99,8 @@ class _OpenAgentLifecycleMixin:
         provider = self._normalize_provider(str(config_dict.get("provider", "openai")))
         config_dict["provider"] = provider if provider in self.PROVIDERS else "openai"
         self._last_request_at = 0.0
+        self._http_client = OpenAgentHttpClient()
+        await self._http_client.start()
         self._skills_dir = self._resolve_skills_dir()
         sessions_path = (
             Path(self._workspace_dir()) / "openagent_sessions" / "sessions.json"

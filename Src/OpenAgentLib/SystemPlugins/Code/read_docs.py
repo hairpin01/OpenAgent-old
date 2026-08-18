@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="code",
     name="read_docs",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Read bundled/remote MCUB API documentation."},
 )
 

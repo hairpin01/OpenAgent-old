@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="context",
     name="tool_output",
     handler="handle",
+    parallel_safe=True,
     aliases=("context.read_tool_output", "tool_output.read"),
     docs={
         "desc": "Read full tool outputs saved by OpenAgent when a tool trace was too large for inline context.",

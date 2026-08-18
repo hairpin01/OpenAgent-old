@@ -14,6 +14,7 @@ import contextlib
 import json
 
 from .Manager.OASession import OASession
+from .AgentRuntime import relevant_tool_names
 from .Plugin.PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
 from .SystemPlugins import (
     SystemTool,
@@ -1129,18 +1130,14 @@ class _OpenAgentRuntimeToolsMixin:
         )
 
     def _active_plugins_prompt(self) -> str:
-        lines = ["\n\n## Activated plugins"]
         plugins = getattr(self, "_plugins", {}) or {}
         if not plugins:
-            lines.append("- none")
-            return "\n".join(lines)
-
-        lines.append(
-            "Plugin docs below are compact. For full docs call utility.plugin_docs; "
-            "for one tool call utility.tool_help."
+            return ""
+        names = ", ".join(sorted(str(name) for name in plugins))
+        return (
+            "\n\nActivated plugins: "
+            f"{names}. Use utility.plugin_docs or utility.tool_help on demand."
         )
-        lines.append(self._format_plugin_docs(max_tools=8))
-        return "\n".join(lines)
 
     def _thinking_system_prompt(self, flash_mode: bool = False) -> str:
         base = (
@@ -1189,54 +1186,50 @@ class _OpenAgentRuntimeToolsMixin:
         if flash_mode:
             return self._flash_system_prompt()
 
-        prompt = str(self.config["system_prompt"]).strip()
-        tlist = ", ".join(sorted(self._get_tool_map().keys()))
+        custom_prompt = str(self.config["system_prompt"]).strip()
+        prompt = ""
+        registry = self._effective_tool_registry()
+        selected_tools = relevant_tool_names(user_prompt, registry)
+        tlist = ", ".join(selected_tools)
+        groups = ", ".join(sorted({name.split(".", 1)[0] for name in registry}))
         todo_snapshot = self._format_todo_placeholder()
         prompt += (
             f"\n\n{self.name} {self.version} is active. Author: {self.author}. You have access to {len(self._effective_tool_registry())} tool operations.\n"
-            "\n## What tools are\n"
-            "Tools are OpenAgent operations that let you do work outside plain text: inspect the workspace, run terminal commands, use MCUB/Telegram actions, manage skills/todos/context, and call plugin features.\n"
-            "Core tools are built into OpenAgent. Plugin tools are created and registered by activated OpenAgent plugins; a plugin can add new tool names, handlers, and documentation.\n"
-            "Always call tools when you need external state, actions, files, Telegram/MCUB operations, or tool/plugin documentation.\n"
             "\n## Tool call format\n"
-            "Output one or more fenced JSON blocks. Each block is ONE tool call:\n"
+            "For external state or actions, output one or more fenced JSON blocks. Each block is one tool call:\n"
             "```tool_call\n"
             '{"tool":"tool.name","args":{"key":"value"},"body":"optional long text"}\n'
             "```\n"
-            "Use `args` for structured parameters. Use `body` for commands, messages, file content, or long text.\n"
-            "\n## Batching — emit multiple blocks in ONE turn to save steps\n"
-            "```tool_call\n"
-            '{"tool":"thinking.note","args":{"note":"Listing files to find the config"}}\n'
-            "```\n"
-            "```tool_call\n"
-            '{"tool":"terminal.run","args":{"cmd":"ls -la"}}\n'
-            "```\n"
-            "RULE: thinking.note body/note MUST be plain text. NEVER put a tool call JSON inside thinking.note.\n"
-            'WRONG: {"tool":"thinking.note","args":{"note":"{\\"tool\\":\\"terminal.run\\",\\"args\\":{\\"cmd\\":\\"ls\\"}}"}}\n'
-            "RIGHT: two separate ```tool_call``` blocks as shown above.\n"
-            "\n## Format rules\n"
-            "- ONLY ```tool_call``` fenced JSON blocks. No XML tags. No plain JSON outside fences.\n"
-            "- When no tool is needed: reply in plain text with no ```tool_call``` blocks at all.\n"
-            f"Available tool names: {tlist}\n"
-            "\n## Tool discovery and docs\n"
-            "- Call utility.list_tools to get the current list of core and plugin tools grouped by category.\n"
-            '- Call utility.tool_help with args {"tool":"tool.name"} to get one tool\'s description, arguments, and body usage.\n'
-            '- Call utility.plugin_docs with optional args {"plugin":"plugin_name"} to inspect activated plugin docs and tools.\n'
-            "- These discovery utilities are tools too: call them with ```tool_call``` blocks instead of guessing.\n"
-            "\n## Guidelines\n"
-            "1. Use only tools from 'Available tool names'. Wrong names fail immediately.\n"
-            "2. mcub.* tools: omit the userbot prefix (body='ping', not '.ping').\n"
-            "3. Unknown domain? Call skills.activate first. To persist knowledge: skills.save_from_ai.\n"
-            "4. Simple greetings/questions: answer in plain text, no tools.\n"
-            "5. thinking.note: use for meaningful progress updates only — findings, risky actions, approach changes.\n"
-            "6. Multi-step tasks: keep todo.* in sync (todo.add → todo.current → todo.close → todo.clear).\n"
-            "7. Don't know how to use a tool? Call utility.tool_help tool=<name> to see its arguments and description.\n"
-            "   Or utility.list_tools to browse all tools by category, utility.plugin_docs for plugin docs.\n"
-            "Never explain tool calls. Output the block(s) and wait for results."
+            "Use args for short structured values and body for long content. Batch independent calls. "
+            "Never nest a tool call inside thinking.note.\n"
+            "Only fenced tool_call JSON is executable; otherwise answer in plain text.\n"
+            f"Tool groups: {groups or 'none'}. Relevant tools: {tlist or 'use utility.list_tools'}.\n"
+            "Use utility.list_tools to discover tools and utility.tool_help for exact arguments. "
+            "Use utility.plugin_docs for plugin APIs. Do not guess tool names.\n"
+            "mcub.* bodies omit the userbot command prefix. Keep todo.* updated for multi-step work. "
+            "Use thinking.note only for meaningful progress. Never explain tool calls."
         )
-        prompt += "\n\nCurrent TODO state:\n" + todo_snapshot
-        prompt += self._load_skills_prompt(user_prompt)
-        prompt += self._repo_context_prompt()
+        if custom_prompt:
+            prompt += "\n\nUser-configured instructions:\n" + custom_prompt
+        if todo_snapshot.strip():
+            prompt += "\n\nCurrent TODO state:\n" + todo_snapshot
+        lowered = str(user_prompt or "").lower()
+        if any(word in lowered for word in ("skill", "навык", "скилл", "knowledge")):
+            prompt += self._load_skills_prompt(user_prompt)
+        if any(
+            word in lowered
+            for word in (
+                "code",
+                "file",
+                "module",
+                "repo",
+                "код",
+                "файл",
+                "модул",
+                "репозитор",
+            )
+        ):
+            prompt += self._repo_context_prompt()
         prompt += self._active_plugins_prompt()
         return prompt
 

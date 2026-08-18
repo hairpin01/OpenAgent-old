@@ -8,6 +8,8 @@ from typing import Any
 
 from core.lib.types import Event
 
+from .AgentRuntime import estimate_messages_tokens, trim_messages_to_budget
+
 
 class OpenAgentContextService:
     """Conversation-history helpers that do not depend on MCUB objects."""
@@ -140,6 +142,10 @@ class OpenAgentContextService:
     @staticmethod
     def history_chars(history: list[dict[str, str]]) -> int:
         return sum(len(str(item.get("content", ""))) for item in history)
+
+    @staticmethod
+    def history_tokens(history: list[dict[str, str]]) -> int:
+        return estimate_messages_tokens(history)
 
     @staticmethod
     def format_history_for_compaction(history: list[dict[str, str]]) -> str:
@@ -452,6 +458,9 @@ class _OpenAgentContextMixin:
     def _history_chars(self, history: list[dict[str, str]]) -> int:
         return self._context_service().history_chars(history)
 
+    def _history_tokens(self, history: list[dict[str, str]]) -> int:
+        return self._context_service().history_tokens(history)
+
     def _format_history_for_compaction(self, history: list[dict[str, str]]) -> str:
         return self._context_service().format_history_for_compaction(history)
 
@@ -471,8 +480,11 @@ class _OpenAgentContextMixin:
 
         _compact_session = self._get_active_session(int(chat_id))
         history = _compact_session.messages
-        threshold = int(self.config.get("context_compaction_chars", 18000) or 18000)
-        if not history or self._history_chars(history) <= threshold:
+        threshold = max(
+            1000,
+            int(self.config.get("context_compaction_tokens", 10000) or 10000),
+        )
+        if not history or self._history_tokens(history) <= threshold:
             return False
 
         keep_turns = max(
@@ -488,10 +500,17 @@ class _OpenAgentContextMixin:
         if not old_history:
             return False
 
-        max_chars = max(threshold * 2, threshold + 4000)
-        compact_input = self._format_history_for_compaction(old_history)
-        if len(compact_input) > max_chars:
-            compact_input = compact_input[-max_chars:]
+        max_tokens = int(self.config.get("context_compaction_max_tokens", 900) or 900)
+        context_window = max(
+            2048, int(self.config.get("context_window_tokens", 16000) or 16000)
+        )
+        reserve = max(256, int(self.config.get("context_reserve_tokens", 2400) or 2400))
+        compact_budget = max(
+            512,
+            min(threshold, context_window - reserve - max_tokens - 512),
+        )
+        compact_history = trim_messages_to_budget(old_history, compact_budget)
+        compact_input = self._format_history_for_compaction(compact_history)
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._compaction_system_prompt()},
@@ -504,7 +523,6 @@ class _OpenAgentContextMixin:
                 ),
             },
         ]
-        max_tokens = int(self.config.get("context_compaction_max_tokens", 900) or 900)
         try:
             if provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other"):
                 summary = await self._ask_openai_compatible(

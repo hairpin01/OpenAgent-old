@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 from pathlib import Path
 import ast
 import sys
@@ -36,6 +36,13 @@ from core.lib.loader.module_config import (
 )
 
 from ..TodoService import _WHITESPACE_RE
+from ..AgentRuntime import (
+    ModelCallBudget,
+    is_transient_provider_error,
+    retry_delay,
+    should_request_thinking,
+    trim_messages_to_budget,
+)
 from ..SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
 from .PluginBase import AgentHookContext, OpenAgentPlugin, PluginHookResult
 
@@ -957,13 +964,13 @@ class _OpenAgentPluginSkillMixin:
         """Fetch list of available plugins from GitHub repo."""
         url = "https://api.github.com/repos/hairpin01/repo-MCUB-fork/contents/OpenAgent/plugins"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    if resp.status != 200:
-                        return []
-                    files = await resp.json()
+            session = await self._http_client.session()
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                files = await resp.json()
         except Exception:
             return []
 
@@ -993,13 +1000,13 @@ class _OpenAgentPluginSkillMixin:
             "requirements": [],
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    raw_url, timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    if resp.status != 200:
-                        return meta
-                    code = await resp.text()
+            session = await self._http_client.session()
+            async with session.get(
+                raw_url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    return meta
+                code = await resp.text()
         except Exception:
             return meta
 
@@ -1126,13 +1133,13 @@ class _OpenAgentPluginSkillMixin:
         """Download a plugin from repo and install it."""
         safe_name = self._safe_plugin_name(name)
         raw_url = f"https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/plugins/{safe_name}.py"
-        async with aiohttp.ClientSession() as session:  # cubkit: ignore[missing-cleanup]
-            async with session.get(
-                raw_url, timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                if resp.status != 200:
-                    raise ValueError(f"Plugin {safe_name} not found in repo")
-                code = await resp.text()
+        session = await self._http_client.session()
+        async with session.get(
+            raw_url, timeout=aiohttp.ClientTimeout(total=15)
+        ) as resp:
+            if resp.status != 200:
+                raise ValueError(f"Plugin {safe_name} not found in repo")
+            code = await resp.text()
 
         plugins_dir = self._resolve_plugins_dir()
         fpath = plugins_dir / f"{safe_name}.py"
@@ -1525,12 +1532,17 @@ class _OpenAgentPluginSkillMixin:
     async def _fetch_text_url(self, url: str, *, max_chars: int = 120000) -> str:
         timeout = aiohttp.ClientTimeout(total=int(self.config["timeout"]))
         headers = {"User-Agent": "OpenAgent/skills"}
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url, allow_redirects=True) as resp:
-                text = await resp.text(errors="replace")
-                if resp.status >= 400:
-                    raise RuntimeError(f"HTTP {resp.status}: {text[:500]}")
-                return text[:max_chars]
+        session = await self._http_client.session()
+        async with session.get(
+            url,
+            allow_redirects=True,
+            timeout=timeout,
+            headers=headers,
+        ) as resp:
+            text = await resp.text(errors="replace")
+            if resp.status >= 400:
+                raise RuntimeError(f"HTTP {resp.status}: {text[:500]}")
+            return text[:max_chars]
 
     async def _fetch_skill_repo_index(self) -> list[dict[str, Any]]:
         base_url = self._skill_repo_base_url()
@@ -1617,12 +1629,12 @@ class _OpenAgentTelegramMediaMixin:
 
     async def _fetch_mcub_docs(self) -> str:
         timeout = aiohttp.ClientTimeout(total=int(self.config["timeout"]))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(self.MCUB_DOCS_URL) as resp:
-                text = await resp.text()
-                if resp.status >= 400:
-                    raise RuntimeError(f"Docs HTTP {resp.status}: {text[:500]}")
-                return text[:60000]
+        session = await self._http_client.session()
+        async with session.get(self.MCUB_DOCS_URL, timeout=timeout) as resp:
+            text = await resp.text()
+            if resp.status >= 400:
+                raise RuntimeError(f"Docs HTTP {resp.status}: {text[:500]}")
+            return text[:60000]
 
     def _format_entity_profile(self, entity: Any) -> str:
         username = f"@{entity.username}" if getattr(entity, "username", None) else ""
@@ -1988,15 +2000,13 @@ class _OpenAgentTelegramMediaMixin:
 
     async def _fetch_url_bytes(self, url: str) -> tuple[bytes, str] | None:
         timeout = aiohttp.ClientTimeout(total=int(self.config["timeout"]))
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status >= 400:
-                    return None
-                data = await resp.read()
-                content_type = resp.headers.get("Content-Type", "image/jpeg").split(
-                    ";"
-                )[0]
-                return data, content_type
+        session = await self._http_client.session()
+        async with session.get(url, timeout=timeout) as resp:
+            if resp.status >= 400:
+                return None
+            data = await resp.read()
+            content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0]
+            return data, content_type
 
     async def _set_channel_avatar(
         self,
@@ -2494,12 +2504,9 @@ class _OpenAgentAgentLoopMixin:
     """Agent loop, tool-call parsing and provider HTTP calls."""
 
     def _is_provider_timeout_error(self, exc: BaseException) -> bool:
-        text = str(exc).lower()
-        return (
-            isinstance(exc, (TimeoutError, asyncio.TimeoutError))
-            or "timed out" in text
-            or "timeout" in text
-        )
+        """Backward-compatible alias for transient provider classification."""
+
+        return is_transient_provider_error(exc)
 
     async def _ask_provider_once(
         self,
@@ -2508,6 +2515,7 @@ class _OpenAgentAgentLoopMixin:
         api_key: str,
         *,
         max_tokens_override: int | None = None,
+        before_attempt: Callable[[], None] | None = None,
     ) -> str:
         if provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other"):
             return await self._ask_openai_compatible(
@@ -2515,12 +2523,14 @@ class _OpenAgentAgentLoopMixin:
                 messages,
                 api_key,
                 max_tokens_override=max_tokens_override,
+                before_attempt=before_attempt,
             )
         if provider == "google":
             return await self._ask_google(
                 messages,
                 api_key,
                 max_tokens_override=max_tokens_override,
+                before_attempt=before_attempt,
             )
         raise RuntimeError(
             self.strings("bad_provider", providers=", ".join(self.PROVIDERS))
@@ -2537,6 +2547,7 @@ class _OpenAgentAgentLoopMixin:
         started_at: float | None = None,
         thinking_notes: list[str] | None = None,
         max_tokens_override: int | None = None,
+        before_attempt: Callable[[], None] | None = None,
     ) -> str:
         max_reconnects = max(
             0, min(int(self.config.get("provider_reconnect_attempts", 5) or 0), 5)
@@ -2549,6 +2560,7 @@ class _OpenAgentAgentLoopMixin:
                     messages,
                     api_key,
                     max_tokens_override=max_tokens_override,
+                    before_attempt=before_attempt,
                 )
             except Exception as exc:
                 if (
@@ -2573,7 +2585,78 @@ class _OpenAgentAgentLoopMixin:
                             ),
                             thinking_notes=thinking_notes,
                         )
-                await asyncio.sleep(1)
+                await asyncio.sleep(retry_delay(attempt))
+
+    def _tool_parallel_safe(self, tool_name: str) -> bool:
+        """Return whether a tool explicitly opts into concurrent dispatch."""
+
+        normalized = str(tool_name or "").strip().lower()
+        tool = self._get_system_tool(normalized)
+        if isinstance(tool, SystemTool):
+            return bool(tool.parallel_safe) and not tool.dangerous
+        plugin = self._get_plugin_for_tool(normalized)
+        safe_names = getattr(plugin, "parallel_safe_tools", ()) if plugin else ()
+        return normalized in {
+            str(name).strip().lower() for name in safe_names if str(name).strip()
+        }
+
+    async def _dispatch_agent_tool_batch(
+        self,
+        tool_calls: list[tuple[str, str, str]],
+        *,
+        source_event: Any,
+        status_event: Any,
+        agent_log: list[str],
+        started_at: float | None,
+        thinking_notes: list[str],
+        cancel_token: str | None,
+    ) -> list[str]:
+        """Dispatch an explicitly safe batch concurrently, preserving result order."""
+
+        async def run_one(
+            call: tuple[str, str, str],
+            local_log: list[str],
+            *,
+            concurrent: bool = False,
+        ) -> str:
+            tool_name, attrs_raw, body = call
+            if cancel_token and cancel_token in self._cancelled_generations:
+                raise RuntimeError("Generation cancelled")
+            return await self._dispatch_tool(
+                tool_name,
+                attrs_raw,
+                body,
+                source_event,
+                None if concurrent else status_event,
+                local_log,
+                started_at=started_at,
+                thinking_notes=thinking_notes,
+            )
+
+        use_parallel = len(tool_calls) > 1 and all(
+            self._tool_parallel_safe(name) for name, _attrs, _body in tool_calls
+        )
+        if not use_parallel:
+            return [await run_one(call, agent_log) for call in tool_calls]
+
+        local_logs = [[] for _call in tool_calls]
+        tasks = [
+            asyncio.create_task(  # cubkit: ignore[missing-cleanup]
+                run_one(call, local_logs[index], concurrent=True)
+            )
+            for index, call in enumerate(tool_calls)
+        ]
+        try:
+            outputs = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        for local_log in local_logs:
+            agent_log.extend(local_log)
+        return list(outputs)
 
     async def _ask_agent(
         self,
@@ -2662,6 +2745,44 @@ class _OpenAgentAgentLoopMixin:
         status_event = agent_context.status_event
         system_override = agent_context.system_override
         flash_mode = bool(agent_context.flash_mode)
+        model_call_limit = max(1, int(self.config.get("agent_max_model_calls", 8) or 8))
+        deadline_seconds = max(1, int(self.config.get("agent_deadline", 180) or 180))
+        deadline_at = time.monotonic() + deadline_seconds
+        call_budget = ModelCallBudget(model_call_limit)
+
+        async def ask_provider(
+            call_messages: list[dict[str, Any]],
+            *,
+            max_tokens_override: int | None = None,
+        ) -> str:
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"Agent deadline exceeded after {deadline_seconds}s")
+            context_window = max(
+                2048, int(self.config.get("context_window_tokens", 16000) or 16000)
+            )
+            reserve = max(
+                256, int(self.config.get("context_reserve_tokens", 2400) or 2400)
+            )
+            budgeted_messages = trim_messages_to_budget(
+                call_messages,
+                max(512, context_window - reserve),
+            )
+            return await asyncio.wait_for(
+                self._ask_provider_with_reconnect(
+                    provider,
+                    budgeted_messages,
+                    api_key,
+                    status_event=status_event,
+                    agent_log=agent_log,
+                    started_at=started_at,
+                    thinking_notes=thinking_notes,
+                    max_tokens_override=max_tokens_override,
+                    before_attempt=call_budget.reserve,
+                ),
+                timeout=remaining,
+            )
+
         if provider == "google":
             user_content = self._build_google_content(prompt, attachments)
         else:
@@ -2691,9 +2812,29 @@ class _OpenAgentAgentLoopMixin:
 
         if compacted_context:
             agent_log.append("context.compact")
-        max_steps = (
-            self.AGENT_MAX_STEPS
-        )  # Architectural limit for tool chaining in 0.5.0
+        thinking_enabled = (
+            should_request_thinking(
+                prompt,
+                self._reasoning_effort(),
+                flash_mode=flash_mode,
+            )
+            and model_call_limit >= 2
+        )
+        configured_steps = max(1, int(self.config.get("agent_max_steps", 6) or 6))
+        tool_round_budget = call_budget.tool_rounds(
+            thinking_enabled=thinking_enabled,
+            configured_steps=configured_steps,
+            final_attempts=(
+                2
+                if provider
+                in ("openai", "openrouter", "groq", "deepseek", "xai", "other")
+                else 1
+            ),
+        )
+        max_steps = min(
+            self.AGENT_MAX_STEPS,
+            tool_round_budget,
+        )
         invalid_tool_retries = 0
         answer = ""
 
@@ -2724,15 +2865,7 @@ class _OpenAgentAgentLoopMixin:
             return await finish_agent(raw_answer)
         messages = agent_context.messages or messages
         think_messages = agent_context.thinking_messages or think_messages
-        think_answer = await self._ask_provider_with_reconnect(
-            provider,
-            think_messages,
-            api_key,
-            status_event=status_event,
-            agent_log=agent_log,
-            started_at=started_at,
-            thinking_notes=thinking_notes,
-        )
+        think_answer = await ask_provider(think_messages) if thinking_enabled else ""
 
         think_calls = [
             call
@@ -2783,15 +2916,7 @@ class _OpenAgentAgentLoopMixin:
         if flash_mode:
             if cancel_token and cancel_token in self._cancelled_generations:
                 raise RuntimeError("Generation cancelled")
-            answer = await self._ask_provider_with_reconnect(
-                provider,
-                messages,
-                api_key,
-                status_event=status_event,
-                agent_log=agent_log,
-                started_at=started_at,
-                thinking_notes=thinking_notes,
-            )
+            answer = await ask_provider(messages)
             return await finish_agent(answer or "")
 
         for _ in range(max_steps):
@@ -2802,15 +2927,7 @@ class _OpenAgentAgentLoopMixin:
                 messages.append(runtime_comment)
                 agent_log.append("user.comment")
 
-            answer = await self._ask_provider_with_reconnect(
-                provider,
-                messages,
-                api_key,
-                status_event=status_event,
-                agent_log=agent_log,
-                started_at=started_at,
-                thinking_notes=thinking_notes,
-            )
+            answer = await ask_provider(messages)
 
             tool_calls = self._extract_tool_calls(answer or "")
             if not tool_calls:
@@ -2841,20 +2958,19 @@ class _OpenAgentAgentLoopMixin:
                 break
             invalid_tool_retries = 0
 
+            raw_outputs = await self._dispatch_agent_tool_batch(
+                tool_calls,
+                source_event=source_event,
+                status_event=status_event,
+                agent_log=agent_log,
+                started_at=started_at,
+                thinking_notes=thinking_notes,
+                cancel_token=cancel_token,
+            )
             outputs: list[str] = []
-            for tool_name, attrs_raw, body in tool_calls:
-                if cancel_token and cancel_token in self._cancelled_generations:
-                    raise RuntimeError("Generation cancelled")
-                output = await self._dispatch_tool(
-                    tool_name,
-                    attrs_raw,
-                    body,
-                    source_event,
-                    status_event,
-                    agent_log,
-                    started_at=started_at,
-                    thinking_notes=thinking_notes,
-                )
+            for (tool_name, attrs_raw, body), output in zip(
+                tool_calls, raw_outputs, strict=True
+            ):
                 self._remember_tool_output(chat_id, tool_name, output)
                 outputs.append(
                     self._format_tool_call_for_context(
@@ -2893,15 +3009,12 @@ class _OpenAgentAgentLoopMixin:
                 ),
             }
         )
-        answer = await self._ask_provider_with_reconnect(
-            provider,
-            messages,
-            api_key,
-            status_event=status_event,
-            agent_log=agent_log,
-            started_at=started_at,
-            thinking_notes=thinking_notes,
-        )
+        try:
+            answer = await ask_provider(messages)
+        except RuntimeError as exc:
+            if "model-call budget exhausted" not in str(exc):
+                raise
+            return await finish_agent(self.strings("tools_no_final"))
         clean = (answer or "").strip()
         if (
             not clean
@@ -2919,17 +3032,12 @@ class _OpenAgentAgentLoopMixin:
                         ),
                     }
                 )
-                answer = await self._ask_provider_with_reconnect(
-                    provider,
-                    messages,
-                    api_key,
-                    status_event=status_event,
-                    agent_log=agent_log,
-                    started_at=started_at,
-                    thinking_notes=thinking_notes,
-                    max_tokens_override=max(4096, max_tokens * 2),
-                )
-                clean = (answer or "").strip()
+                if call_budget.remaining:
+                    answer = await ask_provider(
+                        messages,
+                        max_tokens_override=max(4096, max_tokens * 2),
+                    )
+                    clean = (answer or "").strip()
         if clean:
             return await finish_agent(clean)
         return await finish_agent(self.strings("tools_no_final"))
@@ -3279,6 +3387,7 @@ class _OpenAgentAgentLoopMixin:
         api_key: str,
         *,
         max_tokens_override: int | None = None,
+        before_attempt: Callable[[], None] | None = None,
     ) -> str:
         base_url = self._base_url(provider)
         if not base_url:
@@ -3302,30 +3411,36 @@ class _OpenAgentAgentLoopMixin:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+
+        async def post_payload() -> dict[str, Any]:
+            if before_attempt is not None:
+                before_attempt()
+            return await self._post_json(url, payload, headers=headers)
+
         try:
-            data = await self._post_json(url, payload, headers=headers)
+            data = await post_payload()
         except RuntimeError as exc:
             error_text = str(exc).lower()
             if "max_completion_tokens" in error_text and "unsupported" in error_text:
                 value = payload.pop("max_completion_tokens", None)
                 if value is not None:
                     payload["max_tokens"] = value
-                    data = await self._post_json(url, payload, headers=headers)
+                    data = await post_payload()
                 else:
                     raise
             elif "max_tokens" in error_text and "unsupported" in error_text:
                 value = payload.pop("max_tokens", None)
                 if value is not None:
                     payload["max_completion_tokens"] = value
-                    data = await self._post_json(url, payload, headers=headers)
+                    data = await post_payload()
                 else:
                     raise
             elif "temperature" in error_text and "unsupported" in error_text:
                 payload.pop("temperature", None)
-                data = await self._post_json(url, payload, headers=headers)
+                data = await post_payload()
             elif "reasoning_effort" in error_text or "reasoning effort" in error_text:
                 payload.pop("reasoning_effort", None)
-                data = await self._post_json(url, payload, headers=headers)
+                data = await post_payload()
             else:
                 raise
         try:
@@ -3340,6 +3455,7 @@ class _OpenAgentAgentLoopMixin:
         api_key: str,
         *,
         max_tokens_override: int | None = None,
+        before_attempt: Callable[[], None] | None = None,
     ) -> str:
         model = self._model("google")
         url = f"{self._base_url('google')}/models/{model}:generateContent?key={api_key}"
@@ -3365,6 +3481,8 @@ class _OpenAgentAgentLoopMixin:
         }
         if system_text:
             payload["systemInstruction"] = {"parts": [{"text": system_text}]}
+        if before_attempt is not None:
+            before_attempt()
         data = await self._post_json(url, payload)
         try:
             self._set_token_usage(data.get("usageMetadata"), "google")
@@ -3380,25 +3498,12 @@ class _OpenAgentAgentLoopMixin:
         *,
         headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        timeout_seconds = int(self.config["timeout"])
-        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-        try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload, headers=headers) as resp:
-                    text = await resp.text()
-                    if resp.status >= 400:
-                        raise RuntimeError(f"HTTP {resp.status}: {text[:800]}")
-                    try:
-                        return await resp.json()
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"Invalid JSON response: {text[:800]}"
-                        ) from exc
-        except TimeoutError as exc:
-            raise RuntimeError(
-                f"Provider request timed out after {timeout_seconds}s. "
-                "Increase OpenAgent timeout or use a faster model for this task."
-            ) from exc
+        return await self._http_client.post_json(
+            url,
+            payload,
+            timeout_seconds=int(self.config["timeout"]),
+            headers=headers,
+        )
 
 
 __all__ = [

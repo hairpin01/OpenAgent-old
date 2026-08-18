@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="plugin_docs",
     handler="handle",
+    parallel_safe=True,
     docs={
         "desc": "Show activated plugin documentation and each plugin's tools.",
         "args": "plugin/name (str, optional) — plugin to inspect",

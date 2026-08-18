@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="list_tools",
     handler="handle",
+    parallel_safe=True,
     docs={
         "desc": "List all available core and plugin tools by category with short descriptions."
     },

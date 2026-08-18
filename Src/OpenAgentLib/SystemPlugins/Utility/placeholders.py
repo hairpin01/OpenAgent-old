@@ -7,6 +7,7 @@ SYSTEM_TOOL = SystemTool(
     tool_class="utility",
     name="placeholders",
     handler="handle",
+    parallel_safe=True,
     docs={"desc": "Show available OpenAgent template placeholders."},
 )
 

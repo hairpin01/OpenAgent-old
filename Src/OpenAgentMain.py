@@ -120,6 +120,13 @@ class OpenAgent(
                 if not waiter.done():
                     waiter.cancel()
 
+        session_manager = getattr(self, "session_manager", None)
+        if session_manager is not None:
+            await session_manager.close()
+        http_client = getattr(self, "_http_client", None)
+        if http_client is not None:
+            await http_client.close()
+
         await super().on_unload()
 
     DEFAULT_MODELS = {
@@ -295,9 +302,39 @@ class OpenAgent(
                 ),
                 ConfigValue(
                     "provider_reconnect_attempts",
-                    5,
-                    description="Maximum reconnect attempts after provider API timeout",
+                    2,
+                    description="Maximum retries for transient provider failures",
                     validator=Integer(min=0, max=5),
+                ),
+                ConfigValue(
+                    "agent_max_steps",
+                    6,
+                    description="Maximum tool-call rounds per request",
+                    validator=Integer(min=1, max=15),
+                ),
+                ConfigValue(
+                    "agent_max_model_calls",
+                    8,
+                    description="Maximum provider attempts in the main agent loop, including retries",
+                    validator=Integer(min=1, max=20),
+                ),
+                ConfigValue(
+                    "agent_deadline",
+                    180,
+                    description="Overall agent request deadline in seconds",
+                    validator=Integer(min=15, max=900),
+                ),
+                ConfigValue(
+                    "context_window_tokens",
+                    16000,
+                    description="Estimated provider context-window budget",
+                    validator=Integer(min=2048, max=1000000),
+                ),
+                ConfigValue(
+                    "context_reserve_tokens",
+                    2400,
+                    description="Tokens reserved for output and tool follow-ups",
+                    validator=Integer(min=256, max=65536),
                 ),
             ],
             description="AI provider, credentials, model and request limits",
@@ -444,8 +481,14 @@ class OpenAgent(
                 ConfigValue(
                     "context_compaction_chars",
                     18000,
-                    description="Compact remembered chat context after this many characters",
+                    description="Legacy character threshold used by older configurations",
                     validator=Integer(min=2000, max=200000),
+                ),
+                ConfigValue(
+                    "context_compaction_tokens",
+                    10000,
+                    description="Compact remembered chat context after this estimated token count",
+                    validator=Integer(min=1000, max=500000),
                 ),
                 ConfigValue(
                     "context_compaction_keep_turns",

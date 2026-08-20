@@ -114,12 +114,42 @@ def _system_declarations(root: Path) -> tuple[dict[str, Any], ...]:
 def _plugin_declarations(root: Path) -> tuple[dict[str, Any], ...]:
     declarations: list[dict[str, Any]] = []
     for path in sorted(root.glob("*.py")):
-        if path.name == "__init__.py":
+        if path.name == "__init__.py" or path.stem.startswith("_"):
             continue
         tree = parse(path.read_text(encoding="utf-8"), filename=str(path))
         classes = [node for node in tree.body if isinstance(node, ClassDef)]
         if len(classes) != 1:
-            raise CompatibilityInventoryError(f"expected one plugin class in {path}")
+            # v2 plugins expose a pure manifest rather than an executable
+            # legacy class.  Resolve its frozen inventory by module name only;
+            # importing it would violate the compatibility parser boundary.
+            has_v2_manifest = any(
+                isinstance(node, Assign)
+                and isinstance(node.value, Call)
+                and isinstance(node.value.func, Name)
+                and node.value.func.id == "build_plugin"
+                for node in tree.body
+            )
+            if not has_v2_manifest:
+                raise CompatibilityInventoryError(f"expected one plugin class in {path}")
+            entries = tuple(entry for entry in TOOL_COMPATIBILITY_MATRIX if entry.source_module == path.stem)
+            if not entries:
+                raise CompatibilityInventoryError(f"v2 plugin {path} has no frozen compatibility entries")
+            tool_map = {
+                name: entry.canonical_id
+                for entry in entries
+                for name in (entry.canonical_id, *entry.aliases)
+            }
+            declarations.append({
+                "canonical_ids": tuple(entry.canonical_id for entry in entries),
+                "tool_map": tool_map,
+                "docs": {},
+                "dangerous": frozenset(
+                    entry.canonical_id for entry in entries if entry.confirmation_class == "required"
+                ),
+                "source_module": path.stem,
+                "v2_manifest": True,
+            })
+            continue
         body = classes[0].body
         registry = _literal_assignment(body, "tool_registry", ())
         if not registry:
@@ -280,6 +310,12 @@ def discover_compatibility_matrix(
             )
         )
     for declaration in _plugin_declarations(sibling_plugins_root):
+        if declaration.get("v2_manifest"):
+            entries.extend(
+                entry for entry in TOOL_COMPATIBILITY_MATRIX
+                if entry.source_module == declaration["source_module"]
+            )
+            continue
         aliases = _plugin_aliases(declaration["canonical_ids"], declaration["tool_map"])
         for canonical_id in declaration["canonical_ids"]:
             entries.append(

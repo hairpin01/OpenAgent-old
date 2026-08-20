@@ -163,7 +163,13 @@ class PluginManifest:
         if any(not isinstance(tool, PluginToolDeclaration) for tool in self.tools):
             raise PluginManifestError("tools must contain PluginToolDeclaration values only")
         capabilities = frozenset(str(item).strip().lower() for item in self.capabilities)
-        known = frozenset(item.value for item in CapabilityFamily)
+        # Policy capability classes are declarations, not callable capability
+        # families.  A sandbox Telegram handler therefore still can only issue
+        # a CapabilityFamily.TELEGRAM request.
+        known = frozenset(item.value for item in CapabilityFamily) | frozenset({
+            "telegram-read", "telegram-write", "telegram-admin",
+            "filesystem-read", "filesystem-write",
+        })
         if not capabilities or not capabilities.issubset(known):
             raise PluginManifestError("manifest declares an unknown capability")
         tool_ids = [tool.canonical_id for tool in self.tools]

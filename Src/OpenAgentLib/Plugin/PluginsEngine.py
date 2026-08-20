@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Callable
 from pathlib import Path
 import ast
@@ -50,8 +51,12 @@ from ..AgentRuntime import (
 from ..SystemPlugins import SystemTool, SystemToolRegistry
 from ..PluginDiscovery import inspect_v2_plugin_source
 from ..PluginSDK import LegacyPluginMigrationError
-from ..ToolKernel import ToolContext
-from ..ToolPolicy import ConfirmationState, ToolPolicyRequest
+from ..ToolKernel import ToolCall, ToolContext
+from ..ToolPolicy import (
+    ConfirmationState,
+    ToolConfirmationGrant,
+    ToolPolicyRequest,
+)
 from .PluginBase import AgentHookContext, OpenAgentPlugin, PluginHookResult
 
 
@@ -354,7 +359,7 @@ class _OpenAgentPluginSkillMixin:
             maybe_result = on_unload()
             if inspect.isawaitable(maybe_result):
                 try:
-                    loop = asyncio.get_running_loop()
+                    asyncio.get_running_loop()
                 except RuntimeError:
                     with contextlib.suppress(Exception):
                         maybe_result.close()
@@ -371,9 +376,7 @@ class _OpenAgentPluginSkillMixin:
                     finally:
                         self._restore_plugin_patches(plugin, plugin_name)
 
-                task = loop.create_task(
-                    _run_unload()
-                )  # cubkit: ignore[missing-cleanup]
+                task = self._create_plugin_unload_task(_run_unload())
                 unload_tasks = getattr(self, "_plugin_unload_tasks", None)
                 if not isinstance(unload_tasks, set):
                     unload_tasks = set()
@@ -406,6 +409,23 @@ class _OpenAgentPluginSkillMixin:
                 plugin_name,
                 exc,
             )
+
+    async def _cancel_plugin_unload_tasks(self) -> None:
+        """Cancel and reap asynchronous plugin unload callbacks exactly once."""
+
+        tasks = tuple(self._plugin_unload_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._plugin_unload_tasks.difference_update(tasks)
+
+    async def on_unload(self) -> None:
+        """Ensure deferred plugin teardown cannot outlive this module."""
+
+        await self._cancel_plugin_unload_tasks()
+        await super().on_unload()
 
     def _get_plugin_for_tool(self, tool_name: str) -> OpenAgentPlugin | None:
         """Find which plugin handles a given tool name."""
@@ -2557,66 +2577,68 @@ class _OpenAgentAgentLoopMixin:
                         )
                 await asyncio.sleep(retry_delay(attempt))
 
-    def _tool_parallel_safe(self, tool_name: str) -> bool:
-        """Return whether a tool explicitly opts into concurrent dispatch."""
+    async def _v2_policy_request(
+        self,
+        call: ToolCall,
+        *,
+        status_event: Any | None,
+        started_at: float | None,
+    ) -> ToolPolicyRequest:
+        """Build one policy request and a one-time approval for its exact call."""
 
-        normalized = str(tool_name or "").strip().lower()
-        tool = self._get_system_tool(normalized)
-        if isinstance(tool, SystemTool):
-            return bool(tool.parallel_safe) and not tool.dangerous
-        plugin = self._get_plugin_for_tool(normalized)
-        safe_names = getattr(plugin, "parallel_safe_tools", ()) if plugin else ()
-        return normalized in {
-            str(name).strip().lower() for name in safe_names if str(name).strip()
-        }
+        confirmation = ConfirmationState.MISSING
+        grant = None
+        if call.spec.confirmation.value == "required":
+            if status_event is not None:
+                approved = await self._confirm_dangerous_tool(
+                    status_event,
+                    call.canonical_id,
+                    json.dumps(dict(call.arguments), ensure_ascii=True, sort_keys=True),
+                    elapsed=(time.monotonic() - started_at) if started_at else None,
+                )
+                confirmation = (
+                    ConfirmationState.APPROVED
+                    if approved
+                    else ConfirmationState.REJECTED
+                )
+                if approved:
+                    grant = ToolConfirmationGrant.for_call(uuid.uuid4().hex, call)
+        else:
+            confirmation = ConfirmationState.APPROVED
+        runtime = self._v2_runtime
+        return ToolPolicyRequest(
+            enabled_tool_ids=frozenset(
+                item.canonical_id for item in runtime.registry.specs()
+            ),
+            granted_capabilities=call.spec.capabilities,
+            confirmation=confirmation,
+            confirmation_grant=grant,
+            remaining_calls=1,
+        )
 
-    async def _execute_v2_compatibility_call(
-        self, tool_name: str, attrs_raw: str, body: str
-    ) -> str:
-        """Normalize legacy model syntax at the boundary, never dispatch it."""
+    @staticmethod
+    def _v2_json_value(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): _OpenAgentAgentLoopMixin._v2_json_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple):
+            return [_OpenAgentAgentLoopMixin._v2_json_value(item) for item in value]
+        return value
 
-        runtime = getattr(self, "_v2_runtime", None)
-        if runtime is None:
-            raise LegacyPluginMigrationError("v2 tool runtime is not initialized")
-        attrs = self._parse_xml_attrs(attrs_raw)
-        attrs.pop("reason", None)
-        try:
-            spec = runtime.registry.resolve(tool_name)
-            arguments: dict[str, Any] = dict(attrs)
-            required = tuple(spec.input_schema.get("required", ()))
-            if body.strip() and len(required) == 1 and required[0] not in arguments:
-                arguments[required[0]] = body.strip()
-            call = runtime.registry.create_call(
-                call_id=uuid.uuid4().hex,
-                requested_name=tool_name,
-                arguments=arguments,
-                context=ToolContext(uuid.uuid4().hex),
-            )
-            request = ToolPolicyRequest(
-                enabled_tool_ids=frozenset(
-                    item.canonical_id for item in runtime.registry.specs()
-                ),
-                granted_capabilities=call.spec.capabilities,
-                confirmation=ConfirmationState.MISSING,
-                remaining_calls=1,
-            )
-            result, _trace = await runtime.executor.execute(call, request)
-            return json.dumps(
-                {
-                    "call_id": result.call_id,
-                    "status": result.status.value,
-                    "output": result.output,
-                    "error": result.error.code.value if result.error else None,
-                },
-                ensure_ascii=True,
-                sort_keys=True,
-            )
-        except Exception as exc:
-            return json.dumps(
-                {"status": "error", "error": type(exc).__name__},
-                ensure_ascii=True,
-                sort_keys=True,
-            )
+    @staticmethod
+    def _v2_result_text(result: Any) -> str:
+        return json.dumps(
+            {
+                "call_id": result.call_id,
+                "status": result.status.value,
+                "output": _OpenAgentAgentLoopMixin._v2_json_value(result.output),
+                "error": result.error.code.value if result.error else None,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
 
     async def _dispatch_agent_tool_batch(
         self,
@@ -2629,43 +2651,68 @@ class _OpenAgentAgentLoopMixin:
         thinking_notes: list[str],
         cancel_token: str | None,
     ) -> list[str]:
-        """Dispatch an explicitly safe batch concurrently, preserving result order."""
+        """Normalize legacy syntax once, then let the executor own scheduling."""
 
-        async def run_one(
-            call: tuple[str, str, str],
-            local_log: list[str],
-            *,
-            concurrent: bool = False,
-        ) -> str:
-            tool_name, attrs_raw, body = call
-            if cancel_token and cancel_token in self._cancelled_generations:
-                raise RuntimeError("Generation cancelled")
-            return await self._execute_v2_compatibility_call(tool_name, attrs_raw, body)
-
-        use_parallel = len(tool_calls) > 1 and all(
-            self._tool_parallel_safe(name) for name, _attrs, _body in tool_calls
+        if cancel_token and cancel_token in self._cancelled_generations:
+            raise RuntimeError("Generation cancelled")
+        runtime = self._v2_runtime
+        context = ToolContext(
+            correlation_id=cancel_token or uuid.uuid4().hex,
+            actor_id=str(source_event.sender_id) if source_event is not None else None,
+            metadata={
+                "chat_id": (
+                    self._event_chat_id(source_event)
+                    if source_event is not None
+                    else None
+                )
+            },
         )
-        if not use_parallel:
-            return [await run_one(call, agent_log) for call in tool_calls]
+        calls: list[ToolCall] = []
+        errors: dict[int, str] = {}
+        for index, (tool_name, attrs_raw, body) in enumerate(tool_calls):
+            try:
+                attrs = self._parse_xml_attrs(attrs_raw)
+                attrs.pop("reason", None)
+                spec = runtime.registry.resolve(tool_name)
+                arguments: dict[str, Any] = dict(attrs)
+                required = tuple(spec.input_schema.get("required", ()))
+                if body.strip() and len(required) == 1 and required[0] not in arguments:
+                    arguments[required[0]] = body.strip()
+                calls.append(
+                    runtime.registry.create_call(
+                        call_id=uuid.uuid4().hex,
+                        requested_name=tool_name,
+                        arguments=arguments,
+                        context=context,
+                    )
+                )
+            except Exception as exc:
+                errors[index] = json.dumps(
+                    {"status": "error", "error": type(exc).__name__},
+                    ensure_ascii=True,
+                    sort_keys=True,
+                )
 
-        local_logs = [[] for _call in tool_calls]
-        tasks = [
-            asyncio.create_task(  # cubkit: ignore[missing-cleanup]
-                run_one(call, local_logs[index], concurrent=True)
-            )
-            for index, call in enumerate(tool_calls)
-        ]
+        previous_source_event = self._v2_source_event
+        self._v2_source_event = source_event
         try:
-            outputs = await asyncio.gather(*tasks)
-        except BaseException:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-        for local_log in local_logs:
-            agent_log.extend(local_log)
-        return list(outputs)
+            requests = []
+            for call in calls:
+                requests.append(
+                    await self._v2_policy_request(
+                        call, status_event=status_event, started_at=started_at
+                    )
+                )
+            results, _traces = await runtime.executor.execute_batch(calls, requests)
+        finally:
+            self._v2_source_event = previous_source_event
+
+        rendered = iter(self._v2_result_text(result) for result in results)
+        outputs: list[str] = []
+        for index in range(len(tool_calls)):
+            outputs.append(errors[index] if index in errors else next(rendered))
+        agent_log.extend(call.canonical_id for call in calls)
+        return outputs
 
     async def _ask_agent(
         self,

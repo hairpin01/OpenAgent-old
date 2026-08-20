@@ -111,7 +111,9 @@ class _Host:
         self.outcomes = outcomes
         self.calls: list[tuple[str, bool]] = []
 
-    async def invoke(self, call: Any, *, retryable: bool) -> PluginHostOutcome:
+    async def invoke(
+        self, call: Any, _request: Any, *, retryable: bool
+    ) -> PluginHostOutcome:
         self.calls.append((call.call_id, retryable))
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, BaseException):

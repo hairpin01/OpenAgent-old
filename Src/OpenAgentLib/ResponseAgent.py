@@ -334,9 +334,17 @@ class _OpenAgentResponseMixin:
         async def runner() -> None:
             started = time.monotonic()
             try:
-                result = await self._execute_v2_compatibility_call(
-                    clean_tool, attrs_raw, body
-                )
+                result = (
+                    await self._dispatch_agent_tool_batch(
+                        [(clean_tool, attrs_raw, body)],
+                        source_event=source_event,
+                        status_event=status_event,
+                        agent_log=[],
+                        started_at=started,
+                        thinking_notes=[],
+                        cancel_token=token or None,
+                    )
+                )[0]
                 elapsed = time.monotonic() - started
                 comment = (
                     f"Background task {task_id} finished: {display}\n"

@@ -106,7 +106,13 @@ class CooperativeSyncHandler:
 class ToolHostInvoker(Protocol):
     """A host boundary that returns one correlated isolated-host outcome."""
 
-    async def invoke(self, call: ToolCall, *, retryable: bool) -> PluginHostOutcome: ...
+    async def invoke(
+        self,
+        call: ToolCall,
+        policy_request: ToolPolicyRequest,
+        *,
+        retryable: bool,
+    ) -> PluginHostOutcome: ...
 
 
 class ToolLifecycleHooks(Protocol):
@@ -389,7 +395,7 @@ class ToolExecutor:
     async def _invoke(self, call: ToolCall, request: ToolPolicyRequest) -> ToolResult:
         try:
             output = await self._run_with_timeout(
-                self._dispatch(call),
+                self._dispatch(call, request),
                 request.requested_timeout,
             )
         except asyncio.TimeoutError:
@@ -430,7 +436,7 @@ class ToolExecutor:
             )
         return ToolResult(call.call_id, ToolResultStatus.SUCCESS, output=frozen_output)
 
-    async def _dispatch(self, call: ToolCall) -> Any:
+    async def _dispatch(self, call: ToolCall, request: ToolPolicyRequest) -> Any:
         handler = self._native_handlers.get(call.canonical_id)
         if handler is not None:
             return await self._invoke_native(handler, call)
@@ -440,6 +446,7 @@ class ToolExecutor:
             )
         outcome = await self.host_invoker.invoke(
             call,
+            request,
             retryable=call.spec.idempotency is IdempotencyClass.IDEMPOTENT,
         )
         if not isinstance(outcome, PluginHostOutcome):

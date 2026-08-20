@@ -45,7 +45,7 @@ from .ContextService import (
 )
 from .ResponseAgent import _OpenAgentResponseMixin
 
-OPENAGENT_LIB_VERSION = "0.8.1-main.build:1052"  # fallback
+OPENAGENT_LIB_VERSION = "0.8.1-main.build:1054"  # fallback
 
 __all__ = [
     "OPENAGENT_LIB_VERSION",

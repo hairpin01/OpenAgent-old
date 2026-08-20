@@ -21,7 +21,7 @@ from typing import Any, TYPE_CHECKING
 
 from cubkit import load_strings
 import Settings as OpenAgentSettings
-from Settings import debug_log
+from .Settings import debug_log
 
 from core.lib.loader.module_base import ModuleBase, bot_command, callback, command
 from core.lib.loader.module_config import (
@@ -82,7 +82,7 @@ class OpenAgent(
 ):
     DEBUG = OpenAgentSettings.DEBUG
     name = "OpenAgent"
-    version = "0.8.1-main.build:1052"
+    version = "0.8.1-main.build:1054"
     author = "@dev_dolbaeb && @Hairpin00"
     description = {
         "ru": "ИИ агент в юзерботе с новой архитектурой инструментов",

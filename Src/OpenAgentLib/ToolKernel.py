@@ -35,6 +35,19 @@ class ToolErrorCode(str, Enum):
     INVALID_NAME = "invalid_name"
     INVALID_SCHEMA = "invalid_schema"
     INVALID_SPEC = "invalid_spec"
+    POLICY_DENIED = "policy_denied"
+    CONFIRMATION_REQUIRED = "confirmation_required"
+    HOOK_CANCELLED = "hook_cancelled"
+    HOOK_FAILED = "hook_failed"
+    HANDLER_FAILED = "handler_failed"
+    HOST_FAILED = "host_failed"
+    OUTPUT_SCHEMA_INVALID = "output_schema_invalid"
+    SPILL_FAILED = "spill_failed"
+    EXECUTOR_FAILED = "executor_failed"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    BATCH_LENGTH_MISMATCH = "batch_length_mismatch"
+    DUPLICATE_CALL_ID = "duplicate_call_id"
     SCHEMA_VERSION_MISMATCH = "schema_version_mismatch"
     UNDECLARED_ALIAS = "undeclared_alias"
 
@@ -499,6 +512,31 @@ def _validate_schema_value(
         )
 
 
+def validate_schema_value(
+    schema: Mapping[str, Any],
+    value: Any,
+    *,
+    canonical_id: str | None = None,
+    requested_name: str | None = None,
+) -> Any:
+    """Validate and freeze one JSON-compatible value against a declared schema."""
+
+    schema = validate_schema(schema)
+    _validate_schema_value(
+        schema,
+        value,
+        canonical_id=canonical_id,
+        requested_name=requested_name,
+        field_path=(),
+    )
+    return _freeze_json_value(
+        value,
+        error_type=ToolArgumentError,
+        canonical_id=canonical_id,
+        requested_name=requested_name,
+    )
+
+
 def validate_arguments(
     schema: Mapping[str, Any],
     arguments: Mapping[str, Any],
@@ -517,16 +555,9 @@ def validate_arguments(
             requested_name=requested_name,
             field_path=("arguments",),
         )
-    _validate_schema_value(
+    frozen = validate_schema_value(
         schema,
         arguments,
-        canonical_id=canonical_id,
-        requested_name=requested_name,
-        field_path=(),
-    )
-    frozen = _freeze_json_value(
-        arguments,
-        error_type=ToolArgumentError,
         canonical_id=canonical_id,
         requested_name=requested_name,
     )

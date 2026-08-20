@@ -9,7 +9,6 @@ import pytest
 
 from conftest import ROOT
 
-
 sys.path.insert(0, str(ROOT / "Src"))
 
 from OpenAgentLib.PluginHost import (  # noqa: E402
@@ -63,7 +62,9 @@ def test_round_trip_preserves_call_and_request_trace() -> None:
         outcome.response.result["value"] = "mutated"
 
 
-def test_protocol_rejects_unknown_versions_malformed_messages_and_oversized_frames() -> None:
+def test_protocol_rejects_unknown_versions_malformed_messages_and_oversized_frames() -> (
+    None
+):
     request = _request(2, "ping")
     envelope = request.to_envelope()
     envelope["version"] = "999"
@@ -112,7 +113,9 @@ def test_host_rejects_invalid_worker_responses(
     assert error.value.code is expected
 
 
-def test_environment_is_filtered_and_project_runtime_is_not_importable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_environment_is_filtered_and_project_runtime_is_not_importable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("PLUGIN_HOST_TEST_SECRET", "must-not-cross-boundary")
     host = PluginHost()
 
@@ -127,9 +130,7 @@ def test_unmounted_file_is_denied(tmp_path: Path) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("parent-only", encoding="utf-8")
 
-    outcome = _call(
-        PluginHost(), _request(30, "read_file", {"path": str(secret)})
-    )
+    outcome = _call(PluginHost(), _request(30, "read_file", {"path": str(secret)}))
 
     assert outcome.response.status is PluginHostStatus.ERROR
     assert outcome.response.error is not None
@@ -143,7 +144,9 @@ def test_read_only_mount_denies_write(tmp_path: Path) -> None:
 
     outcome = _call(
         PluginHost(),
-        _request(31, "write_file", {"path": "/mnt/protected.txt", "content": "changed"}),
+        _request(
+            31, "write_file", {"path": "/mnt/protected.txt", "content": "changed"}
+        ),
         mounts=(SandboxMount(protected, "/mnt/protected.txt", read_only=True),),
     )
 

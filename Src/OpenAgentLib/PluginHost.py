@@ -5,6 +5,7 @@ This module intentionally launches only the deterministic worker from
 ``PluginHostWorker.py``.  Later manifest and capability work can build on this
 transport without gaining ambient access to the parent process.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,8 +26,11 @@ import time
 from types import MappingProxyType
 from typing import Any, Awaitable, BinaryIO, Callable, Mapping, Sequence
 
-from .PluginCapabilities import CapabilityProtocolError, CapabilityRequest, CapabilityResponse
-
+from .PluginCapabilities import (
+    CapabilityProtocolError,
+    CapabilityRequest,
+    CapabilityResponse,
+)
 
 PLUGIN_HOST_PROTOCOL_VERSION = "1"
 MAX_IPC_FRAME_BYTES = 64 * 1024
@@ -84,7 +88,9 @@ class PluginHostFailure:
                 self, "request_id", _validate_message_id(self.request_id, "request_id")
             )
         if self.call_id is not None:
-            object.__setattr__(self, "call_id", _validate_message_id(self.call_id, "call_id"))
+            object.__setattr__(
+                self, "call_id", _validate_message_id(self.call_id, "call_id")
+            )
         if not isinstance(self.retryable, bool):
             raise TypeError("retryable must be a bool")
 
@@ -94,7 +100,9 @@ class PluginHostFailure:
     @classmethod
     def from_envelope(cls, value: Any) -> PluginHostFailure:
         if not isinstance(value, Mapping) or set(value) != {"code", "message"}:
-            raise PluginHostProtocolError("error details must contain only code and message")
+            raise PluginHostProtocolError(
+                "error details must contain only code and message"
+            )
         return cls(code=value["code"], message=value["message"])
 
 
@@ -134,7 +142,9 @@ class PluginHostTrace:
         object.__setattr__(
             self, "request_id", _validate_message_id(self.request_id, "request_id")
         )
-        object.__setattr__(self, "call_id", _validate_message_id(self.call_id, "call_id"))
+        object.__setattr__(
+            self, "call_id", _validate_message_id(self.call_id, "call_id")
+        )
         if not isinstance(self.state, PluginHostTraceState):
             object.__setattr__(self, "state", PluginHostTraceState(self.state))
 
@@ -152,9 +162,13 @@ class PluginHostTrace:
             "call_id",
             "state",
         }:
-            raise PluginHostProtocolError("trace must contain request_id, call_id, and state")
+            raise PluginHostProtocolError(
+                "trace must contain request_id, call_id, and state"
+            )
         return cls(
-            request_id=value["request_id"], call_id=value["call_id"], state=value["state"]
+            request_id=value["request_id"],
+            call_id=value["call_id"],
+            state=value["state"],
         )
 
 
@@ -172,8 +186,12 @@ class PluginHostRequest:
         object.__setattr__(
             self, "request_id", _validate_message_id(self.request_id, "request_id")
         )
-        object.__setattr__(self, "call_id", _validate_message_id(self.call_id, "call_id"))
-        if not isinstance(self.operation, str) or not _OPERATION_RE.fullmatch(self.operation):
+        object.__setattr__(
+            self, "call_id", _validate_message_id(self.call_id, "call_id")
+        )
+        if not isinstance(self.operation, str) or not _OPERATION_RE.fullmatch(
+            self.operation
+        ):
             raise ValueError("operation must be a lower-case protocol operation")
         frozen = _freeze_json_value(self.payload)
         if not isinstance(frozen, Mapping):
@@ -228,14 +246,18 @@ class PluginHostRequest:
             retryable=envelope["retryable"],
         )
         if PluginHostTrace.from_envelope(envelope["trace"]) != request.trace:
-            raise PluginHostProtocolError("request trace does not match request identity")
+            raise PluginHostProtocolError(
+                "request trace does not match request identity"
+            )
         return request
 
     @classmethod
     def from_json_line(
         cls, value: bytes, *, max_frame_bytes: int = MAX_IPC_FRAME_BYTES
     ) -> PluginHostRequest:
-        return cls.from_envelope(_decode_json_line(value, max_frame_bytes=max_frame_bytes))
+        return cls.from_envelope(
+            _decode_json_line(value, max_frame_bytes=max_frame_bytes)
+        )
 
 
 @dataclass(frozen=True)
@@ -253,12 +275,17 @@ class PluginHostResponse:
         object.__setattr__(
             self, "request_id", _validate_message_id(self.request_id, "request_id")
         )
-        object.__setattr__(self, "call_id", _validate_message_id(self.call_id, "call_id"))
+        object.__setattr__(
+            self, "call_id", _validate_message_id(self.call_id, "call_id")
+        )
         if not isinstance(self.status, PluginHostStatus):
             object.__setattr__(self, "status", PluginHostStatus(self.status))
         if not isinstance(self.trace, PluginHostTrace):
             raise TypeError("response trace must be a PluginHostTrace")
-        if (self.trace.request_id, self.trace.call_id) != (self.request_id, self.call_id):
+        if (self.trace.request_id, self.trace.call_id) != (
+            self.request_id,
+            self.call_id,
+        ):
             raise ValueError("response trace must match response identity")
         frozen = _freeze_json_value(self.result)
         object.__setattr__(self, "result", frozen)
@@ -306,7 +333,11 @@ class PluginHostResponse:
         }
         if set(envelope) != expected:
             raise PluginHostProtocolError("response envelope has unexpected fields")
-        error = None if envelope["error"] is None else PluginHostFailure.from_envelope(envelope["error"])
+        error = (
+            None
+            if envelope["error"] is None
+            else PluginHostFailure.from_envelope(envelope["error"])
+        )
         return cls(
             request_id=envelope["request_id"],
             call_id=envelope["call_id"],
@@ -320,7 +351,9 @@ class PluginHostResponse:
     def from_json_line(
         cls, value: bytes, *, max_frame_bytes: int = MAX_IPC_FRAME_BYTES
     ) -> PluginHostResponse:
-        return cls.from_envelope(_decode_json_line(value, max_frame_bytes=max_frame_bytes))
+        return cls.from_envelope(
+            _decode_json_line(value, max_frame_bytes=max_frame_bytes)
+        )
 
 
 @dataclass(frozen=True)
@@ -400,9 +433,12 @@ class PluginHostConfig:
     def __post_init__(self) -> None:
         object.__setattr__(self, "bwrap_path", Path(self.bwrap_path))
         object.__setattr__(self, "python_path", Path(self.python_path))
-        if not isinstance(self.default_wall_timeout, (int, float)) or isinstance(
-            self.default_wall_timeout, bool
-        ) or not isfinite(self.default_wall_timeout) or self.default_wall_timeout <= 0:
+        if (
+            not isinstance(self.default_wall_timeout, (int, float))
+            or isinstance(self.default_wall_timeout, bool)
+            or not isfinite(self.default_wall_timeout)
+            or self.default_wall_timeout <= 0
+        ):
             raise ValueError("default_wall_timeout must be a positive finite number")
         if not isinstance(self.max_frame_bytes, int) or self.max_frame_bytes < 256:
             raise ValueError("max_frame_bytes must be an integer of at least 256")
@@ -431,7 +467,12 @@ class PluginHost:
         mounts: Sequence[SandboxMount] = (),
         limits: WorkerResourceLimits | None = None,
         wall_timeout: float | None = None,
-        capability_handler: Callable[[CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]] | None = None,
+        capability_handler: (
+            Callable[
+                [CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]
+            ]
+            | None
+        ) = None,
     ) -> PluginHostOutcome:
         """Run exactly one request or fail without an unsandboxed fallback."""
 
@@ -445,7 +486,9 @@ class PluginHost:
         try:
             self._ensure_sandbox_available(request)
             validated_mounts = _validate_mounts(mounts)
-            request_frame = request.to_json_line(max_frame_bytes=self.config.max_frame_bytes)
+            request_frame = request.to_json_line(
+                max_frame_bytes=self.config.max_frame_bytes
+            )
         except PluginHostCallError:
             raise
         except PluginHostProtocolError as exc:
@@ -453,10 +496,14 @@ class PluginHost:
                 request, _protocol_error_code(exc), f"invalid worker request: {exc}"
             ) from exc
         except (TypeError, ValueError, OSError) as exc:
-            raise self._failure(request, PluginHostErrorCode.INVALID_MOUNT, str(exc)) from exc
+            raise self._failure(
+                request, PluginHostErrorCode.INVALID_MOUNT, str(exc)
+            ) from exc
 
         try:
-            with tempfile.TemporaryDirectory(prefix="openagent_plugin_host_") as temporary:
+            with tempfile.TemporaryDirectory(
+                prefix="openagent_plugin_host_"
+            ) as temporary:
                 private_dir = Path(temporary)
                 worker_path = private_dir / "PluginHostWorker.py"
                 working_directory = private_dir / "work"
@@ -480,8 +527,12 @@ class PluginHost:
                         env=dict(self._SAFE_ENVIRONMENT),
                     )
                 except OSError as exc:
-                    raise self._sandbox_unavailable(request, f"could not start bwrap: {exc}") from exc
-                return await self._exchange(process, request, request_frame, timeout, capability_handler)
+                    raise self._sandbox_unavailable(
+                        request, f"could not start bwrap: {exc}"
+                    ) from exc
+                return await self._exchange(
+                    process, request, request_frame, timeout, capability_handler
+                )
         except PluginHostCallError:
             raise
 
@@ -512,7 +563,9 @@ class PluginHost:
             if runtime_path.exists():
                 command.extend(("--ro-bind", str(runtime_path), str(runtime_path)))
         command.extend(("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"))
-        command.extend(("--dir", "/worker", "--dir", "/work", "--dir", PLUGIN_MOUNT_ROOT))
+        command.extend(
+            ("--dir", "/worker", "--dir", "/work", "--dir", PLUGIN_MOUNT_ROOT)
+        )
         command.extend(("--ro-bind", str(worker_path), "/worker/PluginHostWorker.py"))
         command.extend(("--bind", str(working_directory), "/work"))
 
@@ -570,19 +623,38 @@ class PluginHost:
     def _validated_timeout(
         self, request: PluginHostRequest, supplied_timeout: float | None
     ) -> float:
-        timeout = self.config.default_wall_timeout if supplied_timeout is None else supplied_timeout
-        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not isfinite(timeout) or timeout <= 0:
+        timeout = (
+            self.config.default_wall_timeout
+            if supplied_timeout is None
+            else supplied_timeout
+        )
+        if (
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or not isfinite(timeout)
+            or timeout <= 0
+        ):
             raise self._failure(
-                request, PluginHostErrorCode.INVALID_REQUEST, "wall timeout must be positive and finite"
+                request,
+                PluginHostErrorCode.INVALID_REQUEST,
+                "wall timeout must be positive and finite",
             )
         return float(timeout)
 
     def _ensure_sandbox_available(self, request: PluginHostRequest) -> None:
         if not sys.platform.startswith("linux"):
-            raise self._sandbox_unavailable(request, "isolated plugins require Linux Bubblewrap")
+            raise self._sandbox_unavailable(
+                request, "isolated plugins require Linux Bubblewrap"
+            )
         bwrap = self.config.bwrap_path
-        if not bwrap.is_absolute() or not bwrap.is_file() or not os.access(bwrap, os.X_OK):
-            raise self._sandbox_unavailable(request, "configured bwrap executable is unavailable")
+        if (
+            not bwrap.is_absolute()
+            or not bwrap.is_file()
+            or not os.access(bwrap, os.X_OK)
+        ):
+            raise self._sandbox_unavailable(
+                request, "configured bwrap executable is unavailable"
+            )
         try:
             probe = subprocess.run(
                 (str(bwrap), "--version"),
@@ -595,20 +667,31 @@ class PluginHost:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise self._sandbox_unavailable(request, "configured bwrap executable is unusable") from exc
+            raise self._sandbox_unavailable(
+                request, "configured bwrap executable is unusable"
+            ) from exc
         if probe.returncode != 0:
-            raise self._sandbox_unavailable(request, "configured bwrap executable is unusable")
+            raise self._sandbox_unavailable(
+                request, "configured bwrap executable is unusable"
+            )
         python_path = self.config.python_path
         try:
             resolved_python = python_path.resolve(strict=True)
         except OSError as exc:
-            raise self._sandbox_unavailable(request, "configured Python runtime is unavailable") from exc
-        if not _is_relative_to(resolved_python, Path("/usr")) or not os.access(resolved_python, os.X_OK):
             raise self._sandbox_unavailable(
-                request, "configured Python runtime is outside the minimal /usr runtime mount"
+                request, "configured Python runtime is unavailable"
+            ) from exc
+        if not _is_relative_to(resolved_python, Path("/usr")) or not os.access(
+            resolved_python, os.X_OK
+        ):
+            raise self._sandbox_unavailable(
+                request,
+                "configured Python runtime is outside the minimal /usr runtime mount",
             )
         if not self._worker_source_path().is_file():
-            raise self._sandbox_unavailable(request, "isolated worker source is unavailable")
+            raise self._sandbox_unavailable(
+                request, "isolated worker source is unavailable"
+            )
 
     @staticmethod
     def _worker_source_path() -> Path:
@@ -620,7 +703,12 @@ class PluginHost:
         request: PluginHostRequest,
         request_frame: bytes,
         timeout: float,
-        capability_handler: Callable[[CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]] | None,
+        capability_handler: (
+            Callable[
+                [CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]
+            ]
+            | None
+        ),
     ) -> PluginHostOutcome:
         deadline = time.monotonic() + timeout
         try:
@@ -633,13 +721,18 @@ class PluginHost:
                 deadline,
             )
             line = await self._await_with_deadline(
-                self._read_terminal_frame(process, request, capability_handler, deadline), deadline
+                self._read_terminal_frame(
+                    process, request, capability_handler, deadline
+                ),
+                deadline,
             )
             if line is None:
                 return_code = await self._await_with_deadline(
                     asyncio.to_thread(process.wait), deadline
                 )
-                stderr = await asyncio.to_thread(_read_limited, process.stderr, self.config.max_frame_bytes)
+                stderr = await asyncio.to_thread(
+                    _read_limited, process.stderr, self.config.max_frame_bytes
+                )
                 if _is_sandbox_startup_error(return_code, stderr):
                     raise self._sandbox_unavailable(
                         request, _sandbox_error_message(stderr)
@@ -656,9 +749,14 @@ class PluginHost:
                 )
             except PluginHostProtocolError as exc:
                 raise self._failure(
-                    request, _protocol_error_code(exc), f"invalid worker response: {exc}"
+                    request,
+                    _protocol_error_code(exc),
+                    f"invalid worker response: {exc}",
                 ) from exc
-            if (response.request_id, response.call_id) != (request.request_id, request.call_id):
+            if (response.request_id, response.call_id) != (
+                request.request_id,
+                request.call_id,
+            ):
                 raise self._failure(
                     request,
                     PluginHostErrorCode.RESPONSE_MISMATCH,
@@ -691,12 +789,16 @@ class PluginHost:
         except asyncio.TimeoutError as exc:
             await self._stop_process(process)
             raise self._failure(
-                request, PluginHostErrorCode.TIMED_OUT, "isolated worker exceeded its wall timeout"
+                request,
+                PluginHostErrorCode.TIMED_OUT,
+                "isolated worker exceeded its wall timeout",
             ) from exc
         except asyncio.CancelledError as exc:
             await self._stop_process(process)
             raise self._failure(
-                request, PluginHostErrorCode.CANCELLED, "isolated worker call was cancelled"
+                request,
+                PluginHostErrorCode.CANCELLED,
+                "isolated worker call was cancelled",
             ) from exc
         except PluginHostCallError:
             await self._stop_process(process)
@@ -708,11 +810,17 @@ class PluginHost:
             ) from exc
         except (BrokenPipeError, OSError) as exc:
             await self._stop_process(process)
-            stderr = await asyncio.to_thread(_read_limited, process.stderr, self.config.max_frame_bytes)
+            stderr = await asyncio.to_thread(
+                _read_limited, process.stderr, self.config.max_frame_bytes
+            )
             if _is_sandbox_startup_error(process.returncode or 1, stderr):
-                raise self._sandbox_unavailable(request, _sandbox_error_message(stderr)) from exc
+                raise self._sandbox_unavailable(
+                    request, _sandbox_error_message(stderr)
+                ) from exc
             raise self._failure(
-                request, PluginHostErrorCode.CHILD_CRASHED, f"isolated worker I/O failed: {exc}"
+                request,
+                PluginHostErrorCode.CHILD_CRASHED,
+                f"isolated worker I/O failed: {exc}",
             ) from exc
         finally:
             _close_stream(process.stdin)
@@ -720,41 +828,83 @@ class PluginHost:
             _close_stream(process.stderr)
 
     async def _read_terminal_frame(
-        self, process: subprocess.Popen[bytes], request: PluginHostRequest,
-        capability_handler: Callable[[CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]] | None,
+        self,
+        process: subprocess.Popen[bytes],
+        request: PluginHostRequest,
+        capability_handler: (
+            Callable[
+                [CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]
+            ]
+            | None
+        ),
         deadline: float,
     ) -> bytes | None:
         """Only a terminal response ends an exchange; capability frames are routed back."""
         while True:
             line = await self._await_with_deadline(
-                asyncio.to_thread(_read_json_line, process.stdout, self.config.max_frame_bytes), deadline
+                asyncio.to_thread(
+                    _read_json_line, process.stdout, self.config.max_frame_bytes
+                ),
+                deadline,
             )
             if line is None:
                 return None
-            envelope = _decode_json_line(line, max_frame_bytes=self.config.max_frame_bytes)
+            envelope = _decode_json_line(
+                line, max_frame_bytes=self.config.max_frame_bytes
+            )
             if envelope.get("kind") == "response":
                 return line
-            if envelope.get("kind") != "capability-request" or capability_handler is None:
-                raise PluginHostProtocolError("worker emitted an unexpected non-terminal frame")
+            if (
+                envelope.get("kind") != "capability-request"
+                or capability_handler is None
+            ):
+                raise PluginHostProtocolError(
+                    "worker emitted an unexpected non-terminal frame"
+                )
             try:
                 capability_request = CapabilityRequest.from_envelope(envelope)
             except CapabilityProtocolError as exc:
-                raise PluginHostProtocolError(f"malformed capability request: {exc}") from exc
-            if (capability_request.host_request_id, capability_request.call_id) != (request.request_id, request.call_id):
-                raise PluginHostProtocolError("capability request identity does not match active request")
+                raise PluginHostProtocolError(
+                    f"malformed capability request: {exc}"
+                ) from exc
+            if (capability_request.host_request_id, capability_request.call_id) != (
+                request.request_id,
+                request.call_id,
+            ):
+                raise PluginHostProtocolError(
+                    "capability request identity does not match active request"
+                )
             capability_response = capability_handler(capability_request)
             if hasattr(capability_response, "__await__"):
-                capability_response = await self._await_with_deadline(capability_response, deadline)
+                capability_response = await self._await_with_deadline(
+                    capability_response, deadline
+                )
             if not isinstance(capability_response, CapabilityResponse):
-                raise PluginHostProtocolError("capability handler returned an invalid response")
-            if (capability_response.host_request_id, capability_response.call_id, capability_response.capability_request_id) != (
-                request.request_id, request.call_id, capability_request.capability_request_id
+                raise PluginHostProtocolError(
+                    "capability handler returned an invalid response"
+                )
+            if (
+                capability_response.host_request_id,
+                capability_response.call_id,
+                capability_response.capability_request_id,
+            ) != (
+                request.request_id,
+                request.call_id,
+                capability_request.capability_request_id,
             ):
-                raise PluginHostProtocolError("capability response identity does not match request")
+                raise PluginHostProtocolError(
+                    "capability response identity does not match request"
+                )
             await self._await_with_deadline(
-                asyncio.to_thread(_write_frame, process.stdin, _encode_json_line(
-                    capability_response.to_envelope(), max_frame_bytes=self.config.max_frame_bytes
-                )), deadline,
+                asyncio.to_thread(
+                    _write_frame,
+                    process.stdin,
+                    _encode_json_line(
+                        capability_response.to_envelope(),
+                        max_frame_bytes=self.config.max_frame_bytes,
+                    ),
+                ),
+                deadline,
             )
 
     async def _await_with_deadline(self, awaitable: Any, deadline: float) -> Any:
@@ -801,7 +951,9 @@ class PluginHost:
         )
 
     @staticmethod
-    def _sandbox_unavailable(request: PluginHostRequest, message: str) -> PluginHostSandboxUnavailable:
+    def _sandbox_unavailable(
+        request: PluginHostRequest, message: str
+    ) -> PluginHostSandboxUnavailable:
         return PluginHostSandboxUnavailable(
             PluginHostFailure(
                 code=PluginHostErrorCode.SANDBOX_UNAVAILABLE,
@@ -863,7 +1015,9 @@ def _encode_json_line(value: Mapping[str, Any], *, max_frame_bytes: int) -> byte
         for chunk in encoder.iterencode(value):
             chunk_bytes = chunk.encode("utf-8")
             if len(encoded) + len(chunk_bytes) + 1 > max_frame_bytes:
-                raise PluginHostProtocolError("IPC frame exceeds the configured size limit")
+                raise PluginHostProtocolError(
+                    "IPC frame exceeds the configured size limit"
+                )
             encoded.extend(chunk_bytes)
         encoded.append(ord("\n"))
     except PluginHostProtocolError:
@@ -929,16 +1083,25 @@ def _validate_mounts(mounts: Sequence[SandboxMount]) -> tuple[SandboxMount, ...]
             raise ValueError("mount targets cannot duplicate or overlap")
         if any(_paths_overlap(source, existing) for existing in sources):
             raise ValueError("mount sources cannot duplicate or overlap")
-        if not mount.read_only and any(_is_relative_to(root, source) for root in protected_write_roots):
+        if not mount.read_only and any(
+            _is_relative_to(root, source) for root in protected_write_roots
+        ):
             raise ValueError("read-write mounts cannot expose the home or project root")
-        validated.append(SandboxMount(source=source, target=str(target), read_only=mount.read_only))
+        validated.append(
+            SandboxMount(source=source, target=str(target), read_only=mount.read_only)
+        )
         targets.append(target)
         sources.append(source)
     return tuple(validated)
 
 
 def _validate_mount_target(value: str) -> PurePosixPath:
-    if not value.startswith("/") or "//" in value or "/./" in value or ".." in value.split("/"):
+    if (
+        not value.startswith("/")
+        or "//" in value
+        or "/./" in value
+        or ".." in value.split("/")
+    ):
         raise ValueError("mount targets must be normalized absolute paths")
     target = PurePosixPath(value)
     root = PurePosixPath(PLUGIN_MOUNT_ROOT)
@@ -951,7 +1114,9 @@ def _mount_parent_directories(target: str) -> tuple[str, ...]:
     path = PurePosixPath(target)
     root = PurePosixPath(PLUGIN_MOUNT_ROOT)
     directories = [parent for parent in path.parents if parent != PurePosixPath("/")]
-    return tuple(str(directory) for directory in reversed(directories) if directory != root)
+    return tuple(
+        str(directory) for directory in reversed(directories) if directory != root
+    )
 
 
 def _paths_overlap(left: Path | PurePosixPath, right: Path | PurePosixPath) -> bool:

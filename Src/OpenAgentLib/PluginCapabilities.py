@@ -178,7 +178,7 @@ class TelegramBackend(CapabilityBackend, Protocol):
 
 
 class WorkspaceFilesystemBackend(CapabilityBackend, Protocol):
-    """Must use ``resolve_workspace_path`` before touching a filesystem path."""
+    """Must enforce normalized paths and atomically compare any expected_hash."""
 
 
 class ProcessBackend(CapabilityBackend, Protocol):
@@ -201,6 +201,10 @@ def resolve_workspace_path(root: str | Path, relative_path: str) -> Path:
     """Resolve a grant-relative path and reject traversal or symlink escape."""
 
     relative = _relative_path(relative_path)
+    return _resolve_workspace_path(root, relative)
+
+
+def _resolve_workspace_path(root: str | Path, relative: str) -> Path:
     try:
         resolved_root = Path(root).resolve(strict=True)
         resolved_path = (resolved_root / relative).resolve(strict=False)
@@ -208,6 +212,18 @@ def resolve_workspace_path(root: str | Path, relative_path: str) -> Path:
     except (OSError, ValueError) as exc:
         raise CapabilityProtocolError("filesystem path escapes its granted root") from exc
     return resolved_path
+
+
+def resolve_workspace_directory(root: str | Path, relative_path: str) -> Path:
+    """Resolve an explicit grant-relative directory, including the grant root."""
+
+    relative = _relative_directory(relative_path)
+    if relative == ".":
+        try:
+            return Path(root).resolve(strict=True)
+        except OSError as exc:
+            raise CapabilityProtocolError("filesystem root is unavailable") from exc
+    return _resolve_workspace_path(root, relative)
 
 
 def validate_public_https_url(url: str, resolver: Any = socket.getaddrinfo) -> str:
@@ -354,6 +370,16 @@ def _relative_path(value: Any) -> str:
     return path
 
 
+def _relative_directory(value: Any) -> str:
+    """Accept an explicit grant root only for directory and cwd operations."""
+
+    path = _required(value, "path")
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or ".." in parsed.parts:
+        raise CapabilityProtocolError("path must be a grant-relative path")
+    return path
+
+
 def _has_ambient_key(value: Any) -> bool:
     forbidden = {"client", "event", "session", "token", "password", "api_hash", "api_id", "credential", "secret"}
     if isinstance(value, Mapping):
@@ -389,18 +415,28 @@ def _normalize_payload(request: CapabilityRequest, grant: CapabilityGrant, resol
                 raise CapabilityProtocolError("telegram references must be opaque non-empty IDs")
         return MappingProxyType({"data": payload["data"]})
     elif request.capability is CapabilityFamily.WORKSPACE_FS:
-        allowed = frozenset({"path", "content"}) if request.operation == "write" else frozenset({"path"})
+        allowed = frozenset({"path", "content", "mode", "expected_hash"}) if request.operation == "write" else frozenset({"path"})
         _only(payload, allowed)
-        _relative_path(payload.get("path"))
+        path = _relative_directory(payload.get("path")) if request.operation == "list" else _relative_path(payload.get("path"))
         if request.operation == "write" and not isinstance(payload.get("content"), str):
             raise CapabilityProtocolError("writes require string content")
+        if request.operation == "write":
+            mode = payload.get("mode", "overwrite")
+            if mode not in {"overwrite", "append"}:
+                raise CapabilityProtocolError("write mode must be overwrite or append")
+            expected_hash = payload.get("expected_hash")
+            if expected_hash is not None and (not isinstance(expected_hash, str) or not expected_hash):
+                raise CapabilityProtocolError("write expected_hash must be a non-empty string")
         root = grant.constraints.get("root")
         if not isinstance(root, str) or not root:
             raise CapabilityProtocolError("filesystem grants require a root")
-        resolved = resolve_workspace_path(root, payload["path"])
+        resolved = resolve_workspace_directory(root, path) if request.operation == "list" else resolve_workspace_path(root, path)
         normalized = {"path": str(resolved)}
         if request.operation == "write":
             normalized["content"] = payload["content"]
+            normalized["mode"] = mode
+            if expected_hash is not None:
+                normalized["expected_hash"] = expected_hash
         return MappingProxyType(normalized)
     elif request.capability is CapabilityFamily.PROCESS:
         _only(payload, frozenset({"argv", "cwd", "timeout_seconds", "max_output_bytes", "env"}))
@@ -415,7 +451,7 @@ def _normalize_payload(request: CapabilityRequest, grant: CapabilityGrant, resol
         _positive_bound(len(argv), "argv count", grant.constraints["max_args"])
         if any(len(arg) > grant.constraints["max_arg_length"] for arg in argv):
             raise CapabilityProtocolError("argv entry exceeds grant")
-        cwd = resolve_workspace_path(grant.constraints["cwd_root"], payload.get("cwd", "run"))
+        cwd = resolve_workspace_directory(grant.constraints["cwd_root"], payload.get("cwd", "."))
         timeout = payload.get("timeout_seconds")
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0 or timeout > grant.constraints["max_timeout_seconds"]:
             raise CapabilityProtocolError("process timeout exceeds grant")

@@ -9,6 +9,7 @@ from .Plugin.PluginBase import OpenAgentPlugin
 from .Manager.Session import SessionManager
 from .HttpClient import OpenAgentHttpClient
 from .ToolTracePersistence import ToolTracePersistence
+from .V2Bootstrap import build_v2_tool_runtime
 
 
 class _OpenAgentLifecycleMixin:
@@ -151,9 +152,20 @@ class _OpenAgentLifecycleMixin:
         self._disabled_plugins: set[str] = self._load_disabled_plugins()
         await self._load_sessions()
         await self._load_todo_items_storage()
-        await self._load_system_plugins()
+        # Legacy descriptor loading executes source files and is intentionally
+        # excluded from the v2 startup path.
+        self._system_tools = {}
         await self._load_installed_plugins()
+        # V2 owns executable tool metadata. Legacy descriptors remain only for
+        # compatibility inventory until the old mixins are retired.
+        self._v2_runtime = build_v2_tool_runtime(self)
         self.log.info("OpenAgent loaded")
+
+    async def on_unload(self) -> None:
+        runtime = getattr(self, "_v2_runtime", None)
+        if runtime is not None:
+            await runtime.on_unload()
+        await super().on_unload()
 
     def _record_terminal_tool_trace(
         self, session_id: str, trace: Any, result: Any

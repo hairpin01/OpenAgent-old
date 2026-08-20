@@ -165,6 +165,40 @@ def json_tool_payload_to_legacy(
     return tool_name, " ".join(attrs), body
 
 
+def build_action_router_messages(
+    user_prompt: str,
+    previous_response: str,
+    tool_names: Iterable[str],
+) -> list[dict[str, str]]:
+    """Build the strict recovery call used after unfinished model prose."""
+
+    names = ", ".join(
+        sorted({str(name).strip() for name in tool_names if str(name).strip()})
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are OpenAgent's strict action router. Convert an unfinished assistant "
+                "response into the next executable step. Output ONLY one or more fenced "
+                "```tool_call``` JSON blocks, or one fenced ```final``` block if the task is "
+                "already complete. Never output prose, promises, apologies, or explanations "
+                "outside blocks. If you do not know the exact tool, call utility.search_tool. "
+                "A tool-call may include an optional top-level `reason` written by you.\n\n"
+                f"Available tools: {names}"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Original user request:\n{user_prompt}\n\n"
+                f"Unfinished assistant response:\n{previous_response}\n\n"
+                "Produce the next executable block now."
+            ),
+        },
+    ]
+
+
 def estimate_text_tokens(value: Any) -> int:
     """Return a dependency-free, conservative token estimate.
 
@@ -357,6 +391,7 @@ def search_tool_docs(
 __all__ = [
     "ModelCallBudget",
     "accepts_completion_verdict",
+    "build_action_router_messages",
     "classify_agent_output",
     "extract_explicit_final",
     "estimate_messages_tokens",

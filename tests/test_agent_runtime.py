@@ -4,7 +4,6 @@ import asyncio
 
 from conftest import load_source_module
 
-
 runtime = load_source_module(
     "openagent_agent_runtime_test",
     "Src/OpenAgentLib/AgentRuntime.py",
@@ -39,9 +38,7 @@ def test_tool_calls_inside_final_are_inert_and_rejected() -> None:
 
 
 def test_final_tag_regions_are_removed_before_tool_scan() -> None:
-    nested = (
-        "<final>Do not execute <tool_call>terminal.run</tool_call></final>"
-    )
+    nested = "<final>Do not execute <tool_call>terminal.run</tool_call></final>"
     assert runtime.extract_explicit_final(nested) is None
     assert runtime.strip_explicit_final_regions(nested) == ""
 
@@ -101,7 +98,9 @@ def test_thinking_low_uses_complexity_gate() -> None:
 def test_retry_policy_only_accepts_transient_failures() -> None:
     assert runtime.is_transient_provider_error(RuntimeError("HTTP 429: busy"))
     assert runtime.is_transient_provider_error(asyncio.TimeoutError())
-    assert not runtime.is_transient_provider_error(RuntimeError("HTTP 400: bad request"))
+    assert not runtime.is_transient_provider_error(
+        RuntimeError("HTTP 400: bad request")
+    )
     assert not runtime.is_transient_provider_error(RuntimeError("invalid API key"))
     assert [runtime.retry_delay(i) for i in range(1, 6)] == [0.5, 1.0, 2.0, 4.0, 8.0]
 
@@ -187,7 +186,9 @@ def test_oversized_system_control_prompt_is_preserved() -> None:
 
 
 def test_non_ascii_token_estimate_is_conservative() -> None:
-    assert runtime.estimate_text_tokens("привет") > runtime.estimate_text_tokens("hello!")
+    assert runtime.estimate_text_tokens("привет") > runtime.estimate_text_tokens(
+        "hello!"
+    )
 
 
 def test_tool_index_is_complete_and_prompt_independent() -> None:
@@ -243,7 +244,9 @@ def test_model_tool_reason_is_optional_and_model_authored() -> None:
     assert runtime.model_tool_reason({"comment": "Looking up the docs"}) == (
         "Looking up the docs"
     )
-    assert runtime.model_tool_reason({"purpose": "Compare results"}) == "Compare results"
+    assert (
+        runtime.model_tool_reason({"purpose": "Compare results"}) == "Compare results"
+    )
     assert runtime.model_tool_reason({}) == ""
 
 
@@ -262,7 +265,25 @@ def test_json_tool_reason_survives_legacy_conversion() -> None:
     assert 'reason="Проверяю &amp; объясняю"' in attrs
     assert 'cmd="ls -la"' in attrs
     assert body == ""
-    assert runtime.json_tool_payload_to_legacy(
-        {"tool": "unknown.tool", "reason": "nope"},
-        {"terminal.run"},
-    ) is None
+    assert (
+        runtime.json_tool_payload_to_legacy(
+            {"tool": "unknown.tool", "reason": "nope"},
+            {"terminal.run"},
+        )
+        is None
+    )
+
+
+def test_action_router_replaces_repeated_promise_with_strict_block_request() -> None:
+    messages = runtime.build_action_router_messages(
+        "изучи $HOME/test/desktop-fly",
+        "сейчас просмотрю структуру проекта",
+        {"terminal.run", "utility.search_tool", "file.read"},
+    )
+    assert messages[0]["role"] == "system"
+    assert "Output ONLY" in messages[0]["content"]
+    assert "```tool_call```" in messages[0]["content"]
+    assert "utility.search_tool" in messages[0]["content"]
+    assert "terminal.run" in messages[0]["content"]
+    assert "optional top-level `reason`" in messages[0]["content"]
+    assert "сейчас просмотрю" in messages[1]["content"]

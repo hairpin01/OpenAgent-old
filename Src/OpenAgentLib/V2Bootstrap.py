@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from .PluginSDK import PluginManifest
-from .SystemPlugins.native import NativeSystemToolServices, build_native_system_tools
+from .RuntimeNativeSystemServices import RuntimeNativeSystemServices
+from .SystemPlugins.native import build_native_system_tools
 from .ToolCompatibility import TOOL_COMPATIBILITY_MATRIX
 from .ToolExecutor import ToolExecutor, ToolHostInvoker
 from .ToolKernel import (
@@ -94,13 +95,14 @@ class V2ToolRuntime:
 
 
 def build_v2_tool_runtime(
-    services: NativeSystemToolServices,
+    app: Any,
     manifests: Iterable[PluginManifest] = (),
     *,
     host_invoker: ToolHostInvoker | None = None,
 ) -> V2ToolRuntime:
     """Build one deterministic registry without legacy discovery or dispatch."""
 
+    services = RuntimeNativeSystemServices(app)
     native = build_native_system_tools(services)
     manifest_items = tuple(manifests)
     declared_specs = tuple(
@@ -114,7 +116,7 @@ def build_v2_tool_runtime(
     specs = (*native.registry.specs(), *(declared_specs or _sibling_specs()))
     registry = ToolRegistry(specs)
     policy = ToolPolicyEngine(DEFAULT_TOOL_POLICY_CATALOG)
-    return V2ToolRuntime(
+    runtime = V2ToolRuntime(
         registry,
         policy,
         ToolExecutor(
@@ -122,3 +124,5 @@ def build_v2_tool_runtime(
         ),
         manifest_items,
     )
+    services.bind_registry(registry)
+    return runtime

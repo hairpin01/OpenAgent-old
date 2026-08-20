@@ -11,6 +11,71 @@ runtime = load_source_module(
 )
 
 
+def test_explicit_final_fence_is_required() -> None:
+    assert runtime.extract_explicit_final("Поняла, сейчас сделаю") is None
+    assert (
+        runtime.extract_explicit_final("```final\nГотово: команда выполнена.\n```")
+        == "Готово: команда выполнена."
+    )
+
+
+def test_explicit_final_tag_is_supported_for_provider_compatibility() -> None:
+    assert runtime.extract_explicit_final("<final>Done.</final>") == "Done."
+    assert runtime.extract_explicit_final("```final\n\n```") is None
+    assert runtime.extract_explicit_final("```finale\nDone.\n```") is None
+
+
+def test_tool_calls_inside_final_are_inert_and_rejected() -> None:
+    nested = (
+        "```final\n"
+        "Example only:\n"
+        "```tool_call\n"
+        '{"tool":"terminal.run","args":{"cmd":"rm -rf /"}}\n'
+        "```\n"
+        "```"
+    )
+    assert runtime.extract_explicit_final(nested) is None
+    assert "terminal.run" not in runtime.strip_explicit_final_regions(nested)
+
+
+def test_final_tag_regions_are_removed_before_tool_scan() -> None:
+    nested = (
+        "<final>Do not execute <tool_call>terminal.run</tool_call></final>"
+    )
+    assert runtime.extract_explicit_final(nested) is None
+    assert runtime.strip_explicit_final_regions(nested) == ""
+
+
+def test_intermediate_note_normalizes_terra_style_promise() -> None:
+    raw = ".... поняла.... шмелька.... сейчас запущу terminal.run"
+    assert runtime.intermediate_note(raw) == raw
+
+
+def test_intermediate_note_removes_tool_blocks() -> None:
+    raw = (
+        "Запускаю проверку.\n"
+        "```tool_call\n"
+        '{"tool":"terminal.run","args":{"cmd":"pwd"}}\n'
+        "```"
+    )
+    assert runtime.intermediate_note(raw) == "Запускаю проверку."
+
+
+def test_agent_output_classification_drives_loop() -> None:
+    assert runtime.classify_agent_output(
+        "Поняла, сейчас вызову terminal.run",
+        has_tool_calls=False,
+    ) == ("intermediate", "Поняла, сейчас вызову terminal.run")
+    assert runtime.classify_agent_output(
+        "```final\nГотово.\n```",
+        has_tool_calls=False,
+    ) == ("final", "Готово.")
+    assert runtime.classify_agent_output(
+        "```final\nНе выполнять до результата tool.\n```",
+        has_tool_calls=True,
+    ) == ("tools", "")
+
+
 def test_thinking_is_skipped_when_disabled() -> None:
     assert not runtime.should_request_thinking(
         "Implement a large migration with many steps",
@@ -125,7 +190,7 @@ def test_non_ascii_token_estimate_is_conservative() -> None:
     assert runtime.estimate_text_tokens("привет") > runtime.estimate_text_tokens("hello!")
 
 
-def test_relevant_tools_keep_discovery_and_requested_group() -> None:
+def test_tool_index_is_complete_and_prompt_independent() -> None:
     names = {
         "utility.list_tools",
         "utility.tool_help",
@@ -139,4 +204,65 @@ def test_relevant_tools_keep_discovery_and_requested_group() -> None:
     assert "code.read_docs" in selected
     assert "code.generate_file" in selected
     assert "utility.list_tools" in selected
-    assert "todo.current" not in selected
+    assert "todo.current" in selected
+    assert selected == runtime.relevant_tool_names("совсем другой запрос", names)
+
+
+def test_tool_index_is_not_silently_truncated() -> None:
+    names = {f"plugin.tool_{index:03d}" for index in range(200)}
+    assert len(runtime.relevant_tool_names("anything", names)) == 200
+
+
+def test_search_tool_docs_uses_name_and_documentation() -> None:
+    docs = {
+        "terminal.run": {
+            "desc": "Run a shell command in the workspace",
+            "args": "cmd",
+        },
+        "message.send": {"desc": "Send a Telegram message"},
+        "utility.list_tools": {"desc": "List tools"},
+    }
+    assert runtime.search_tool_docs("terminal", docs)[0] == "terminal.run"
+    assert runtime.search_tool_docs("shell command", docs)[0] == "terminal.run"
+    assert runtime.search_tool_docs("Telegram message", docs)[0] == "message.send"
+    assert runtime.search_tool_docs("missing capability", docs) == ()
+
+
+def test_completion_gate_requires_exact_verdict() -> None:
+    assert runtime.accepts_completion_verdict("ACCEPT")
+    assert runtime.accepts_completion_verdict("  accept\n")
+    assert not runtime.accepts_completion_verdict("ACCEPT because it looks fine")
+    assert not runtime.accepts_completion_verdict("CONTINUE")
+    assert not runtime.accepts_completion_verdict("щас гляну муху")
+
+
+def test_model_tool_reason_is_optional_and_model_authored() -> None:
+    assert runtime.model_tool_reason({"reason": "Проверяю каталог перед анализом"}) == (
+        "Проверяю каталог перед анализом"
+    )
+    assert runtime.model_tool_reason({"comment": "Looking up the docs"}) == (
+        "Looking up the docs"
+    )
+    assert runtime.model_tool_reason({"purpose": "Compare results"}) == "Compare results"
+    assert runtime.model_tool_reason({}) == ""
+
+
+def test_json_tool_reason_survives_legacy_conversion() -> None:
+    converted = runtime.json_tool_payload_to_legacy(
+        {
+            "tool": "terminal.run",
+            "reason": "Проверяю & объясняю",
+            "args": {"cmd": "ls -la"},
+        },
+        {"terminal.run"},
+    )
+    assert converted is not None
+    tool, attrs, body = converted
+    assert tool == "terminal.run"
+    assert 'reason="Проверяю &amp; объясняю"' in attrs
+    assert 'cmd="ls -la"' in attrs
+    assert body == ""
+    assert runtime.json_tool_payload_to_legacy(
+        {"tool": "unknown.tool", "reason": "nope"},
+        {"terminal.run"},
+    ) is None

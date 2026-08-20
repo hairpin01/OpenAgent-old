@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from cubkit import load_strings
+import Settings as OpenAgentSettings
+from Settings import debug_log
 
 from core.lib.loader.module_base import ModuleBase, bot_command, callback, command
 from core.lib.loader.module_config import (
@@ -39,6 +41,8 @@ from core.lib.loader.module_config import (
 
 if TYPE_CHECKING:
     from core.lib.types import InlineMessage, Event
+
+OpenAgentSettings.configure_debug(OpenAgentSettings.debug_for_artifact(__file__))
 
 try:
     from OpenAgentLib.OpenAgentMixins import (
@@ -76,8 +80,9 @@ class OpenAgent(
     _OpenAgentToolRegistryMixin,
     ModuleBase,
 ):
+    DEBUG = OpenAgentSettings.DEBUG
     name = "OpenAgent"
-    version = "0.8.1-main.build:1050"
+    version = "0.8.1-main.build:1052"
     author = "@dev_dolbaeb && @Hairpin00"
     description = {
         "ru": "ИИ агент в юзерботе с новой архитектурой инструментов",
@@ -86,6 +91,12 @@ class OpenAgent(
         "linux": "AI agent daemon with tool-oriented runtime",
     }
     strings = load_strings()
+
+    def _debug_log(self, event: str, **fields: Any) -> None:
+        if not self.DEBUG:
+            return
+        debug_log(self.log, event, **fields)
+
     PROVIDERS = (
         "openai",
         "google",
@@ -310,12 +321,12 @@ class OpenAgent(
                 ConfigValue(
                     "agent_max_steps",
                     6,
-                    description="Maximum tool-call rounds per request",
+                    description="Maximum model loop iterations before forced finalization",
                     validator=Integer(min=1, max=15),
                 ),
                 ConfigValue(
                     "agent_max_model_calls",
-                    8,
+                    10,
                     description="Maximum provider attempts in the main agent loop, including retries",
                     validator=Integer(min=1, max=20),
                 ),

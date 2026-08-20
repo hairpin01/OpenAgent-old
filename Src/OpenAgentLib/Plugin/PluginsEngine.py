@@ -38,9 +38,14 @@ from core.lib.loader.module_config import (
 from ..TodoService import _WHITESPACE_RE
 from ..AgentRuntime import (
     ModelCallBudget,
+    accepts_completion_verdict,
+    classify_agent_output,
+    extract_explicit_final,
     is_transient_provider_error,
+    json_tool_payload_to_legacy,
+    model_tool_reason,
     retry_delay,
-    should_request_thinking,
+    strip_explicit_final_regions,
     trim_messages_to_budget,
 )
 from ..SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
@@ -2704,6 +2709,14 @@ class _OpenAgentAgentLoopMixin:
                     )
                 elif after_hook.cancel and after_hook.reason:
                     agent_context.answer = after_hook.reason
+            if self.DEBUG:
+                self._debug_log(
+                    "agent.finish",
+                    answer=agent_context.answer,
+                    agent_log=agent_log,
+                    thinking_notes=thinking_notes,
+                    tool_trace=tool_trace,
+                )
             return (
                 (agent_context.answer or "").strip(),
                 agent_log,
@@ -2745,10 +2758,24 @@ class _OpenAgentAgentLoopMixin:
         status_event = agent_context.status_event
         system_override = agent_context.system_override
         flash_mode = bool(agent_context.flash_mode)
-        model_call_limit = max(1, int(self.config.get("agent_max_model_calls", 8) or 8))
+        model_call_limit = max(
+            1, int(self.config.get("agent_max_model_calls", 10) or 10)
+        )
         deadline_seconds = max(1, int(self.config.get("agent_deadline", 180) or 180))
         deadline_at = time.monotonic() + deadline_seconds
         call_budget = ModelCallBudget(model_call_limit)
+        executed_tool_names: set[str] = set()
+        if self.DEBUG:
+            self._debug_log(
+                "agent.start",
+                provider=provider,
+                model=self._model(provider),
+                prompt=prompt,
+                attachments=attachments,
+                flash_mode=flash_mode,
+                model_call_limit=model_call_limit,
+                deadline_seconds=deadline_seconds,
+            )
 
         async def ask_provider(
             call_messages: list[dict[str, Any]],
@@ -2768,7 +2795,17 @@ class _OpenAgentAgentLoopMixin:
                 call_messages,
                 max(512, context_window - reserve),
             )
-            return await asyncio.wait_for(
+            if self.DEBUG:
+                self._debug_log(
+                    "provider.request",
+                    provider=provider,
+                    model=self._model(provider),
+                    messages=budgeted_messages,
+                    max_tokens_override=max_tokens_override,
+                    budget_used=call_budget.used,
+                    budget_remaining=call_budget.remaining,
+                )
+            response = await asyncio.wait_for(
                 self._ask_provider_with_reconnect(
                     provider,
                     budgeted_messages,
@@ -2782,6 +2819,66 @@ class _OpenAgentAgentLoopMixin:
                 ),
                 timeout=remaining,
             )
+            if self.DEBUG:
+                self._debug_log(
+                    "provider.response",
+                    provider=provider,
+                    model=self._model(provider),
+                    response=response,
+                    token_usage=self._last_token_usage,
+                    budget_used=call_budget.used,
+                    budget_remaining=call_budget.remaining,
+                )
+            return response
+
+        async def verify_final(candidate: str) -> bool:
+            if not call_budget.remaining:
+                if self.DEBUG:
+                    self._debug_log(
+                        "agent.final_gate",
+                        candidate=candidate,
+                        verdict="<budget-exhausted>",
+                        accepted=False,
+                    )
+                return False
+            gate_messages: list[dict[str, str]] = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are OpenAgent's completion gate. Decide whether the candidate is a "
+                        "genuinely completed answer to the user's request. Reject promises, plans, "
+                        "acknowledgements, statements about what will be done next, and claims that "
+                        "lack results. Accept direct informational answers and completed work reports. "
+                        "Reply with exactly ACCEPT or CONTINUE."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"User request:\n{prompt}\n\n"
+                        f"Executed tools: {', '.join(sorted(executed_tool_names)) or 'none'}\n\n"
+                        f"Candidate final answer:\n{candidate}"
+                    ),
+                },
+            ]
+            try:
+                verdict = await ask_provider(gate_messages, max_tokens_override=64)
+            except RuntimeError as exc:
+                if "model-call budget exhausted" not in str(exc):
+                    raise
+                return False
+            if cancel_token and cancel_token in self._cancelled_generations:
+                raise RuntimeError("Generation cancelled")
+            accepted = accepts_completion_verdict(verdict)
+            if self.DEBUG:
+                self._debug_log(
+                    "agent.final_gate",
+                    candidate=candidate,
+                    verdict=verdict,
+                    accepted=accepted,
+                    executed_tool_names=sorted(executed_tool_names),
+                )
+            return accepted
 
         if provider == "google":
             user_content = self._build_google_content(prompt, attachments)
@@ -2812,24 +2909,12 @@ class _OpenAgentAgentLoopMixin:
 
         if compacted_context:
             agent_log.append("context.compact")
-        thinking_enabled = (
-            should_request_thinking(
-                prompt,
-                self._reasoning_effort(),
-                flash_mode=flash_mode,
-            )
-            and model_call_limit >= 2
-        )
+        thinking_enabled = False
         configured_steps = max(1, int(self.config.get("agent_max_steps", 6) or 6))
         tool_round_budget = call_budget.tool_rounds(
             thinking_enabled=thinking_enabled,
             configured_steps=configured_steps,
-            final_attempts=(
-                2
-                if provider
-                in ("openai", "openrouter", "groq", "deepseek", "xai", "other")
-                else 1
-            ),
+            final_attempts=3,
         )
         max_steps = min(
             self.AGENT_MAX_STEPS,
@@ -2840,16 +2925,8 @@ class _OpenAgentAgentLoopMixin:
 
         if cancel_token and cancel_token in self._cancelled_generations:
             raise RuntimeError("Generation cancelled")
-        think_messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": self._thinking_system_prompt(flash_mode=flash_mode),
-            }
-        ]
-        think_messages.extend(history)
-        think_messages.append({"role": "user", "content": user_content})
         agent_context.messages = messages
-        agent_context.thinking_messages = think_messages
+        agent_context.thinking_messages = []
         messages_hook = await self._run_plugin_hooks(
             "before_agent_messages", agent_context
         )
@@ -2864,60 +2941,21 @@ class _OpenAgentAgentLoopMixin:
                 raw_answer = messages_hook.reason or ""
             return await finish_agent(raw_answer)
         messages = agent_context.messages or messages
-        think_messages = agent_context.thinking_messages or think_messages
-        think_answer = await ask_provider(think_messages) if thinking_enabled else ""
-
-        think_calls = [
-            call
-            for call in self._extract_tool_calls(think_answer or "")
-            if (call[0] or "").lower().strip() == "thinking.note"
-        ]
-        thinking_outputs: list[str] = []
-        for tool_name, attrs_raw, body in think_calls[:1]:
-            if cancel_token and cancel_token in self._cancelled_generations:
-                raise RuntimeError("Generation cancelled")
-            output = await self._dispatch_tool(
-                tool_name,
-                attrs_raw,
-                body,
-                source_event,
-                status_event,
-                agent_log,
-                started_at=started_at,
-                thinking_notes=thinking_notes,
-            )
-            self._remember_tool_output(chat_id, tool_name, output)
-            thinking_outputs.append(
-                self._format_tool_call_for_context(
-                    chat_id,
-                    tool_name,
-                    attrs_raw,
-                    body,
-                    output,
-                )
-            )
-        if thinking_outputs:
-            think_assistant_msg = {"role": "assistant", "content": think_answer or ""}
-            think_output_msg = {
-                "role": "user",
-                "content": "\n\n".join(thinking_outputs)
-                + "\n\nNow proceed with the actual task.",
-            }
-            messages.append(think_assistant_msg)
-            messages.append(think_output_msg)
-            tool_trace.append(
-                {
-                    "role": "assistant",
-                    "content": "OpenAgent tool trace:\n"
-                    + "\n\n".join(thinking_outputs),
-                }
-            )
 
         if flash_mode:
-            if cancel_token and cancel_token in self._cancelled_generations:
-                raise RuntimeError("Generation cancelled")
-            answer = await ask_provider(messages)
-            return await finish_agent(answer or "")
+            while call_budget.remaining:
+                if cancel_token and cancel_token in self._cancelled_generations:
+                    raise RuntimeError("Generation cancelled")
+                answer = await ask_provider(messages)
+                if cancel_token and cancel_token in self._cancelled_generations:
+                    raise RuntimeError("Generation cancelled")
+                runtime_comment = self._runtime_comment_message(cancel_token)
+                if not runtime_comment:
+                    return await finish_agent(answer or "")
+                messages.append({"role": "assistant", "content": answer or ""})
+                messages.append(runtime_comment)
+                agent_log.append("user.comment")
+            return await finish_agent(self.strings("tools_no_final"))
 
         for _ in range(max_steps):
             if cancel_token and cancel_token in self._cancelled_generations:
@@ -2927,16 +2965,42 @@ class _OpenAgentAgentLoopMixin:
                 messages.append(runtime_comment)
                 agent_log.append("user.comment")
 
-            answer = await ask_provider(messages)
+            try:
+                answer = await ask_provider(messages)
+            except RuntimeError as exc:
+                if "model-call budget exhausted" not in str(exc):
+                    raise
+                break
+            if cancel_token and cancel_token in self._cancelled_generations:
+                raise RuntimeError("Generation cancelled")
+            runtime_comment = self._runtime_comment_message(cancel_token)
+            if runtime_comment:
+                messages.append({"role": "assistant", "content": answer or ""})
+                messages.append(runtime_comment)
+                agent_log.append("user.comment")
+                continue
 
-            tool_calls = self._extract_tool_calls(answer or "")
+            tool_calls = self._extract_tool_calls(strip_explicit_final_regions(answer))
+            output_kind, output_text = classify_agent_output(
+                answer,
+                has_tool_calls=bool(tool_calls),
+            )
+            if self.DEBUG:
+                self._debug_log(
+                    "agent.turn",
+                    raw_answer=answer,
+                    output_kind=output_kind,
+                    output_text=output_text,
+                    tool_calls=[name for name, _attrs, _body in tool_calls],
+                    executed_tool_names=sorted(executed_tool_names),
+                )
             if not tool_calls:
                 tool_error = self._invalid_tool_call_error(answer or "")
                 if tool_error:
                     invalid_tool_retries += 1
                     agent_log.append(f"tool_error: {tool_error[:220]}")
                     if invalid_tool_retries > 2:
-                        return await finish_agent(tool_error)
+                        return await finish_agent(self.strings("tools_no_final"))
                     messages.append({"role": "assistant", "content": answer or ""})
                     messages.append(
                         {
@@ -2946,17 +3010,47 @@ class _OpenAgentAgentLoopMixin:
                         }
                     )
                     continue
-                clean_answer = (answer or "").strip()
-                runtime_comment = self._runtime_comment_message(cancel_token)
-                if runtime_comment:
-                    messages.append({"role": "assistant", "content": answer or ""})
-                    messages.append(runtime_comment)
-                    agent_log.append("user.comment")
-                    continue
-                if clean_answer or not agent_log:
-                    return await finish_agent(clean_answer)
-                break
+                if output_kind == "final":
+                    if await verify_final(output_text):
+                        agent_log.append("answer.final")
+                        return await finish_agent(output_text)
+                    if self.DEBUG:
+                        self._debug_log(
+                            "agent.final_rejected",
+                            reason="semantic_gate_continue",
+                            final=output_text,
+                        )
+                note = output_text
+                if note:
+                    thinking_notes.append(note)
+                    agent_log.append("thinking.auto")
+                messages.append({"role": "assistant", "content": answer or ""})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "The completion gate classified that response as unfinished. "
+                            "Continue the task: call utility.search_tool if you need to discover "
+                            "the right capability, execute the required tools, or when the work is "
+                            "actually complete return exactly one ```final``` block. Do not merely "
+                            "promise what you will do."
+                        ),
+                    }
+                )
+                continue
             invalid_tool_retries = 0
+
+            model_reasons: list[str] = []
+            for tool_name, attrs_raw, _body in tool_calls:
+                if tool_name == "thinking.note":
+                    continue
+                attrs = self._parse_xml_attrs(attrs_raw)
+                reason = model_tool_reason(attrs)
+                if reason:
+                    model_reasons.append(reason)
+            if model_reasons:
+                thinking_notes.extend(model_reasons)
+                agent_log.append("thinking.model_tool_reason")
 
             raw_outputs = await self._dispatch_agent_tool_batch(
                 tool_calls,
@@ -2967,6 +3061,21 @@ class _OpenAgentAgentLoopMixin:
                 thinking_notes=thinking_notes,
                 cancel_token=cancel_token,
             )
+            executed_tool_names.update(
+                str(name).strip().lower()
+                for name, _attrs, _body in tool_calls
+                if str(name).strip()
+            )
+            if self.DEBUG:
+                self._debug_log(
+                    "tools.complete",
+                    tool_calls=[
+                        {"tool": name, "attrs": attrs, "body": body}
+                        for name, attrs, body in tool_calls
+                    ],
+                    outputs=raw_outputs,
+                    executed_tool_names=sorted(executed_tool_names),
+                )
             outputs: list[str] = []
             for (tool_name, attrs_raw, body), output in zip(
                 tool_calls, raw_outputs, strict=True
@@ -3004,42 +3113,76 @@ class _OpenAgentAgentLoopMixin:
             {
                 "role": "user",
                 "content": (
-                    "Stop using tools. Give the final user-facing answer now, in plain text only. "
-                    "Do not output tool_call fenced blocks, XML tags, or tool calls."
+                    "Stop using tools. Give the completed user-facing answer now inside exactly "
+                    "one ```final``` fenced block. Do not output tool calls or any text outside "
+                    "that block."
                 ),
             }
         )
-        try:
-            answer = await ask_provider(messages)
-        except RuntimeError as exc:
-            if "model-call budget exhausted" not in str(exc):
-                raise
-            return await finish_agent(self.strings("tools_no_final"))
-        clean = (answer or "").strip()
-        if (
-            not clean
-            and provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other")
-            and self._uses_completion_tokens(provider)
-        ):
+        expanded_completion = False
+        while call_budget.remaining:
+            if cancel_token and cancel_token in self._cancelled_generations:
+                raise RuntimeError("Generation cancelled")
+            try:
+                answer = await ask_provider(
+                    messages,
+                    max_tokens_override=(
+                        max(4096, int(self.config["max_tokens"]) * 2)
+                        if expanded_completion
+                        else None
+                    ),
+                )
+            except RuntimeError as exc:
+                if "model-call budget exhausted" not in str(exc):
+                    raise
+                break
+            if cancel_token and cancel_token in self._cancelled_generations:
+                raise RuntimeError("Generation cancelled")
+            runtime_comment = self._runtime_comment_message(cancel_token)
+            if runtime_comment:
+                messages.append({"role": "assistant", "content": answer or ""})
+                messages.append(runtime_comment)
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Honor the latest user comment, then return exactly one ```final``` "
+                            "block with the completed answer."
+                        ),
+                    }
+                )
+                agent_log.append("user.comment")
+                continue
+            clean = extract_explicit_final(answer) or ""
+            if clean:
+                if call_budget.remaining and await verify_final(clean):
+                    return await finish_agent(clean)
+                if self.DEBUG:
+                    self._debug_log(
+                        "agent.final_rejected",
+                        reason="forced_final_semantic_gate_continue",
+                        final=clean,
+                    )
             max_tokens = int(self.config["max_tokens"])
-            if int(self._last_token_usage.get("output_tokens", 0) or 0) >= max_tokens:
+            completion_exhausted = (
+                provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other")
+                and self._uses_completion_tokens(provider)
+                and int(self._last_token_usage.get("output_tokens", 0) or 0)
+                >= max_tokens
+            )
+            if completion_exhausted and not expanded_completion:
+                expanded_completion = True
                 messages.append(
                     {
                         "role": "user",
                         "content": (
                             "Your previous final answer was empty because the completion budget was exhausted. "
-                            "Answer now in 800 characters or less. Plain text only. No tools."
+                            "Answer now in 800 characters or less inside one ```final``` block. No tools."
                         ),
                     }
                 )
-                if call_budget.remaining:
-                    answer = await ask_provider(
-                        messages,
-                        max_tokens_override=max(4096, max_tokens * 2),
-                    )
-                    clean = (answer or "").strip()
-        if clean:
-            return await finish_agent(clean)
+                continue
+            break
         return await finish_agent(self.strings("tools_no_final"))
 
     def _tool_names(self) -> set[str]:
@@ -3050,40 +3193,7 @@ class _OpenAgentAgentLoopMixin:
         self, payload: dict[str, Any]
     ) -> tuple[str, str, str] | None:
         """Convert the new JSON tool protocol into legacy attrs/body for handlers."""
-        tool_name = (
-            str(payload.get("tool") or payload.get("name") or "").lower().strip()
-        )
-        if tool_name not in self._tool_names():
-            return None
-        args_raw = payload.get("args") or {}
-        if not isinstance(args_raw, dict):
-            args_raw = {}
-        body_value = payload.get("body")
-        if body_value is None:
-            for key in (
-                "body",
-                "content",
-                "text",
-                "message",
-                "command",
-                "query",
-                "prompt",
-            ):
-                if key in args_raw:
-                    body_value = args_raw.get(key)
-                    break
-        body = "" if body_value is None else str(body_value)
-        attrs: list[str] = []
-        for key, value in args_raw.items():
-            if value is None or key == "body":
-                continue
-            if isinstance(value, (dict, list, tuple)):
-                value = json.dumps(value, ensure_ascii=False)
-            safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(key).strip())
-            if not safe_key:
-                continue
-            attrs.append(f'{safe_key}="{html.escape(str(value), quote=True)}"')
-        return tool_name, " ".join(attrs), body
+        return json_tool_payload_to_legacy(payload, self._tool_names())
 
     def _iter_json_tool_payloads(self, raw: str) -> list[dict[str, Any]]:
         """Parse one JSON tool payload or a list of payloads without raising."""

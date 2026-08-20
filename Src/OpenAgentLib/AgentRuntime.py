@@ -2,12 +2,22 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import math
 import re
 from typing import Any, Iterable
 
 _TRANSIENT_HTTP_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b", re.IGNORECASE)
+_FINAL_FENCE_RE = re.compile(
+    r"```final(?:_answer)?[ \t]*\r?\n(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+_FINAL_TAG_RE = re.compile(
+    r"<final(?:_answer)?>(.*?)</final(?:_answer)?>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class ModelCallBudget:
@@ -35,6 +45,124 @@ class ModelCallBudget:
     ) -> int:
         available = self.limit - int(thinking_enabled) - max(1, final_attempts)
         return min(max(0, int(configured_steps)), max(0, available))
+
+
+def extract_explicit_final(value: Any) -> str | None:
+    """Extract an explicitly marked final answer from model output."""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    has_final_marker = bool(
+        re.search(
+            r"```final(?:_answer)?[ \t]*\r?\n|<final(?:_answer)?>",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    if has_final_marker and re.search(
+        r"```tool_call\b|<tool_call\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return None
+    for pattern in (_FINAL_FENCE_RE, _FINAL_TAG_RE):
+        match = pattern.search(text)
+        if match:
+            final = match.group(1).strip()
+            return final or None
+    return None
+
+
+def strip_explicit_final_regions(value: Any) -> str:
+    """Remove final-answer regions before scanning output for executable tools."""
+
+    text = str(value or "")
+    if re.search(
+        r"```final(?:_answer)?[ \t]*\r?\n|<final(?:_answer)?>",
+        text,
+        re.IGNORECASE,
+    ) and re.search(r"```tool_call\b|<tool_call\b", text, re.IGNORECASE):
+        return ""
+    for pattern in (_FINAL_FENCE_RE, _FINAL_TAG_RE):
+        text = pattern.sub("", text)
+    return text
+
+
+def intermediate_note(value: Any, *, limit: int = 1200) -> str:
+    """Normalize non-final model prose for the user-visible thinking log."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"```tool_call.*?```", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(
+        r"<tool_call>.*?</tool_call>", "", text, flags=re.IGNORECASE | re.DOTALL
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[: max(1, int(limit))]
+
+
+def classify_agent_output(value: Any, *, has_tool_calls: bool) -> tuple[str, str]:
+    """Classify one model turn as tools, explicit final, or intermediate prose."""
+
+    if has_tool_calls:
+        return "tools", ""
+    final = extract_explicit_final(value)
+    if final is not None:
+        return "final", final
+    return "intermediate", intermediate_note(value)
+
+
+def accepts_completion_verdict(value: Any) -> bool:
+    """Accept only the completion gate's exact affirmative token."""
+
+    return bool(re.match(r"^\s*ACCEPT\s*$", str(value or ""), re.IGNORECASE))
+
+
+def model_tool_reason(values: dict[str, Any], *, limit: int = 700) -> str:
+    """Return an optional model-authored reason/comment for a tool call."""
+
+    reason = str(
+        values.get("reason") or values.get("comment") or values.get("purpose") or ""
+    ).strip()
+    return reason[: max(1, int(limit))]
+
+
+def json_tool_payload_to_legacy(
+    payload: dict[str, Any],
+    allowed_names: Iterable[str],
+) -> tuple[str, str, str] | None:
+    """Convert JSON tool protocol to validated legacy attrs/body."""
+
+    tool_name = str(payload.get("tool") or payload.get("name") or "").lower().strip()
+    allowed = {str(name).strip().lower() for name in allowed_names}
+    if tool_name not in allowed:
+        return None
+    args_raw = payload.get("args") or {}
+    if not isinstance(args_raw, dict):
+        args_raw = {}
+    body_value = payload.get("body")
+    if body_value is None:
+        for key in ("body", "content", "text", "message", "command", "query", "prompt"):
+            if key in args_raw:
+                body_value = args_raw.get(key)
+                break
+    body = "" if body_value is None else str(body_value)
+    attrs: list[str] = []
+    for reason_key in ("reason", "comment", "purpose"):
+        reason_value = payload.get(reason_key)
+        if reason_value is not None and reason_key not in args_raw:
+            attrs.append(f'{reason_key}="{html.escape(str(reason_value), quote=True)}"')
+    for key, value in args_raw.items():
+        if value is None or key == "body":
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            value = json.dumps(value, ensure_ascii=False)
+        safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(key).strip())
+        if safe_key:
+            attrs.append(f'{safe_key}="{html.escape(str(value), quote=True)}"')
+    return tool_name, " ".join(attrs), body
 
 
 def estimate_text_tokens(value: Any) -> int:
@@ -180,58 +308,67 @@ def retry_delay(attempt: int, *, cap: float = 8.0) -> float:
     return min(cap, 0.5 * (2 ** max(0, attempt - 1)))
 
 
-_TOOL_GROUP_KEYWORDS = {
-    "code": ("code", "python", "file", "module", "код", "файл", "модул"),
-    "context": ("context", "history", "контекст", "истори"),
-    "dialog": ("dialog", "chat", "диалог", "чат"),
-    "file": ("file", "folder", "directory", "файл", "папк", "директор"),
-    "mcub": ("mcub", "userbot", "юзербот"),
-    "message": ("message", "send", "сообщ", "отправ"),
-    "skills": ("skill", "knowledge", "скилл", "навык"),
-    "terminal": ("terminal", "command", "shell", "терминал", "команд"),
-    "todo": ("todo", "task", "задач", "план"),
-    "web": ("web", "search", "internet", "сайт", "поиск", "интернет"),
-}
-
-
 def relevant_tool_names(
     prompt: str,
     names: Iterable[str],
-    *,
-    limit: int = 16,
 ) -> tuple[str, ...]:
-    """Select a compact tool index; full discovery remains available on demand."""
+    """Return the complete stable tool index without keyword-based routing."""
 
+    del prompt
     available = sorted(
         {str(name).strip().lower() for name in names if str(name).strip()}
     )
-    lowered = str(prompt or "").lower()
-    groups = {
-        group
-        for group, keywords in _TOOL_GROUP_KEYWORDS.items()
-        if any(keyword in lowered for keyword in keywords)
-    }
-    essentials = {
-        "thinking.note",
-        "utility.list_tools",
-        "utility.tool_help",
-        "utility.plugin_docs",
-    }
-    selected = [
-        name
-        for name in available
-        if name in essentials or name.split(".", 1)[0] in groups
-    ]
-    return tuple(selected[: max(1, limit)])
+    return tuple(available)
+
+
+def search_tool_docs(
+    query: str,
+    docs: dict[str, dict[str, Any]],
+    *,
+    limit: int = 8,
+) -> tuple[str, ...]:
+    """Rank tools by name and normalized documentation text."""
+
+    needle = str(query or "").strip().lower()
+    terms = tuple(dict.fromkeys(re.findall(r"[\w.-]+", needle, re.UNICODE)))
+    if not terms:
+        return ()
+    ranked: list[tuple[int, str]] = []
+    for raw_name, raw_doc in docs.items():
+        name = str(raw_name).strip().lower()
+        doc_text = json.dumps(raw_doc, ensure_ascii=False, default=str).lower()
+        haystack = f"{name} {doc_text}"
+        matched = sum(term in haystack for term in terms)
+        if not matched:
+            continue
+        score = matched * 20
+        if needle == name:
+            score += 1000
+        elif needle in name:
+            score += 300
+        score += sum(100 for term in terms if term in name)
+        if matched == len(terms):
+            score += 50
+        ranked.append((score, name))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return tuple(name for _score, name in ranked[: max(1, int(limit))])
 
 
 __all__ = [
     "ModelCallBudget",
+    "accepts_completion_verdict",
+    "classify_agent_output",
+    "extract_explicit_final",
     "estimate_messages_tokens",
     "estimate_text_tokens",
     "is_transient_provider_error",
+    "intermediate_note",
+    "json_tool_payload_to_legacy",
+    "model_tool_reason",
     "relevant_tool_names",
     "retry_delay",
+    "search_tool_docs",
     "should_request_thinking",
+    "strip_explicit_final_regions",
     "trim_messages_to_budget",
 ]

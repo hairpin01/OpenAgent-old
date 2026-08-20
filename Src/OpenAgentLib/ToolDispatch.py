@@ -14,7 +14,7 @@ import contextlib
 import json
 
 from .Manager.OASession import OASession
-from .AgentRuntime import relevant_tool_names
+from .AgentRuntime import relevant_tool_names, search_tool_docs
 from .Plugin.PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
 from .SystemPlugins import (
     SystemTool,
@@ -300,6 +300,20 @@ class _OpenAgentToolRegistryMixin:
             if query not in docs:
                 return f"No documentation found for '{query}'. Available tools: {', '.join(sorted(self._get_tool_map().keys()))}"
             return self._format_tool_doc(query, docs[query])
+        if tool_name == "utility.search_tool":
+            attrs = self._parse_xml_attrs(attrs_raw)
+            query = str(body.strip() or attrs.get("query") or attrs.get("name") or "")
+            if not query:
+                return (
+                    "Specify what the tool should do, e.g. query='run a shell command'"
+                )
+            docs = self._get_tool_docs()
+            matches = search_tool_docs(query, docs, limit=8)
+            if not matches:
+                return f"No tools matched: {query}"
+            lines = [f"🔎 Tool matches for: {query}"]
+            lines.extend(self._format_tool_doc(name, docs[name]) for name in matches)
+            return "\n\n".join(lines)
         if tool_name == "utility.list_tools":
             all_docs = self._get_tool_docs()
             groups: dict[str, list[str]] = {}
@@ -605,6 +619,13 @@ class _OpenAgentToolRegistryMixin:
             return f"Error: Tool <{name}> not found in registry.{suggestion}"
 
         agent_log.append(name)
+        if self.DEBUG:
+            self._debug_log(
+                "tool.start",
+                tool=name,
+                attrs_raw=attrs_raw,
+                body=body,
+            )
         if name == "thinking.note" and thinking_notes is not None:
             note = self._thinking_note_text(attrs_raw, body)
             if note:
@@ -725,6 +746,12 @@ class _OpenAgentToolRegistryMixin:
             elif tool_context.result is not HOOK_NO_RESULT:
                 result = tool_context.result
             result = "" if result is None else str(result)
+            if self.DEBUG:
+                self._debug_log(
+                    "tool.result",
+                    tool=name,
+                    result=result,
+                )
 
             if status_event:
                 elapsed = (
@@ -746,6 +773,13 @@ class _OpenAgentToolRegistryMixin:
                 )
             return result
         except Exception as e:
+            if self.DEBUG:
+                self._debug_log(
+                    "tool.error",
+                    tool=name,
+                    error_type=type(e).__name__,
+                    error=str(e),
+                )
             err_type = type(e).__name__
             details = str(e).strip() or "no details"
             error_result = (
@@ -1198,13 +1232,17 @@ class _OpenAgentRuntimeToolsMixin:
             "\n## Tool call format\n"
             "For external state or actions, output one or more fenced JSON blocks. Each block is one tool call:\n"
             "```tool_call\n"
-            '{"tool":"tool.name","args":{"key":"value"},"body":"optional long text"}\n'
+            '{"tool":"tool.name","reason":"why you call it and what result you expect",'
+            '"args":{"key":"value"},"body":"optional long text"}\n'
             "```\n"
             "Use args for short structured values and body for long content. Batch independent calls. "
             "Never nest a tool call inside thinking.note.\n"
-            "Only fenced tool_call JSON is executable; otherwise answer in plain text.\n"
-            f"Tool groups: {groups or 'none'}. Relevant tools: {tlist or 'use utility.list_tools'}.\n"
-            "Use utility.list_tools to discover tools and utility.tool_help for exact arguments. "
+            "Prefer adding your own concise top-level `reason` to each tool call. When present, "
+            "OpenAgent shows it as the Thinking progress comment; it is optional.\n"
+            "Only fenced tool_call JSON is executable.\n"
+            f"Tool groups: {groups or 'none'}. Available tool names: {tlist or 'none'}.\n"
+            "Use utility.search_tool with a natural-language capability query to find the right tool. "
+            "Use utility.list_tools to browse tools and utility.tool_help for exact arguments. "
             "Use utility.plugin_docs for plugin APIs. Do not guess tool names.\n"
             "mcub.* bodies omit the userbot command prefix. Keep todo.* updated for multi-step work. "
             "Use thinking.note only for meaningful progress. Never explain tool calls."
@@ -1231,6 +1269,22 @@ class _OpenAgentRuntimeToolsMixin:
         ):
             prompt += self._repo_context_prompt()
         prompt += self._active_plugins_prompt()
+        prompt += (
+            "\n\n## Agent loop completion protocol (mandatory)\n"
+            "Each response must represent exactly one next step:\n"
+            "1. If work requires an action or external state, CALL THE TOOL NOW using "
+            "```tool_call``` blocks. Never say that you will do it later.\n"
+            "If you do not know the tool name, call utility.search_tool instead of guessing.\n"
+            "2. If you are still reasoning and no tool is ready, output a concise progress note. "
+            "OpenAgent records it and immediately calls you again.\n"
+            "3. Only when the user's task is actually complete, return the user-facing answer "
+            "inside exactly one fenced block:\n"
+            "```final\n"
+            "completed answer for the user\n"
+            "```\n"
+            "Plain text is NEVER a final answer. Do not mix final and tool_call blocks. "
+            "Do not announce an action instead of calling its tool."
+        )
         return prompt
 
     async def _run_terminal(self, command: str) -> str:

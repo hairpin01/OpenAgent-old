@@ -30,7 +30,7 @@ class _OpenAgentLifecycleMixin:
             "timeout": 180,
             "provider_reconnect_attempts": 2,
             "agent_max_steps": 6,
-            "agent_max_model_calls": 8,
+            "agent_max_model_calls": 10,
             "agent_deadline": 180,
             "context_window_tokens": 16000,
             "context_reserve_tokens": 2400,

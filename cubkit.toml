@@ -9,6 +9,7 @@ requires = "aiohttp"
 source = 'Src'
 entrypoint = "OpenAgentMain.py"
 packages = ['OpenAgentLib']
+sources = ['MCUBEvent.py', 'Settings.py']
 locales = 'locales'
 output = 'dist/OpenDebug.py'
 debug_output = 'dist/OpenDebug.py'

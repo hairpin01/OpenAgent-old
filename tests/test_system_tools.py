@@ -27,6 +27,7 @@ def test_registry_loads_explicit_parallel_metadata() -> None:
     registry.validate()
 
     assert tools["utility.list_tools"].parallel_safe
+    assert tools["utility.search_tool"].parallel_safe
     assert not tools["todo.current"].parallel_safe
     assert not tools["code.choose_filename"].parallel_safe
     assert not tools["todo.clear"].parallel_safe

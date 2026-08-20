@@ -12,12 +12,41 @@ and packaged into one artifact by CubKit.
 - `OpenAgentLib/Plugin/PluginsEngine.py` integrates plugins, tools and providers.
 - `OpenAgentLib/SystemPlugins/` contains dynamically discovered tool descriptors.
 
-The default runtime skips the separate progress-note model call when
-`reasoning_effort=off`, limits a request to six tool rounds/eight provider
-attempts in the main agent loop (including retries),
-and applies a 180-second overall deadline. Read-only tools marked
+The runtime uses one explicit agent loop instead of a separate pre-thinking
+request. Plain model prose is recorded as an intermediate Thinking note and the
+model is called again. Tool blocks are executed immediately. The loop stops only
+when the model returns a fenced `final` answer, for example:
+
+````text
+```final
+The requested work is complete.
+```
+````
+
+The default request is limited to six loop iterations/ten provider attempts
+(including retries) and a 180-second overall deadline. Flash mode remains a
+single direct response. Read-only tools marked
 `parallel_safe=True` may run concurrently when emitted in one batch. Context is
 budgeted with conservative token estimates instead of character counts.
+
+Tool discovery is model-driven rather than based on keywords in the user
+prompt. The model receives the complete tool-name index and can call
+`utility.search_tool` to search core/plugin tools by name, description,
+arguments, body usage and normalized documentation. Every proposed final answer
+passes a short semantic `ACCEPT`/`CONTINUE` gate, so acknowledgements such as
+"сейчас посмотрю" return to the loop instead of becoming the user-facing answer.
+
+## Debug tracing
+
+`Src/Settings.py` contains the single `DEBUG` constant. Source and release
+artifacts keep it `False`; an artifact whose configured filename contains
+`debug` enables tracing at runtime without mutating tracked source files.
+
+When enabled, structured `[OpenAgent DEBUG]` lines include provider
+requests/responses, loop decisions, completion-gate verdicts, tool inputs and
+outputs, budgets and final state. Credential fields and credential patterns
+inside raw strings (Bearer/API keys, cookies, passwords and Telegram tokens) are
+redacted. Strings, collections and complete events have hard size limits.
 
 Important tuning options:
 

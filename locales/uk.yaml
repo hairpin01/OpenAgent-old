@@ -57,7 +57,7 @@ new_chat_placeholder: "Назва (або Enter для автоматичної 
 rename_chat_placeholder: "Нова назва..."
 auto_name_prompt: "Створіть коротку назву сесії з 3–4 слів. Дайте у відповідь лише назву. Запит: {prompt}"
 oa_choose_chat: "Виберіть чат для продовження або створіть новий."
-tools_no_final: "Інструменти виконано, але модель не надала остаточного тексту."
+tools_no_final: "Цикл агента завершився до того, як модель надала явну фінальну відповідь."
 tool_call_bad_json: "Помилка tool call: модель повернула некоректний JSON ({error}).\nФрагмент: {preview}"
 tool_call_not_object: "Помилка tool call: елемент виклику інструмента має бути JSON-об’єктом."
 tool_call_unknown: "Помилка tool call: невідомий інструмент '{tool_name}'.{hint} Доступні приклади: {available}."

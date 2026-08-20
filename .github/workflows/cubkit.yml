@@ -36,9 +36,9 @@ jobs:
       - name: Build reproducible release twice
         if: steps.lint.outcome == 'success'
         run: |
-          cubkit build . --release --reproducible --quiet -o dist/module.py
+          cubkit build . --release --reproducible --quiet --skip-hook -o dist/module.py
           cp dist/module.py /tmp/cubkit-first.py
-          cubkit build . --release --reproducible --quiet -o dist/module.py
+          cubkit build . --release --reproducible --quiet --skip-hook -o dist/module.py
           cmp /tmp/cubkit-first.py dist/module.py
 
       - name: Upload release artifact

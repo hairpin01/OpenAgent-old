@@ -7,10 +7,15 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
-from .PluginCapabilities import CapabilityRequest, CapabilityResponse
+from .PluginCapabilities import (
+    CapabilityErrorCode,
+    CapabilityRequest,
+    CapabilityResponse,
+)
 from .PluginDiscovery import StaticPluginSource
 from .PluginHost import PluginHost, PluginHostOutcome, PluginHostRequest, SandboxMount
 from .ToolKernel import ToolCall
+from .ToolPolicy import ToolPolicyRequest
 
 
 class IsolatedPluginInvoker:
@@ -24,7 +29,8 @@ class IsolatedPluginInvoker:
         plugin_root: Path,
         openagent_source: Path,
         capability_handler: Callable[
-            [CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]
+            [ToolCall, ToolPolicyRequest, CapabilityRequest],
+            CapabilityResponse | Awaitable[CapabilityResponse],
         ],
     ) -> None:
         self._host = host
@@ -32,8 +38,15 @@ class IsolatedPluginInvoker:
         self._plugin_root = Path(plugin_root).resolve()
         self._openagent_source = Path(openagent_source).resolve()
         self._capability_handler = capability_handler
+        self._active_calls: dict[str, tuple[ToolCall, ToolPolicyRequest]] = {}
 
-    async def invoke(self, call: ToolCall, *, retryable: bool) -> PluginHostOutcome:
+    async def invoke(
+        self,
+        call: ToolCall,
+        policy_request: ToolPolicyRequest,
+        *,
+        retryable: bool,
+    ) -> PluginHostOutcome:
         module = call.spec.source_module
         source = self._sources.get(module)
         if source is None:
@@ -61,11 +74,27 @@ class IsolatedPluginInvoker:
             },
             retryable=retryable,
         )
-        return await self._host.call(
-            request,
-            mounts=(
-                SandboxMount(self._plugin_root, "/mnt/pluginroot", True),
-                SandboxMount(self._openagent_source, "/mnt/openagent", True),
-            ),
-            capability_handler=self._capability_handler,
-        )
+        self._active_calls[call.call_id] = (call, policy_request)
+        try:
+            return await self._host.call(
+                request,
+                mounts=(
+                    SandboxMount(self._plugin_root, "/mnt/pluginroot", True),
+                    SandboxMount(self._openagent_source, "/mnt/openagent", True),
+                ),
+                capability_handler=self._handle_capability_request,
+            )
+        finally:
+            self._active_calls.pop(call.call_id, None)
+
+    async def _handle_capability_request(
+        self, request: CapabilityRequest
+    ) -> CapabilityResponse:
+        active = self._active_calls.get(request.call_id)
+        if active is None:
+            return CapabilityResponse.denied(request, CapabilityErrorCode.DENIED)
+        call, policy_request = active
+        response = self._capability_handler(call, policy_request, request)
+        if hasattr(response, "__await__"):
+            response = await response
+        return response

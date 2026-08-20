@@ -12,10 +12,46 @@ and packaged into one artifact by CubKit.
 - `OpenAgentLib/Plugin/PluginsEngine.py` integrates plugins, tools and providers.
 - `OpenAgentLib/SystemPlugins/` contains dynamically discovered tool descriptors.
 
+## Tool runtime v2 migration
+
+OpenAgent now boots one v2 tool registry, policy engine, model boundary and
+executor. Native system tools are registered with explicit operation handlers;
+external tools are admitted from source with AST inspection and execute only in
+the Linux Bubblewrap host. The parent process never imports an external plugin.
+
+The migration lasts one release. Legacy plugin classes, `tool_registry`/
+`tool_map` declarations, and in-process plugin loaders are rejected with a
+typed migration error before their module code runs. Supported legacy model
+syntax remains a boundary parser only; it is normalized into an immutable v2
+`ToolCall` before policy evaluation.
+
+External plugins must publish a v2 `PluginManifest`, declare every tool alias
+and capability, and expose only JSON handlers. A host call verifies the mounted
+plugin file hash, plugin ID/version, declared entrypoint and tool ID before
+importing it inside Bubblewrap. Capability requests are correlated JSON frames
+and must be authorized by a call-bound parent grant; manifests cannot expand
+capabilities, confirmations, retries, or parallelism.
+
+Linux with `/usr/bin/bwrap` is required for external plugins. There is no
+unsandboxed fallback. To verify a release without live Telegram or network
+services, run:
+
+```bash
+python -m pytest -q
+cubkit check . --release
+cubkit lint . --release --no-cache
+cubkit build . --release --reproducible --quiet --skip-hook -o dist/module.py
+cp dist/module.py /tmp/cubkit-first.py
+cubkit build . --release --reproducible --quiet --skip-hook -o dist/module.py
+cmp /tmp/cubkit-first.py dist/module.py
+python -m py_compile dist/module.py
+```
+
 The runtime uses one explicit agent loop instead of a separate pre-thinking
 request. Plain model prose is recorded as an intermediate Thinking note and the
-model is called again. Tool blocks are executed immediately. The loop stops only
-when the model returns a fenced `final` answer, for example:
+model is called again. Tool blocks are executed immediately. A fenced `final`
+answer is supported, but ordinary plain text also completes the loop when the
+semantic completion gate accepts it. For example:
 
 ````text
 ```final
@@ -35,6 +71,13 @@ prompt. The model receives the complete tool-name index and can call
 arguments, body usage and normalized documentation. Every proposed final answer
 passes a short semantic `ACCEPT`/`CONTINUE` gate, so acknowledgements such as
 "сейчас посмотрю" return to the loop instead of becoming the user-facing answer.
+If the model still returns unfinished prose, a minimal action-router call turns
+it directly into a `tool_call`/`final` block instead of repeating the same
+conversation. Duplicate intermediate Thinking notes are suppressed.
+
+Tool calls may include an optional model-authored `reason`. When present, that
+exact text is shown as the Thinking progress comment; OpenAgent does not invent
+a replacement when the model omits it.
 
 ## Debug tracing
 

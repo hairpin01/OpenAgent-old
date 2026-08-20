@@ -200,7 +200,7 @@ def discover_system_tools(root: Path | None = None) -> dict[str, SystemTool]:
         return tools
 
     for file_path in sorted(root_path.rglob("*.py")):
-        if file_path.name in {"__init__.py", "base.py"} or file_path.name.startswith(
+        if file_path.name in {"__init__.py", "base.py", "native.py"} or file_path.name.startswith(
             "_"
         ):
             continue

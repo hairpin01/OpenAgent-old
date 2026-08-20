@@ -4,11 +4,9 @@ from __future__ import annotations
 from typing import Any, Callable
 from pathlib import Path
 import ast
-import sys
 import contextlib
 import asyncio
 import json
-import importlib
 from urllib.parse import quote
 import re
 import html
@@ -39,6 +37,7 @@ from ..TodoService import _WHITESPACE_RE
 from ..AgentRuntime import (
     ModelCallBudget,
     accepts_completion_verdict,
+    build_action_router_messages,
     classify_agent_output,
     extract_explicit_final,
     is_transient_provider_error,
@@ -48,7 +47,11 @@ from ..AgentRuntime import (
     strip_explicit_final_regions,
     trim_messages_to_budget,
 )
-from ..SystemPlugins import SystemTool, SystemToolRegistry, UserPluginRegistry
+from ..SystemPlugins import SystemTool, SystemToolRegistry
+from ..PluginDiscovery import inspect_v2_plugin_source
+from ..PluginSDK import LegacyPluginMigrationError
+from ..ToolKernel import ToolContext
+from ..ToolPolicy import ConfirmationState, ToolPolicyRequest
 from .PluginBase import AgentHookContext, OpenAgentPlugin, PluginHookResult
 
 
@@ -145,8 +148,8 @@ class _OpenAgentPluginSkillMixin:
         )
 
     async def _load_installed_plugins(self) -> None:
-        """Scan bundled + external plugin directories and register all plugins.
-        External plugins override bundled ones without warning."""
+        """Admit v2 plugin sources without importing their code in the parent."""
+        self._v2_plugin_sources = {}
         for plugins_dir in self._plugin_scan_dirs():
             for fpath in sorted(plugins_dir.glob("*.py")):
                 if fpath.name.startswith("_") or fpath.name == "__init__.py":
@@ -157,12 +160,12 @@ class _OpenAgentPluginSkillMixin:
                 ):
                     self.log.debug(f"Plugin skipped (disabled): {fpath.stem}")
                     continue
-                try:
-                    await self._register_plugin_from_file(fpath)
-                except Exception as exc:
-                    self.log.warning(f"Plugin load failed: {fpath.name} - {exc}")
-        await self._reload_plugin_config_values()
-        self._refresh_live_config_schema()
+                source = inspect_v2_plugin_source(fpath)
+                self._v2_plugin_sources[fpath.stem] = source
+        self.log.info(
+            "V2 plugin sources admitted for isolated execution: %s",
+            len(self._v2_plugin_sources),
+        )
 
     async def _reload_plugin_config_values(self) -> None:
         """Reload persisted config after plugins add dynamic ConfigValues."""
@@ -189,45 +192,10 @@ class _OpenAgentPluginSkillMixin:
             self.kernel._live_module_configs[self.name] = self.config
 
     async def _register_plugin_from_file(self, fpath: Path) -> None:
-        """Import a .py file, find *Plugin class, register it."""
-        module_name = (
-            f"openagent_plugins_{fpath.parent.name}_{fpath.stem}_{uuid.uuid4().hex[:8]}"
+        """Reject the removed in-process plugin execution API."""
+        raise LegacyPluginMigrationError(
+            f"plugin {fpath.name} cannot be loaded in-process; migrate it to v2"
         )
-        spec = importlib.util.spec_from_file_location(module_name, fpath)
-        if not spec or not spec.loader:
-            raise ImportError(f"Cannot load {fpath}")
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = mod
-        try:
-            spec.loader.exec_module(mod)
-        except Exception:
-            sys.modules.pop(module_name, None)
-            raise
-        plugin_cls = None
-        for attr_name in dir(mod):
-            attr = getattr(mod, attr_name)
-            if (
-                isinstance(attr, type)
-                and attr_name.endswith("Plugin")
-                and attr is not OpenAgentPlugin
-            ):
-                plugin_cls = attr
-                break
-        if not plugin_cls:
-            raise ValueError(f"No *Plugin class found in {fpath.name}")
-        plugin = plugin_cls(self)
-        self._register_plugin(plugin)
-        self._plugin_files[str(plugin.name).lower()] = fpath
-        if not self._is_builtin_plugin_file(fpath):
-            plugin_name = self._safe_plugin_name(plugin.name)
-            if plugin_name in self._disabled_plugins:
-                self._disabled_plugins.discard(plugin_name)
-                self._save_disabled_plugins()
-        on_load = getattr(plugin, "on_load", None)
-        if callable(on_load):
-            maybe_awaitable = on_load()
-            if asyncio.iscoroutine(maybe_awaitable):
-                await maybe_awaitable
 
     def _register_plugin(self, plugin: OpenAgentPlugin) -> None:
         """Register plugin: add config_defaults, tools, handlers."""
@@ -267,10 +235,16 @@ class _OpenAgentPluginSkillMixin:
         cached = getattr(self, "_tool_registry_cache", None)
         if isinstance(cached, tuple):
             return cached
-        names = set(getattr(self, "TOOL_REGISTRY", ()) or ())
-        names.update(self._get_tool_map().keys())
-        names.update((getattr(self, "_system_tools", {}) or {}).keys())
-        names.update(UserPluginRegistry(self._plugins).tool_names())
+        runtime = getattr(self, "_v2_runtime", None)
+        names = (
+            {
+                name
+                for spec in runtime.registry.specs()
+                for name in (spec.canonical_id, *spec.aliases)
+            }
+            if runtime is not None
+            else set()
+        )
         registry = tuple(sorted(names))
         self._tool_registry_cache = registry
         return registry
@@ -834,26 +808,17 @@ class _OpenAgentPluginSkillMixin:
 
     def _get_tool_docs(self, tool_name: str | None = None) -> dict:
         docs: dict[str, dict[str, str]] = {}
-        core_docs = self._core_tool_docs()
-        for tname, handler in self._get_tool_map().items():
-            clean = str(tname).lower().strip()
-            if clean in core_docs:
-                docs[clean] = core_docs[clean]
-                continue
-            docs[clean] = self._normalize_tool_doc_entry(
-                clean,
-                core_docs.get(
-                    clean,
+        runtime = getattr(self, "_v2_runtime", None)
+        if runtime is not None:
+            for spec in runtime.registry.specs():
+                docs[spec.canonical_id] = self._normalize_tool_doc_entry(
+                    spec.canonical_id,
                     {
-                        "desc": f"Tool handled by {handler}",
-                        "args": "see core handler docs",
+                        "desc": spec.description,
+                        "args": "JSON object matching the declared schema",
                     },
-                ),
-                handler=str(handler or ""),
-                source="core",
-            )
-        for plugin in self._plugins.values():
-            docs.update(self._plugin_tool_docs(plugin))
+                    source=spec.source_family,
+                )
         if tool_name:
             clean = str(tool_name).lower().strip()
             return {
@@ -2605,6 +2570,54 @@ class _OpenAgentAgentLoopMixin:
             str(name).strip().lower() for name in safe_names if str(name).strip()
         }
 
+    async def _execute_v2_compatibility_call(
+        self, tool_name: str, attrs_raw: str, body: str
+    ) -> str:
+        """Normalize legacy model syntax at the boundary, never dispatch it."""
+
+        runtime = getattr(self, "_v2_runtime", None)
+        if runtime is None:
+            raise LegacyPluginMigrationError("v2 tool runtime is not initialized")
+        attrs = self._parse_xml_attrs(attrs_raw)
+        attrs.pop("reason", None)
+        try:
+            spec = runtime.registry.resolve(tool_name)
+            arguments: dict[str, Any] = dict(attrs)
+            required = tuple(spec.input_schema.get("required", ()))
+            if body.strip() and len(required) == 1 and required[0] not in arguments:
+                arguments[required[0]] = body.strip()
+            call = runtime.registry.create_call(
+                call_id=uuid.uuid4().hex,
+                requested_name=tool_name,
+                arguments=arguments,
+                context=ToolContext(uuid.uuid4().hex),
+            )
+            request = ToolPolicyRequest(
+                enabled_tool_ids=frozenset(
+                    item.canonical_id for item in runtime.registry.specs()
+                ),
+                granted_capabilities=call.spec.capabilities,
+                confirmation=ConfirmationState.MISSING,
+                remaining_calls=1,
+            )
+            result, _trace = await runtime.executor.execute(call, request)
+            return json.dumps(
+                {
+                    "call_id": result.call_id,
+                    "status": result.status.value,
+                    "output": result.output,
+                    "error": result.error.code.value if result.error else None,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+            )
+        except Exception as exc:
+            return json.dumps(
+                {"status": "error", "error": type(exc).__name__},
+                ensure_ascii=True,
+                sort_keys=True,
+            )
+
     async def _dispatch_agent_tool_batch(
         self,
         tool_calls: list[tuple[str, str, str]],
@@ -2627,16 +2640,7 @@ class _OpenAgentAgentLoopMixin:
             tool_name, attrs_raw, body = call
             if cancel_token and cancel_token in self._cancelled_generations:
                 raise RuntimeError("Generation cancelled")
-            return await self._dispatch_tool(
-                tool_name,
-                attrs_raw,
-                body,
-                source_event,
-                None if concurrent else status_event,
-                local_log,
-                started_at=started_at,
-                thinking_notes=thinking_notes,
-            )
+            return await self._execute_v2_compatibility_call(tool_name, attrs_raw, body)
 
         use_parallel = len(tool_calls) > 1 and all(
             self._tool_parallel_safe(name) for name, _attrs, _body in tool_calls
@@ -2880,6 +2884,21 @@ class _OpenAgentAgentLoopMixin:
                 )
             return accepted
 
+        async def route_next_action(previous_response: str) -> str:
+            router_messages = build_action_router_messages(
+                prompt,
+                previous_response,
+                self._effective_tool_registry(),
+            )
+            routed = await ask_provider(router_messages, max_tokens_override=800)
+            if self.DEBUG:
+                self._debug_log(
+                    "agent.action_router",
+                    previous_response=previous_response,
+                    routed_response=routed,
+                )
+            return routed
+
         if provider == "google":
             user_content = self._build_google_content(prompt, attachments)
         else:
@@ -2922,6 +2941,8 @@ class _OpenAgentAgentLoopMixin:
         )
         invalid_tool_retries = 0
         answer = ""
+        pending_answer: str | None = None
+        last_auto_note = ""
 
         if cancel_token and cancel_token in self._cancelled_generations:
             raise RuntimeError("Generation cancelled")
@@ -2965,12 +2986,16 @@ class _OpenAgentAgentLoopMixin:
                 messages.append(runtime_comment)
                 agent_log.append("user.comment")
 
-            try:
-                answer = await ask_provider(messages)
-            except RuntimeError as exc:
-                if "model-call budget exhausted" not in str(exc):
-                    raise
-                break
+            if pending_answer is not None:
+                answer = pending_answer
+                pending_answer = None
+            else:
+                try:
+                    answer = await ask_provider(messages)
+                except RuntimeError as exc:
+                    if "model-call budget exhausted" not in str(exc):
+                        raise
+                    break
             if cancel_token and cancel_token in self._cancelled_generations:
                 raise RuntimeError("Generation cancelled")
             runtime_comment = self._runtime_comment_message(cancel_token)
@@ -3010,10 +3035,11 @@ class _OpenAgentAgentLoopMixin:
                         }
                     )
                     continue
+                candidate = output_text
+                if candidate and await verify_final(candidate):
+                    agent_log.append("answer.accepted")
+                    return await finish_agent(candidate)
                 if output_kind == "final":
-                    if await verify_final(output_text):
-                        agent_log.append("answer.final")
-                        return await finish_agent(output_text)
                     if self.DEBUG:
                         self._debug_log(
                             "agent.final_rejected",
@@ -3021,9 +3047,10 @@ class _OpenAgentAgentLoopMixin:
                             final=output_text,
                         )
                 note = output_text
-                if note:
+                if note and note != last_auto_note:
                     thinking_notes.append(note)
-                    agent_log.append("thinking.auto")
+                    agent_log.append("thinking.model_progress")
+                    last_auto_note = note
                 messages.append({"role": "assistant", "content": answer or ""})
                 messages.append(
                     {
@@ -3037,6 +3064,15 @@ class _OpenAgentAgentLoopMixin:
                         ),
                     }
                 )
+                if call_budget.remaining:
+                    try:
+                        pending_answer = await route_next_action(note or answer or "")
+                    except RuntimeError as exc:
+                        if "model-call budget exhausted" not in str(exc):
+                            raise
+                        pending_answer = None
+                    if pending_answer:
+                        agent_log.append("router.action")
                 continue
             invalid_tool_retries = 0
 
@@ -3187,7 +3223,7 @@ class _OpenAgentAgentLoopMixin:
 
     def _tool_names(self) -> set[str]:
         """Single whitelist source for executable tool names and aliases."""
-        return set(self._get_tool_map())
+        return set(self._effective_tool_registry())
 
     def _json_tool_to_legacy(
         self, payload: dict[str, Any]

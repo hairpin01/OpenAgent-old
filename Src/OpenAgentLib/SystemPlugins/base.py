@@ -3,11 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Callable
-import importlib.util
 import inspect
-import sys
+import ast
 
 SystemToolHandler = str | Callable[..., Any]
 
@@ -105,9 +103,14 @@ class SystemTool:
             return
         if self.source_path is None or self.module_name is None:
             raise ValueError(f"{self.full_name}: lazy handler has no source module")
-        module = _module_from_cache_or_file(self.module_name, self.source_path)
-        handler = getattr(module, self.handler, None)
-        if not callable(handler):
+        tree = ast.parse(
+            self.source_path.read_text(encoding="utf-8"), filename=str(self.source_path)
+        )
+        if not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == self.handler
+            for node in tree.body
+        ):
             raise ValueError(
                 f"{self.full_name}: handler {self.handler!r} is not callable"
             )
@@ -115,10 +118,9 @@ class SystemTool:
     def resolve_handler(self) -> Callable[..., Any]:
         if callable(self.handler):
             return self.handler
-        self.validate_handler_reference()
-        assert self.module_name is not None and self.source_path is not None
-        module = _module_from_cache_or_file(self.module_name, self.source_path)
-        return getattr(module, self.handler)
+        raise RuntimeError(
+            "legacy SystemTool handlers are retired; use native v2 handlers"
+        )
 
 
 class SystemToolRegistry:
@@ -200,9 +202,11 @@ def discover_system_tools(root: Path | None = None) -> dict[str, SystemTool]:
         return tools
 
     for file_path in sorted(root_path.rglob("*.py")):
-        if file_path.name in {"__init__.py", "base.py", "native.py"} or file_path.name.startswith(
-            "_"
-        ):
+        if file_path.name in {
+            "__init__.py",
+            "base.py",
+            "native.py",
+        } or file_path.name.startswith("_"):
             continue
         tool = _load_tool_file(file_path, root_path)
         for name in tool.all_names:
@@ -213,22 +217,34 @@ def discover_system_tools(root: Path | None = None) -> dict[str, SystemTool]:
 
 
 def _load_tool_file(file_path: Path, root: Path) -> SystemTool:
-    module_name = _module_name(file_path, root)
-    module = _module_from_cache_or_file(module_name, file_path)
-    factory = getattr(module, "create_tool", None)
-    raw_tool = factory() if callable(factory) else getattr(module, "SYSTEM_TOOL", None)
+    """Read a literal descriptor only; system tool source never executes here."""
 
-    if isinstance(raw_tool, SystemTool):
-        tool = raw_tool
-    elif isinstance(raw_tool, dict):
-        data = dict(raw_tool)
-        if "group" in data and "tool_class" not in data:
-            data["tool_class"] = data.pop("group")
-        if "class" in data and "tool_class" not in data:
-            data["tool_class"] = data.pop("class")
-        tool = SystemTool(**data)
-    else:
+    module_name = _module_name(file_path, root)
+    tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+    descriptor = next(
+        (
+            node.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "SYSTEM_TOOL"
+                for target in node.targets
+            )
+        ),
+        None,
+    )
+    if not isinstance(descriptor, ast.Call):
         raise ValueError(f"{file_path} must export SYSTEM_TOOL or create_tool()")
+    data = {
+        keyword.arg: ast.literal_eval(keyword.value)
+        for keyword in descriptor.keywords
+        if keyword.arg
+    }
+    if "group" in data and "tool_class" not in data:
+        data["tool_class"] = data.pop("group")
+    if "class" in data and "tool_class" not in data:
+        data["tool_class"] = data.pop("class")
+    tool = SystemTool(**data)
     return tool.with_source(file_path, module_name)
 
 
@@ -236,40 +252,6 @@ def _module_name(file_path: Path, root: Path) -> str:
     rel = file_path.resolve().relative_to(root.resolve())
     stem = ".".join(rel.with_suffix("").parts)
     return f"OpenAgentLib.SystemPlugins._loaded.{stem.replace('-', '_')}"
-
-
-def _module_from_cache_or_file(module_name: str, file_path: Path) -> ModuleType:
-    cached = sys.modules.get(module_name)
-    if isinstance(cached, ModuleType):
-        return cached
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot import system tool file: {file_path}")
-    module = importlib.util.module_from_spec(spec)
-    _ensure_tool_api_module()
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop(module_name, None)
-        raise
-    return module
-
-
-def _ensure_tool_api_module() -> None:
-    """Expose a tiny import target for standalone SystemPlugin files.
-
-    Importing ``OpenAgentLib.SystemPlugins`` can pull in the whole OpenAgent
-    package in test/minimal environments. Tool files import this lightweight API
-    instead, while still using the strict SystemTool class.
-    """
-
-    api_name = "openagent_system_tool_api"
-    module = sys.modules.get(api_name)
-    if not isinstance(module, ModuleType):
-        module = ModuleType(api_name)
-        sys.modules[api_name] = module
-    module.SystemTool = SystemTool
 
 
 def accepts_agent(handler: SystemToolHandler) -> bool:

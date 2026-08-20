@@ -15,7 +15,6 @@ from tool_testkit import (
     build_policy_rule,
 )
 
-
 sys.path.insert(0, str(ROOT / "Src"))
 
 from OpenAgentLib.SystemPlugins.native import build_native_system_tools  # noqa: E402
@@ -52,7 +51,9 @@ class RecordingServices:
         return execute
 
 
-SYSTEM_ENTRIES = tuple(entry for entry in TOOL_COMPATIBILITY_MATRIX if entry.source_family == "system")
+SYSTEM_ENTRIES = tuple(
+    entry for entry in TOOL_COMPATIBILITY_MATRIX if entry.source_family == "system"
+)
 
 
 def _value(schema: Mapping[str, Any]) -> Any:
@@ -68,7 +69,11 @@ def _value(schema: Mapping[str, Any]) -> Any:
     if schema_type == "array":
         return [_value(schema["items"])]
     if schema_type == "object":
-        return {key: _value(value) for key, value in schema.get("properties", {}).items() if key in schema.get("required", ())}
+        return {
+            key: _value(value)
+            for key, value in schema.get("properties", {}).items()
+            if key in schema.get("required", ())
+        }
     raise AssertionError(f"unsupported sample schema {schema_type!r}")
 
 
@@ -87,7 +92,11 @@ def _invalid_arguments(spec: Any) -> dict[str, Any]:
 
 
 def _executor(native: Any) -> ToolExecutor:
-    policy = ToolPolicyEngine(ToolPolicyCatalog(tuple(build_policy_rule(spec) for spec in native.registry.specs())))
+    policy = ToolPolicyEngine(
+        ToolPolicyCatalog(
+            tuple(build_policy_rule(spec) for spec in native.registry.specs())
+        )
+    )
     return ToolExecutor(native.registry, policy, native_handlers=native.handlers)
 
 
@@ -146,7 +155,9 @@ def test_aliases_resolve_uniquely_and_registry_has_exact_matrix_coverage() -> No
             assert native.registry.resolve(alias).canonical_id == entry.canonical_id
 
 
-def test_mutating_tool_requires_confirmation_and_service_failure_is_normalized() -> None:
+def test_mutating_tool_requires_confirmation_and_service_failure_is_normalized() -> (
+    None
+):
     services = RecordingServices()
     native = build_native_system_tools(services)
     spec = native.registry.resolve("todo.add")
@@ -156,7 +167,9 @@ def test_mutating_tool_requires_confirmation_and_service_failure_is_normalized()
         arguments={"text": "task"},
         context=ToolContext("correlation", "actor"),
     )
-    denied, _trace = asyncio.run(_executor(native).execute(call, build_policy_request(call)))
+    denied, _trace = asyncio.run(
+        _executor(native).execute(call, build_policy_request(call))
+    )
     assert denied.error.code is ToolErrorCode.CONFIRMATION_REQUIRED
     assert services.calls == []
 

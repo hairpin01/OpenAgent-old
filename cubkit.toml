@@ -1,8 +1,9 @@
 format = 2
 
 [module]
-id = 'openagent'
+id = "openagent"
 scope = "inline"
+requires = "aiohttp"
 
 [bundle]
 source = 'Src'
@@ -33,9 +34,7 @@ post_build = [
 auto = true
 check_imports = true
 strict_imports = true
-enable = ["async", "decorators", "locales", "hooks"]
 ignore = [".*", "dist/*"]
-mcub_modules = ['aiohttp', 'core', 'telethon']
 runtime_modules = ["openagent_system_tool_api"]
 
 [lint.tools.debug]

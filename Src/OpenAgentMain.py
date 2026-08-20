@@ -2,6 +2,7 @@
 # scope: heroku_min 9.9.9
 # -- repo data --
 # repo: https://github.com/hairpin01/repo-MCUB-fork/
+# source: https://github.com/hairpin01/OpenAgent-old/
 # -- end --
 # scop: kernel min v1.4.6
 
@@ -76,7 +77,7 @@ class OpenAgent(
     ModuleBase,
 ):
     name = "OpenAgent"
-    version = "0.8.0-main.build:1045"
+    version = "0.8.1-main.build:1050"
     author = "@dev_dolbaeb && @Hairpin00"
     description = {
         "ru": "ИИ агент в юзерботе с новой архитектурой инструментов",

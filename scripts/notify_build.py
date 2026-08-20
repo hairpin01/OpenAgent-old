@@ -113,14 +113,15 @@ def _build_message() -> str:
     artifact_name = html.escape(output.name)
     emoji = "0.0" if profile == "release" else ">_"
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    release = 'βeta' if profile == 'debug' else 'Release'
 
     return "\n".join(
         (
-            f"{emoji} <b>New {profile.upper()}-build</b> module {module_label}",
-            f"<blockquote>👓 {artifact_name}",
-            f"📦 {_format_size(output.stat().st_size)}",
-            f"🕒 {timestamp}</blockquote>",
-            f"<blockquote>#{module_label} #{profile}</blockquote>",
+            f"<blockquote>▫️ {emoji} Neω <b>{release}-build</b> modυle <code>{module_label}</code></blockquote>",
+            f"<blockquote>◾️ <code>{artifact_name}</code>",
+            f"▫️ <code>{_format_size(output.stat().st_size)} ↓↑</code>",
+            f"◾️ <code>{timestamp}</code></blockquote>",
+            f"<blockquote>▫️ #{module_label} #{profile}</blockquote>",
         )
     )
 

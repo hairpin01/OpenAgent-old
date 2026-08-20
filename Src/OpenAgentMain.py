@@ -97,6 +97,11 @@ class OpenAgent(
             return
         debug_log(self.log, event, **fields)
 
+    def _create_plugin_unload_task(self, coroutine: Any) -> asyncio.Task[Any]:
+        """Create teardown work owned by the module lifecycle."""
+
+        return asyncio.get_running_loop().create_task(coroutine)
+
     PROVIDERS = (
         "openai",
         "google",

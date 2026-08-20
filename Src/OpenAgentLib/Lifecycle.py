@@ -10,6 +10,26 @@ from .Manager.Session import SessionManager
 from .HttpClient import OpenAgentHttpClient
 from .ToolTracePersistence import ToolTracePersistence
 from .V2Bootstrap import build_v2_tool_runtime
+from .ToolCompatibility import SIBLING_PLUGINS_ROOT
+from .PluginDiscovery import discover_v2_plugin_sources
+from .PluginHost import PluginHost
+from .IsolatedPluginInvoker import IsolatedPluginInvoker
+from .PluginCapabilities import (
+    CapabilityBroker,
+    CapabilityErrorCode,
+    CapabilityGrant,
+    CapabilityRequest,
+    CapabilityResponse,
+)
+from .PluginSDK import CapabilityFamily
+from .RuntimeCapabilityBackends import (
+    RuntimeConfigurationBackend,
+    RuntimeFilesystemBackend,
+    RuntimeHttpsBackend,
+    RuntimeProcessBackend,
+)
+from .ToolKernel import ToolCall
+from .ToolPolicy import ToolPolicyRequest
 
 
 class _OpenAgentLifecycleMixin:
@@ -125,6 +145,7 @@ class _OpenAgentLifecycleMixin:
         self._session_input_events: dict[str, dict[str, Any]] = {}
         self._pending_prompts: dict[str, dict[str, Any]] = {}
         self._runtime_comments: dict[str, list[str]] = {}
+        self._v2_source_event: Any | None = None
         self._background_tool_tasks: dict[str, asyncio.Task[Any]] = {}
         self._plugin_unload_tasks: set[asyncio.Task[Any]] = set()
         self._inline_status_waiters: dict[str, asyncio.Future[Any]] = {}
@@ -156,16 +177,80 @@ class _OpenAgentLifecycleMixin:
         # excluded from the v2 startup path.
         self._system_tools = {}
         await self._load_installed_plugins()
+        sibling_sources = discover_v2_plugin_sources(SIBLING_PLUGINS_ROOT)
+        self._v2_plugin_sources.update(sibling_sources)
+        self._v2_plugin_invoker = IsolatedPluginInvoker(
+            PluginHost(),
+            self._v2_plugin_sources,
+            plugin_root=SIBLING_PLUGINS_ROOT.parent,
+            openagent_source=Path(__file__).resolve().parents[1],
+            capability_handler=self._dispatch_plugin_capability,
+        )
         # V2 owns executable tool metadata. Legacy descriptors remain only for
         # compatibility inventory until the old mixins are retired.
-        self._v2_runtime = build_v2_tool_runtime(self)
+        self._v2_runtime = build_v2_tool_runtime(
+            self, host_invoker=self._v2_plugin_invoker
+        )
+        self._v2_capability_broker = CapabilityBroker(
+            self._v2_runtime.policy,
+            {
+                CapabilityFamily.WORKSPACE_FS: RuntimeFilesystemBackend(),
+                CapabilityFamily.PROCESS: RuntimeProcessBackend(),
+                CapabilityFamily.HTTPS_FETCH: RuntimeHttpsBackend(),
+                CapabilityFamily.CONFIGURATION: RuntimeConfigurationBackend(
+                    self.config
+                ),
+            },
+        )
         self.log.info("OpenAgent loaded")
 
     async def on_unload(self) -> None:
+        await self._cancel_plugin_unload_tasks()
         runtime = getattr(self, "_v2_runtime", None)
         if runtime is not None:
             await runtime.on_unload()
         await super().on_unload()
+
+    def _dispatch_plugin_capability(
+        self,
+        call: ToolCall,
+        policy_request: ToolPolicyRequest,
+        request: CapabilityRequest,
+    ) -> CapabilityResponse:
+        """Issue one request-bound grant only while the executor owns its call."""
+
+        constraints: dict[str, Any] = {}
+        if request.capability is CapabilityFamily.WORKSPACE_FS:
+            constraints = {"root": str(Path(self._workspace_dir()).resolve())}
+        elif request.capability is CapabilityFamily.PROCESS:
+            root = str(Path(self._workspace_dir()).resolve())
+            constraints = {
+                "executables": ("git", "ast-grep", "python", "python3"),
+                "cwd_root": root,
+                "max_timeout_seconds": 30,
+                "max_output_bytes": 100_000,
+                "max_args": 32,
+                "max_arg_length": 4096,
+                "env_allowlist": (),
+            }
+        elif request.capability is CapabilityFamily.HTTPS_FETCH:
+            constraints = {"max_timeout_seconds": 30, "max_bytes": 1_000_000}
+        elif request.capability is CapabilityFamily.CONFIGURATION:
+            constraints = {"namespace": "openagent"}
+        else:
+            return CapabilityResponse.denied(
+                request, CapabilityErrorCode.UNKNOWN_CAPABILITY
+            )
+
+        grant = CapabilityGrant.for_call(
+            request.grant_id,
+            request.host_request_id,
+            call,
+            request.capability,
+            frozenset({request.operation}),
+            constraints,
+        )
+        return self._v2_capability_broker.dispatch(call, policy_request, grant, request)
 
     def _record_terminal_tool_trace(
         self, session_id: str, trace: Any, result: Any

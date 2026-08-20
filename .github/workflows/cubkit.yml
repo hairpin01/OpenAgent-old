@@ -25,6 +25,9 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Check release bundle
+        run: cubkit check . --release
+
       - name: Lint module
         id: lint
         continue-on-error: true

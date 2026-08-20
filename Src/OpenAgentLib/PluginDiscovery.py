@@ -75,3 +75,18 @@ def inspect_v2_plugin_source(path: Path) -> StaticPluginSource:
             "migrate it to a v2 PluginManifest"
         )
     return StaticPluginSource(source_path, sha256(source).hexdigest())
+
+
+def discover_v2_plugin_sources(root: Path) -> dict[str, StaticPluginSource]:
+    """Admit deterministic top-level v2 modules without importing them."""
+
+    root = Path(root)
+    sources: dict[str, StaticPluginSource] = {}
+    for path in sorted(root.glob("*.py")):
+        if path.name == "__init__.py" or path.name.startswith("_"):
+            continue
+        source = inspect_v2_plugin_source(path)
+        if path.stem in sources:
+            raise LegacyPluginMigrationError(f"duplicate v2 plugin source {path.stem}")
+        sources[path.stem] = source
+    return sources

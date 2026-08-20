@@ -8,7 +8,6 @@ import pytest
 
 from conftest import load_source_module
 
-
 compatibility = load_source_module(
     "openagent_tool_compatibility_test",
     "Src/OpenAgentLib/ToolCompatibility.py",
@@ -20,7 +19,9 @@ def matrix():
     return compatibility.compatibility_matrix()
 
 
-@pytest.fixture(params=compatibility.compatibility_matrix(), ids=lambda entry: entry.canonical_id)
+@pytest.fixture(
+    params=compatibility.compatibility_matrix(), ids=lambda entry: entry.canonical_id
+)
 def matrix_case(request):
     """Generated coverage case for each machine-readable inventory entry."""
     return request.param
@@ -44,8 +45,14 @@ def _sibling_ids(root: Path) -> set[str]:
 def test_complete_inventory(matrix) -> None:
     expected_system = _system_ids(compatibility.SYSTEM_TOOLS_ROOT)
     expected_sibling = _sibling_ids(compatibility.SIBLING_PLUGINS_ROOT)
-    actual_system = {entry.canonical_id for entry in matrix if entry.source_family == "system"}
-    actual_sibling = {entry.canonical_id for entry in matrix if entry.source_family == "sibling-plugin"}
+    actual_system = {
+        entry.canonical_id for entry in matrix if entry.source_family == "system"
+    }
+    actual_sibling = {
+        entry.canonical_id
+        for entry in matrix
+        if entry.source_family == "sibling-plugin"
+    }
 
     assert actual_system == expected_system, (
         f"missing system canonical IDs: {sorted(expected_system - actual_system)}; "
@@ -58,8 +65,12 @@ def test_complete_inventory(matrix) -> None:
 
 
 def test_complete_alias_inventory(matrix) -> None:
-    system_declarations = compatibility._system_declarations(compatibility.SYSTEM_TOOLS_ROOT)
-    plugin_declarations = compatibility._plugin_declarations(compatibility.SIBLING_PLUGINS_ROOT)
+    system_declarations = compatibility._system_declarations(
+        compatibility.SYSTEM_TOOLS_ROOT
+    )
+    plugin_declarations = compatibility._plugin_declarations(
+        compatibility.SIBLING_PLUGINS_ROOT
+    )
     expected_system_aliases = {
         alias for declaration in system_declarations for alias in declaration["aliases"]
     }
@@ -71,10 +82,16 @@ def test_complete_alias_inventory(matrix) -> None:
         and alias not in compatibility._REJECTED_LEGACY_ALIASES
     }
     actual_system_aliases = {
-        alias for entry in matrix if entry.source_family == "system" for alias in entry.aliases
+        alias
+        for entry in matrix
+        if entry.source_family == "system"
+        for alias in entry.aliases
     }
     actual_plugin_aliases = {
-        alias for entry in matrix if entry.source_family == "sibling-plugin" for alias in entry.aliases
+        alias
+        for entry in matrix
+        if entry.source_family == "sibling-plugin"
+        for alias in entry.aliases
     }
 
     assert actual_system_aliases == expected_system_aliases, (
@@ -100,16 +117,40 @@ def test_static_snapshot_matches_ast_discovery(matrix) -> None:
         ("file.edit", "filesystem-write", "required", "non-idempotent", "migrate"),
         ("file.patch", "filesystem-write", "required", "non-idempotent", "migrate"),
         ("file.send", "telegram-write", "required", "non-idempotent", "migrate"),
-        ("file.download_media", "filesystem-write", "required", "non-idempotent", "migrate"),
-        ("profile.download_photo", "filesystem-write", "required", "non-idempotent", "migrate"),
+        (
+            "file.download_media",
+            "filesystem-write",
+            "required",
+            "non-idempotent",
+            "migrate",
+        ),
+        (
+            "profile.download_photo",
+            "filesystem-write",
+            "required",
+            "non-idempotent",
+            "migrate",
+        ),
         ("message.react", "telegram-write", "required", "non-idempotent", "migrate"),
         ("message.typing", "telegram-write", "required", "non-idempotent", "migrate"),
         ("moderation.unban", "telegram-admin", "required", "non-idempotent", "migrate"),
-        ("moderation.unmute", "telegram-admin", "required", "non-idempotent", "migrate"),
+        (
+            "moderation.unmute",
+            "telegram-admin",
+            "required",
+            "non-idempotent",
+            "migrate",
+        ),
         ("terminal.run", "process", "required", "non-idempotent", "migrate"),
         ("terminal.inspect", "process", "required", "non-idempotent", "migrate"),
         ("eval.python", "sandbox-local", "required", "non-idempotent", "migrate"),
-        ("eval.python.telegram.help", "runtime-control", "required", "non-idempotent", "reject"),
+        (
+            "eval.python.telegram.help",
+            "runtime-control",
+            "required",
+            "non-idempotent",
+            "reject",
+        ),
     ),
 )
 def test_representative_high_risk_classification(
@@ -124,12 +165,50 @@ def test_representative_high_risk_classification(
 
 
 _MUTATION_VERBS = {
-    "activate", "add", "archive", "attach", "ban", "block", "clear",
-    "delete", "demote", "discard", "download", "edit", "export", "forward",
-    "generate", "import", "install", "kick", "leave", "mark", "mute", "patch",
-    "pin", "promote", "prune", "react", "regenerate", "reload", "remember",
-    "replace", "reply", "run", "save", "schedule", "send", "set", "slowmode",
-    "typing", "unarchive", "unban", "unblock", "unmute", "unpin", "update",
+    "activate",
+    "add",
+    "archive",
+    "attach",
+    "ban",
+    "block",
+    "clear",
+    "delete",
+    "demote",
+    "discard",
+    "download",
+    "edit",
+    "export",
+    "forward",
+    "generate",
+    "import",
+    "install",
+    "kick",
+    "leave",
+    "mark",
+    "mute",
+    "patch",
+    "pin",
+    "promote",
+    "prune",
+    "react",
+    "regenerate",
+    "reload",
+    "remember",
+    "replace",
+    "reply",
+    "run",
+    "save",
+    "schedule",
+    "send",
+    "set",
+    "slowmode",
+    "typing",
+    "unarchive",
+    "unban",
+    "unblock",
+    "unmute",
+    "unpin",
+    "update",
     "write",
 }
 _REVIEWED_GENERIC_READ_ONLY_MUTATION_NAMES = {
@@ -145,10 +224,14 @@ def test_mutation_verbs_are_not_generic_read_only_without_review(matrix) -> None
         entry.canonical_id
         for entry in matrix
         if entry.capability_class == "read-only"
-        and _MUTATION_VERBS.intersection(entry.canonical_id.rpartition(".")[2].split("_"))
+        and _MUTATION_VERBS.intersection(
+            entry.canonical_id.rpartition(".")[2].split("_")
+        )
     }
 
-    assert generic_read_only_mutation_names == _REVIEWED_GENERIC_READ_ONLY_MUTATION_NAMES
+    assert (
+        generic_read_only_mutation_names == _REVIEWED_GENERIC_READ_ONLY_MUTATION_NAMES
+    )
 
 
 def test_import_does_not_discover_tools(monkeypatch) -> None:
@@ -169,9 +252,7 @@ def test_import_does_not_discover_tools(monkeypatch) -> None:
 
 
 def test_chat_search_is_explicitly_rejected(matrix) -> None:
-    assert "chat.search" not in {
-        alias for entry in matrix for alias in entry.aliases
-    }
+    assert "chat.search" not in {alias for entry in matrix for alias in entry.aliases}
     assert compatibility._REJECTED_LEGACY_ALIASES["chat.search"] == (
         "cmd_search has no tool_registry canonical ID"
     )
@@ -196,15 +277,31 @@ def test_unmapped_plugin_alias_is_rejected() -> None:
 
 
 def test_every_entry_is_explicitly_classified(matrix_case) -> None:
-    assert matrix_case.migration_disposition in {"migrate", "reject"}, matrix_case.canonical_id
-    assert matrix_case.confirmation_class in {"none", "required"}, matrix_case.canonical_id
+    assert matrix_case.migration_disposition in {
+        "migrate",
+        "reject",
+    }, matrix_case.canonical_id
+    assert matrix_case.confirmation_class in {
+        "none",
+        "required",
+    }, matrix_case.canonical_id
     assert matrix_case.capability_class, matrix_case.canonical_id
-    assert matrix_case.concurrency_class in {"parallel-read", "serial"}, matrix_case.canonical_id
-    assert matrix_case.idempotency_class in {"idempotent", "non-idempotent"}, matrix_case.canonical_id
+    assert matrix_case.concurrency_class in {
+        "parallel-read",
+        "serial",
+    }, matrix_case.canonical_id
+    assert matrix_case.idempotency_class in {
+        "idempotent",
+        "non-idempotent",
+    }, matrix_case.canonical_id
     assert matrix_case.legacy_arguments["attrs"] is not None, matrix_case.canonical_id
     assert matrix_case.legacy_arguments["body"] is not None, matrix_case.canonical_id
-    assert matrix_case.v2_input_schema["status"] == "placeholder", matrix_case.canonical_id
-    assert matrix_case.v2_output_schema["status"] == "placeholder", matrix_case.canonical_id
+    assert (
+        matrix_case.v2_input_schema["status"] == "placeholder"
+    ), matrix_case.canonical_id
+    assert (
+        matrix_case.v2_output_schema["status"] == "placeholder"
+    ), matrix_case.canonical_id
 
 
 def test_matrix_and_schemas_are_read_only(matrix) -> None:
@@ -216,7 +313,10 @@ def test_matrix_and_schemas_are_read_only(matrix) -> None:
 
 def test_duplicate_canonical_id_fails_deterministically(matrix) -> None:
     duplicate = replace(matrix[0], source_module="duplicate")
-    with pytest.raises(compatibility.CompatibilityInventoryError, match="duplicate canonical ID '" + matrix[0].canonical_id + "'"):
+    with pytest.raises(
+        compatibility.CompatibilityInventoryError,
+        match="duplicate canonical ID '" + matrix[0].canonical_id + "'",
+    ):
         compatibility.validate_compatibility_matrix((matrix[0], duplicate))
 
 
@@ -225,7 +325,12 @@ def test_duplicate_alias_fails_with_owners(matrix) -> None:
     colliding = replace(second, aliases=(first.canonical_id,))
     with pytest.raises(
         compatibility.CompatibilityInventoryError,
-        match="duplicate alias '" + first.canonical_id + "'.*" + first.canonical_id + ".*" + second.canonical_id,
+        match="duplicate alias '"
+        + first.canonical_id
+        + "'.*"
+        + first.canonical_id
+        + ".*"
+        + second.canonical_id,
     ):
         compatibility.validate_compatibility_matrix((first, colliding))
 

@@ -4,7 +4,6 @@ from pathlib import Path
 
 from conftest import ROOT, load_source_module
 
-
 base = load_source_module(
     "openagent_system_tools_base_test",
     "Src/OpenAgentLib/SystemPlugins/base.py",

@@ -4,7 +4,6 @@ import json
 
 from conftest import load_source_module
 
-
 settings = load_source_module(
     "openagent_settings_test",
     "Src/Settings.py",
@@ -55,7 +54,7 @@ def test_debug_log_redacts_secrets_embedded_in_neutral_strings(monkeypatch) -> N
         logger,
         "tool.result",
         result=(
-            'Authorization: Bearer TOPSECRET123456789 '
+            "Authorization: Bearer TOPSECRET123456789 "
             'payload={"api_key":"TOPSECRET2"} '
             "token=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd"
         ),

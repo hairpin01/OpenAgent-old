@@ -5,6 +5,7 @@ This module deliberately has no access to the application, plugin loader, or
 legacy plugin classes.  A plugin can declare data and submit narrow JSON
 capability requests; authority remains in the parent broker.
 """
+
 from __future__ import annotations
 
 import ast
@@ -28,7 +29,6 @@ from .ToolKernel import (
     validate_schema,
 )
 from .ToolCompatibility import TOOL_COMPATIBILITY_MATRIX, _REJECTED_LEGACY_ALIASES
-
 
 PLUGIN_MANIFEST_VERSION = "2"
 PLUGIN_SDK_API_VERSION = "2"
@@ -67,7 +67,9 @@ def _json(value: Any, path: tuple[str | int, ...] = ()) -> Any:
         frozen: dict[str, Any] = {}
         for key, nested in value.items():
             if not isinstance(key, str):
-                raise PluginManifestError(f"JSON object key at {path!r} must be a string")
+                raise PluginManifestError(
+                    f"JSON object key at {path!r} must be a string"
+                )
             frozen[key] = _json(nested, path + (key,))
         return MappingProxyType(frozen)
     if isinstance(value, (list, tuple)):
@@ -110,30 +112,53 @@ class PluginToolDeclaration:
         canonical_id = normalize_tool_name(self.canonical_id, canonical=True)
         aliases = tuple(normalize_tool_name(alias) for alias in self.aliases)
         if canonical_id in aliases or len(aliases) != len(set(aliases)):
-            raise PluginManifestError("tool aliases must be unique and exclude the canonical ID")
-        capabilities = frozenset(str(item).strip().lower() for item in self.capabilities)
-        if not capabilities or any(not _CAPABILITY_RE.fullmatch(item) for item in capabilities):
+            raise PluginManifestError(
+                "tool aliases must be unique and exclude the canonical ID"
+            )
+        capabilities = frozenset(
+            str(item).strip().lower() for item in self.capabilities
+        )
+        if not capabilities or any(
+            not _CAPABILITY_RE.fullmatch(item) for item in capabilities
+        ):
             raise PluginManifestError("tools require declared, normalized capabilities")
         object.__setattr__(self, "canonical_id", canonical_id)
         object.__setattr__(self, "aliases", aliases)
         object.__setattr__(self, "input_schema", validate_schema(self.input_schema))
         object.__setattr__(self, "output_schema", validate_schema(self.output_schema))
         object.__setattr__(self, "capabilities", capabilities)
-        object.__setattr__(self, "description", self.description.strip() if isinstance(self.description, str) else "")
-        object.__setattr__(self, "confirmation", ConfirmationRequirement(self.confirmation))
+        object.__setattr__(
+            self,
+            "description",
+            self.description.strip() if isinstance(self.description, str) else "",
+        )
+        object.__setattr__(
+            self, "confirmation", ConfirmationRequirement(self.confirmation)
+        )
         object.__setattr__(self, "concurrency", ConcurrencyClass(self.concurrency))
         object.__setattr__(self, "idempotency", IdempotencyClass(self.idempotency))
-        object.__setattr__(self, "migration_disposition", MigrationDisposition(self.migration_disposition))
+        object.__setattr__(
+            self,
+            "migration_disposition",
+            MigrationDisposition(self.migration_disposition),
+        )
 
     def to_tool_spec(self, *, source_module: str = "") -> ToolSpec:
         return ToolSpec(
-            canonical_id=self.canonical_id, aliases=self.aliases,
-            input_schema=self.input_schema, output_schema=self.output_schema,
-            api_version=TOOL_API_VERSION, schema_version=TOOL_SCHEMA_VERSION,
-            capabilities=self.capabilities, confirmation=self.confirmation,
-            concurrency=self.concurrency, idempotency=self.idempotency,
+            canonical_id=self.canonical_id,
+            aliases=self.aliases,
+            input_schema=self.input_schema,
+            output_schema=self.output_schema,
+            api_version=TOOL_API_VERSION,
+            schema_version=TOOL_SCHEMA_VERSION,
+            capabilities=self.capabilities,
+            confirmation=self.confirmation,
+            concurrency=self.concurrency,
+            idempotency=self.idempotency,
             migration_disposition=self.migration_disposition,
-            description=self.description, source_family="plugin-v2", source_module=source_module,
+            description=self.description,
+            source_family="plugin-v2",
+            source_module=source_module,
         )
 
 
@@ -153,8 +178,13 @@ class PluginManifest:
     def __post_init__(self) -> None:
         plugin_id = _required(self.plugin_id, "plugin_id").lower()
         if not _PLUGIN_ID_RE.fullmatch(plugin_id):
-            raise PluginManifestError("plugin_id must be a normalized dotted identifier")
-        if self.manifest_version != PLUGIN_MANIFEST_VERSION or self.api_version != PLUGIN_SDK_API_VERSION:
+            raise PluginManifestError(
+                "plugin_id must be a normalized dotted identifier"
+            )
+        if (
+            self.manifest_version != PLUGIN_MANIFEST_VERSION
+            or self.api_version != PLUGIN_SDK_API_VERSION
+        ):
             raise PluginManifestError("unsupported plugin manifest or SDK API version")
         entrypoint = _required(self.entrypoint, "entrypoint")
         if not _ENTRYPOINT_RE.fullmatch(entrypoint):
@@ -162,16 +192,27 @@ class PluginManifest:
         if not isinstance(self.tools, tuple) or not self.tools:
             raise PluginManifestError("tools must be a non-empty tuple of declarations")
         if any(not isinstance(tool, PluginToolDeclaration) for tool in self.tools):
-            raise PluginManifestError("tools must contain PluginToolDeclaration values only")
-        capabilities = frozenset(str(item).strip().lower() for item in self.capabilities)
+            raise PluginManifestError(
+                "tools must contain PluginToolDeclaration values only"
+            )
+        capabilities = frozenset(
+            str(item).strip().lower() for item in self.capabilities
+        )
         # Policy capability classes are declarations, not callable capability
         # families.  A sandbox Telegram handler therefore still can only issue
         # a CapabilityFamily.TELEGRAM request.
-        known = frozenset(item.value for item in CapabilityFamily) | frozenset({
-            "telegram-read", "telegram-write", "telegram-admin",
-            "filesystem-read", "filesystem-write", "network", "sandbox-local",
-            "runtime-control",
-        })
+        known = frozenset(item.value for item in CapabilityFamily) | frozenset(
+            {
+                "telegram-read",
+                "telegram-write",
+                "telegram-admin",
+                "filesystem-read",
+                "filesystem-write",
+                "network",
+                "sandbox-local",
+                "runtime-control",
+            }
+        )
         if not capabilities or not capabilities.issubset(known):
             raise PluginManifestError("manifest declares an unknown capability")
         tool_ids = [tool.canonical_id for tool in self.tools]
@@ -180,8 +221,14 @@ class PluginManifest:
             raise PluginManifestError("duplicate tool IDs or aliases are not allowed")
         if set(tool_ids).intersection(aliases):
             raise PluginManifestError("an alias cannot collide with a tool ID")
-        if not set().union(*(tool.capabilities for tool in self.tools)).issubset(capabilities):
-            raise PluginManifestError("tool declares a capability absent from its manifest")
+        if (
+            not set()
+            .union(*(tool.capabilities for tool in self.tools))
+            .issubset(capabilities)
+        ):
+            raise PluginManifestError(
+                "tool declares a capability absent from its manifest"
+            )
         metadata = _json(self.metadata)
         if not isinstance(metadata, Mapping):
             raise PluginManifestError("metadata must be a JSON object")
@@ -193,15 +240,29 @@ class PluginManifest:
 
 
 def manifest_from_legacy_declarations(
-    declarations: Mapping[str, Any], *, plugin_id: str, entrypoint: str, version: str = "0.0.0",
-    source_module: str | None = None, compatibility_matrix: Sequence[Any] = TOOL_COMPATIBILITY_MATRIX,
+    declarations: Mapping[str, Any],
+    *,
+    plugin_id: str,
+    entrypoint: str,
+    version: str = "0.0.0",
+    source_module: str | None = None,
+    compatibility_matrix: Sequence[Any] = TOOL_COMPATIBILITY_MATRIX,
 ) -> PluginManifest:
     """Convert explicit static legacy data; never imports or instantiates a plugin."""
 
-    allowed = {"metadata", "tool_registry", "tool_map", "tool_docs", "tool_schemas", "dangerous_tools"}
+    allowed = {
+        "metadata",
+        "tool_registry",
+        "tool_map",
+        "tool_docs",
+        "tool_schemas",
+        "dangerous_tools",
+    }
     unknown = set(declarations) - allowed
     if unknown:
-        raise LegacyPluginMigrationError(f"unknown legacy declaration fields: {sorted(unknown)!r}")
+        raise LegacyPluginMigrationError(
+            f"unknown legacy declaration fields: {sorted(unknown)!r}"
+        )
     registry = declarations.get("tool_registry", ())
     tool_map = declarations.get("tool_map", {})
     metadata = declarations.get("metadata", {})
@@ -210,16 +271,27 @@ def manifest_from_legacy_declarations(
     dangerous = frozenset(declarations.get("dangerous_tools", ()))
     if isinstance(registry, str) or not isinstance(registry, (tuple, list)):
         raise LegacyPluginMigrationError("tool_registry must be a literal sequence")
-    if not isinstance(metadata, Mapping) or not isinstance(tool_map, Mapping) or not isinstance(docs, Mapping) or not isinstance(schemas, Mapping):
+    if (
+        not isinstance(metadata, Mapping)
+        or not isinstance(tool_map, Mapping)
+        or not isinstance(docs, Mapping)
+        or not isinstance(schemas, Mapping)
+    ):
         raise LegacyPluginMigrationError("legacy maps must be literal objects")
     canonical = tuple(normalize_tool_name(item, canonical=True) for item in registry)
     if len(canonical) != len(set(canonical)):
         raise LegacyPluginMigrationError("legacy tool_registry has duplicate IDs")
     module = source_module or plugin_id.rsplit(".", 1)[-1]
-    entries = tuple(entry for entry in compatibility_matrix if getattr(entry, "source_module", None) == module)
+    entries = tuple(
+        entry
+        for entry in compatibility_matrix
+        if getattr(entry, "source_module", None) == module
+    )
     frozen = {entry.canonical_id: entry for entry in entries}
     if set(canonical) != set(frozen):
-        raise LegacyPluginMigrationError("legacy canonical tools do not match committed compatibility data")
+        raise LegacyPluginMigrationError(
+            "legacy canonical tools do not match committed compatibility data"
+        )
     owners = {
         name: entry.canonical_id
         for entry in entries
@@ -229,15 +301,23 @@ def manifest_from_legacy_declarations(
     for alias, handler in tool_map.items():
         normalized_alias = normalize_tool_name(alias)
         if not isinstance(handler, str) or not handler.strip():
-            raise LegacyPluginMigrationError(f"legacy handler for {normalized_alias} is missing")
+            raise LegacyPluginMigrationError(
+                f"legacy handler for {normalized_alias} is missing"
+            )
         if normalized_alias in _REJECTED_LEGACY_ALIASES:
-            raise LegacyPluginMigrationError(f"legacy alias is explicitly rejected: {normalized_alias}")
+            raise LegacyPluginMigrationError(
+                f"legacy alias is explicitly rejected: {normalized_alias}"
+            )
         owner = owners.get(normalized_alias)
         if owner is None:
-            raise LegacyPluginMigrationError(f"legacy aliases require migration: {normalized_alias}")
+            raise LegacyPluginMigrationError(
+                f"legacy aliases require migration: {normalized_alias}"
+            )
         canonical_handler = tool_map.get(owner)
         if canonical_handler != handler:
-            raise LegacyPluginMigrationError(f"legacy alias handler does not match frozen owner: {normalized_alias}")
+            raise LegacyPluginMigrationError(
+                f"legacy alias handler does not match frozen owner: {normalized_alias}"
+            )
         if normalized_alias != owner:
             aliases_by_owner[owner].append(normalized_alias)
     tools: list[PluginToolDeclaration] = []
@@ -245,19 +325,36 @@ def manifest_from_legacy_declarations(
     for name in canonical:
         schema = schemas.get(name, {"type": "object"})
         if not isinstance(schema, Mapping):
-            raise LegacyPluginMigrationError(f"legacy schema for {name} is not an object")
+            raise LegacyPluginMigrationError(
+                f"legacy schema for {name} is not an object"
+            )
         doc = docs.get(name, {})
         description = doc.get("description", "") if isinstance(doc, Mapping) else ""
         capability = _legacy_capability(name)
         capability_set.add(capability)
-        tools.append(PluginToolDeclaration(
-            canonical_id=name, aliases=tuple(aliases_by_owner[name]), input_schema=schema, output_schema={"type": "object"},
-            capabilities=frozenset({capability}), description=str(description),
-            confirmation=ConfirmationRequirement.REQUIRED if name in dangerous else ConfirmationRequirement.NONE,
-        ))
+        tools.append(
+            PluginToolDeclaration(
+                canonical_id=name,
+                aliases=tuple(aliases_by_owner[name]),
+                input_schema=schema,
+                output_schema={"type": "object"},
+                capabilities=frozenset({capability}),
+                description=str(description),
+                confirmation=(
+                    ConfirmationRequirement.REQUIRED
+                    if name in dangerous
+                    else ConfirmationRequirement.NONE
+                ),
+            )
+        )
     return PluginManifest(
-        plugin_id, version, PLUGIN_SDK_API_VERSION, entrypoint, tuple(tools),
-        frozenset(capability_set), metadata=metadata,
+        plugin_id,
+        version,
+        PLUGIN_SDK_API_VERSION,
+        entrypoint,
+        tuple(tools),
+        frozenset(capability_set),
+        metadata=metadata,
     )
 
 
@@ -266,7 +363,9 @@ def manifest_from_legacy_source(
 ) -> PluginManifest:
     """AST-only legacy conversion for source text or a source path."""
 
-    text = Path(source).read_text(encoding="utf-8") if isinstance(source, Path) else source
+    text = (
+        Path(source).read_text(encoding="utf-8") if isinstance(source, Path) else source
+    )
     if not isinstance(text, str):
         raise TypeError("legacy source must be text or a Path")
     try:
@@ -274,7 +373,14 @@ def manifest_from_legacy_source(
     except SyntaxError as exc:
         raise LegacyPluginMigrationError("legacy plugin source is invalid") from exc
     values: dict[str, Any] = {}
-    wanted = {"metadata", "tool_registry", "tool_map", "tool_docs", "tool_schemas", "dangerous_tools"}
+    wanted = {
+        "metadata",
+        "tool_registry",
+        "tool_map",
+        "tool_docs",
+        "tool_schemas",
+        "dangerous_tools",
+    }
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
@@ -285,8 +391,12 @@ def manifest_from_legacy_source(
                 try:
                     values[target.id] = ast.literal_eval(value)
                 except (ValueError, TypeError) as exc:
-                    raise LegacyPluginMigrationError(f"{target.id} must be a literal declaration") from exc
-    return manifest_from_legacy_declarations(values, plugin_id=plugin_id, entrypoint=entrypoint, version=version)
+                    raise LegacyPluginMigrationError(
+                        f"{target.id} must be a literal declaration"
+                    ) from exc
+    return manifest_from_legacy_declarations(
+        values, plugin_id=plugin_id, entrypoint=entrypoint, version=version
+    )
 
 
 def _legacy_capability(canonical_id: str) -> str:
@@ -314,7 +424,11 @@ class CapabilityCallContext:
     def __post_init__(self) -> None:
         for name in ("host_request_id", "call_id", "actor_scope", "grant_id"):
             object.__setattr__(self, name, _required(getattr(self, name), name))
-        object.__setattr__(self, "canonical_tool_id", normalize_tool_name(self.canonical_tool_id, canonical=True))
+        object.__setattr__(
+            self,
+            "canonical_tool_id",
+            normalize_tool_name(self.canonical_tool_id, canonical=True),
+        )
 
 
 class CapabilityTransport(Protocol):
@@ -324,43 +438,89 @@ class CapabilityTransport(Protocol):
 class CapabilityClient:
     """Sandbox-side JSON-only client; it cannot expose parent ambient objects."""
 
-    def __init__(self, context: CapabilityCallContext, transport: CapabilityTransport) -> None:
+    def __init__(
+        self, context: CapabilityCallContext, transport: CapabilityTransport
+    ) -> None:
         self._context = context
         self._transport = transport
 
-    def request(self, capability: CapabilityFamily, operation: str, payload: Mapping[str, Any], request_id: str) -> Mapping[str, Any]:
+    def request(
+        self,
+        capability: CapabilityFamily,
+        operation: str,
+        payload: Mapping[str, Any],
+        request_id: str,
+    ) -> Mapping[str, Any]:
         if not isinstance(payload, Mapping):
             raise TypeError("capability payload must be a JSON object")
         frame = {
-            "version": PLUGIN_SDK_API_VERSION, "kind": "capability-request",
-            "host_request_id": self._context.host_request_id, "call_id": self._context.call_id,
-            "canonical_tool_id": self._context.canonical_tool_id, "actor_scope": self._context.actor_scope,
-            "grant_id": self._context.grant_id, "capability": capability.value,
-            "operation": _required(operation, "operation"), "capability_request_id": _required(request_id, "request_id"),
+            "version": PLUGIN_SDK_API_VERSION,
+            "kind": "capability-request",
+            "host_request_id": self._context.host_request_id,
+            "call_id": self._context.call_id,
+            "canonical_tool_id": self._context.canonical_tool_id,
+            "actor_scope": self._context.actor_scope,
+            "grant_id": self._context.grant_id,
+            "capability": capability.value,
+            "operation": _required(operation, "operation"),
+            "capability_request_id": _required(request_id, "request_id"),
             "payload": thaw_json(_json(payload)),
         }
         response = self._transport.request(frame)
         if not isinstance(response, Mapping):
-            raise PluginManifestError("capability transport returned a non-JSON response")
+            raise PluginManifestError(
+                "capability transport returned a non-JSON response"
+            )
         return MappingProxyType(dict(_json(response)))
 
-    def telegram(self, operation: str, data: Mapping[str, Any], request_id: str) -> Mapping[str, Any]:
-        return self.request(CapabilityFamily.TELEGRAM, operation, {"data": data}, request_id)
+    def telegram(
+        self, operation: str, data: Mapping[str, Any], request_id: str
+    ) -> Mapping[str, Any]:
+        return self.request(
+            CapabilityFamily.TELEGRAM, operation, {"data": data}, request_id
+        )
 
-    def filesystem(self, operation: str, path: str, request_id: str, **data: Any) -> Mapping[str, Any]:
-        return self.request(CapabilityFamily.WORKSPACE_FS, operation, {"path": path, **data}, request_id)
+    def filesystem(
+        self, operation: str, path: str, request_id: str, **data: Any
+    ) -> Mapping[str, Any]:
+        return self.request(
+            CapabilityFamily.WORKSPACE_FS, operation, {"path": path, **data}, request_id
+        )
 
-    def process(self, argv: Sequence[str], request_id: str, **data: Any) -> Mapping[str, Any]:
-        return self.request(CapabilityFamily.PROCESS, "run", {"argv": list(argv), **data}, request_id)
+    def process(
+        self, argv: Sequence[str], request_id: str, **data: Any
+    ) -> Mapping[str, Any]:
+        return self.request(
+            CapabilityFamily.PROCESS, "run", {"argv": list(argv), **data}, request_id
+        )
 
     def fetch(self, url: str, request_id: str, **data: Any) -> Mapping[str, Any]:
-        return self.request(CapabilityFamily.HTTPS_FETCH, "fetch", {"url": url, **data}, request_id)
+        return self.request(
+            CapabilityFamily.HTTPS_FETCH, "fetch", {"url": url, **data}, request_id
+        )
 
-    def schedule(self, child_call: Mapping[str, Any], request_id: str) -> Mapping[str, Any]:
-        return self.request(CapabilityFamily.SCHEDULING, "schedule", {"child_call": child_call}, request_id)
+    def schedule(
+        self, child_call: Mapping[str, Any], request_id: str
+    ) -> Mapping[str, Any]:
+        return self.request(
+            CapabilityFamily.SCHEDULING,
+            "schedule",
+            {"child_call": child_call},
+            request_id,
+        )
 
-    def config(self, operation: str, key: str, request_id: str, **data: Any) -> Mapping[str, Any]:
-        return self.request(CapabilityFamily.CONFIGURATION, operation, {"key": key, **data}, request_id)
+    def config(
+        self, operation: str, key: str, request_id: str, **data: Any
+    ) -> Mapping[str, Any]:
+        return self.request(
+            CapabilityFamily.CONFIGURATION, operation, {"key": key, **data}, request_id
+        )
 
 
-__all__ = [name for name in globals() if name.startswith(("PLUGIN_", "Capability", "Plugin", "Legacy", "manifest_", "thaw_"))]
+__all__ = [
+    name
+    for name in globals()
+    if name.startswith(
+        ("PLUGIN_", "Capability", "Plugin", "Legacy", "manifest_", "thaw_")
+    )
+]

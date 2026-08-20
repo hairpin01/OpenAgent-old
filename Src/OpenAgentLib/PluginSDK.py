@@ -53,6 +53,7 @@ class CapabilityFamily(str, Enum):
     HTTPS_FETCH = "https-fetch"
     SCHEDULING = "scheduling"
     CONFIGURATION = "configuration"
+    MCUB_CONTROL = "mcub-control"
 
 
 def _json(value: Any, path: tuple[str | int, ...] = ()) -> Any:
@@ -168,7 +169,8 @@ class PluginManifest:
         # a CapabilityFamily.TELEGRAM request.
         known = frozenset(item.value for item in CapabilityFamily) | frozenset({
             "telegram-read", "telegram-write", "telegram-admin",
-            "filesystem-read", "filesystem-write", "network",
+            "filesystem-read", "filesystem-write", "network", "sandbox-local",
+            "runtime-control",
         })
         if not capabilities or not capabilities.issubset(known):
             raise PluginManifestError("manifest declares an unknown capability")

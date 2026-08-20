@@ -253,6 +253,7 @@ class CapabilityBroker:
         self._backends = MappingProxyType(dict(backends))
         self._resolver = resolver
         self._used_request_ids: set[tuple[str, str]] = set()
+        self._scheduled_child_ids: set[str] = set()
 
     def dispatch(self, call: ToolCall, policy_request: ToolPolicyRequest, grant: CapabilityGrant, request: CapabilityRequest) -> CapabilityResponse:
         if self._policy.evaluate(call, policy_request).kind is not PolicyDecisionKind.ALLOW:
@@ -268,10 +269,16 @@ class CapabilityBroker:
             normalized_payload = _normalize_payload(request, grant, self._resolver)
         except CapabilityProtocolError:
             return CapabilityResponse.denied(request, CapabilityErrorCode.INVALID_REQUEST)
+        if request.capability is CapabilityFamily.SCHEDULING:
+            child_id = normalized_payload["call_id"]
+            if child_id in self._scheduled_child_ids:
+                return CapabilityResponse.denied(request, CapabilityErrorCode.INVALID_REQUEST)
         backend = self._backends.get(request.capability)
         if backend is None:
             return CapabilityResponse.denied(request, CapabilityErrorCode.UNKNOWN_CAPABILITY)
         self._used_request_ids.add(replay_key)
+        if request.capability is CapabilityFamily.SCHEDULING:
+            self._scheduled_child_ids.add(normalized_payload["call_id"])
         try:
             data = _json(backend.invoke(request.operation, normalized_payload, grant))
             if not isinstance(data, Mapping):
@@ -350,6 +357,7 @@ _OPERATIONS = MappingProxyType({
     CapabilityFamily.HTTPS_FETCH: frozenset({"fetch"}),
     CapabilityFamily.SCHEDULING: frozenset({"schedule"}),
     CapabilityFamily.CONFIGURATION: frozenset({"get", "set"}),
+    CapabilityFamily.MCUB_CONTROL: frozenset({"module-list", "module-install", "module-reload", "config-get", "config-set"}),
 })
 
 
@@ -477,12 +485,43 @@ def _normalize_payload(request: CapabilityRequest, grant: CapabilityGrant, resol
             raise CapabilityProtocolError("child call must be canonical bounded data")
         if child["parent_call_id"] != request.call_id or child["cancellation_parent_id"] != grant.constraints.get("cancellation_parent_id"):
             raise CapabilityProtocolError("child call is not bound to parent budget")
+        if child["call_id"] == request.call_id:
+            raise CapabilityProtocolError("child call cannot reuse its parent identity")
         for budget in ("remaining_calls", "remaining_token_budget", "remaining_depth"):
             if not isinstance(child[budget], int) or child[budget] < 0 or child[budget] >= grant.constraints.get(budget, -1):
                 raise CapabilityProtocolError("child budget is not strictly reduced")
-        normalize_tool_name(child["canonical_tool_id"], canonical=True)
+        canonical_tool_id = normalize_tool_name(child["canonical_tool_id"], canonical=True)
+        ancestors = grant.constraints.get("ancestor_call_ids", ())
+        if not isinstance(ancestors, (list, tuple)) or any(not isinstance(item, str) for item in ancestors):
+            raise CapabilityProtocolError("scheduling ancestry must be a string sequence")
+        if child["call_id"] in ancestors:
+            raise CapabilityProtocolError("child call creates an identity cycle")
+        ancestor_tools = grant.constraints.get("ancestor_tool_ids", ())
+        if not isinstance(ancestor_tools, (list, tuple)) or any(not isinstance(item, str) for item in ancestor_tools):
+            raise CapabilityProtocolError("scheduling tool ancestry must be a string sequence")
+        if canonical_tool_id in ancestor_tools:
+            raise CapabilityProtocolError("child call creates a tool cycle")
         _json(child["arguments"])
         return MappingProxyType(dict(child))
+    elif request.capability is CapabilityFamily.MCUB_CONTROL:
+        if request.operation in {"module-list", "module-reload"}:
+            _only(payload, frozenset())
+            return MappingProxyType({})
+        if request.operation == "module-install":
+            _only(payload, frozenset({"module_url"}))
+            module_url = _required(payload.get("module_url"), "module_url")
+            parsed = urlparse(module_url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or len(module_url) > 2_048:
+                raise CapabilityProtocolError("module installation requires a bounded credential-free HTTPS URL")
+            return MappingProxyType({"module_url": module_url})
+        _only(payload, frozenset({"key", "value"}) if request.operation == "config-set" else frozenset({"key"}))
+        key = _required(payload.get("key"), "key")
+        allowed_keys = grant.constraints.get("keys")
+        if not isinstance(allowed_keys, (list, tuple, frozenset)) or key not in allowed_keys:
+            raise CapabilityProtocolError("MCUB configuration key is not granted")
+        if request.operation == "config-set" and "value" not in payload:
+            raise CapabilityProtocolError("MCUB configuration writes need a value")
+        return MappingProxyType(dict(payload))
     else:
         _only(payload, frozenset({"key", "value"}) if request.operation == "set" else frozenset({"key"}))
         key = _required(payload.get("key"), "key")

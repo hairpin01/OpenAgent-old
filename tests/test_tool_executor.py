@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import threading
 import time
@@ -9,7 +10,6 @@ from typing import Any
 import pytest
 
 from conftest import ROOT
-
 
 sys.path.insert(0, str(ROOT / "Src"))
 
@@ -49,8 +49,36 @@ def _executor(
     **kwargs: Any,
 ) -> ToolExecutor:
     registry = tool_registry_builder(specs)
-    policy = ToolPolicyEngine(ToolPolicyCatalog(tuple(policy_rule_builder(spec) for spec in specs)))
+    policy = ToolPolicyEngine(
+        ToolPolicyCatalog(tuple(policy_rule_builder(spec) for spec in specs))
+    )
     return ToolExecutor(registry, policy, **kwargs)
+
+
+def test_close_cancels_and_reaps_timeout_operations(
+    tool_registry_builder: Any, policy_rule_builder: Any, tool_spec_builder: Any
+) -> None:
+    async def scenario() -> None:
+        executor = _executor(
+            tool_registry_builder,
+            policy_rule_builder,
+            (tool_spec_builder("utility.wait"),),
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def operation() -> None:
+            started.set()
+            await release.wait()
+
+        running = asyncio.create_task(executor._run_with_timeout(operation(), 30))
+        await started.wait()
+        await executor.close()
+        with contextlib.suppress(asyncio.CancelledError):
+            await running
+        assert not executor._live_tasks
+
+    asyncio.run(scenario())
 
 
 class _Hooks:
@@ -102,7 +130,9 @@ class _Spill:
             raise self.error
 
 
-def _host_outcome(call: Any, output: Any = None, error: PluginHostFailure | None = None) -> PluginHostOutcome:
+def _host_outcome(
+    call: Any, output: Any = None, error: PluginHostFailure | None = None
+) -> PluginHostOutcome:
     request = PluginHostRequest(
         f"request-{call.call_id}",
         call.call_id,
@@ -111,9 +141,15 @@ def _host_outcome(call: Any, output: Any = None, error: PluginHostFailure | None
         retryable=error.retryable if error is not None else False,
     )
     status = PluginHostStatus.ERROR if error is not None else PluginHostStatus.SUCCESS
-    state = PluginHostTraceState.FAILED if error is not None else PluginHostTraceState.COMPLETED
+    state = (
+        PluginHostTraceState.FAILED
+        if error is not None
+        else PluginHostTraceState.COMPLETED
+    )
     trace = PluginHostTrace(request.request_id, call.call_id, state)
-    response = PluginHostResponse(request.request_id, call.call_id, status, trace, output, error)
+    response = PluginHostResponse(
+        request.request_id, call.call_id, status, trace, output, error
+    )
     return PluginHostOutcome(request, response)
 
 
@@ -150,7 +186,9 @@ def test_policy_denial_happens_before_hooks_or_handlers(
         hooks=hooks,
     )
     result, trace = asyncio.run(
-        executor.execute(call, _request(policy_request_builder, call, enabled_tool_ids=frozenset()))
+        executor.execute(
+            call, _request(policy_request_builder, call, enabled_tool_ids=frozenset())
+        )
     )
 
     assert result.error is not None and result.error.code is ToolErrorCode.POLICY_DENIED
@@ -188,7 +226,9 @@ def test_registry_identity_and_policy_request_type_precede_hooks_or_handlers(
 
     async def scenario() -> tuple[Any, Any]:
         return (
-            await executor.execute(copied_call, _request(policy_request_builder, copied_call)),
+            await executor.execute(
+                copied_call, _request(policy_request_builder, copied_call)
+            ),
             await executor.execute(registered_call, object()),  # type: ignore[arg-type]
         )
 
@@ -207,9 +247,13 @@ def test_alias_resolves_to_its_canonical_native_handler(
     policy_rule_builder: Any,
     policy_request_builder: Any,
 ) -> None:
-    spec = tool_spec_builder(output_schema={"type": "object", "additionalProperties": True})
+    spec = tool_spec_builder(
+        output_schema={"type": "object", "additionalProperties": True}
+    )
     registry = tool_registry_builder((spec,))
-    call = registry.create_call(call_id="call-alias", requested_name="inspect", arguments={})
+    call = registry.create_call(
+        call_id="call-alias", requested_name="inspect", arguments={}
+    )
     seen: list[str] = []
     spill = _Spill()
 
@@ -224,7 +268,9 @@ def test_alias_resolves_to_its_canonical_native_handler(
         native_handlers={spec.canonical_id: _cooperative(handler)},
         context_spill=spill,
     )
-    result, _trace = asyncio.run(executor.execute(call, _request(policy_request_builder, call)))
+    result, _trace = asyncio.run(
+        executor.execute(call, _request(policy_request_builder, call))
+    )
 
     assert result.status is ToolResultStatus.SUCCESS
     assert result.output == {"handler": spec.canonical_id}
@@ -264,12 +310,19 @@ def test_native_cooperative_sync_and_async_handlers_are_supported(
 
     async def scenario() -> list[Any]:
         return [
-            await executor.execute(sync_call, _request(policy_request_builder, sync_call)),
-            await executor.execute(async_call, _request(policy_request_builder, async_call)),
+            await executor.execute(
+                sync_call, _request(policy_request_builder, sync_call)
+            ),
+            await executor.execute(
+                async_call, _request(policy_request_builder, async_call)
+            ),
         ]
 
     outcomes = asyncio.run(scenario())
-    assert [outcome[0].output for outcome in outcomes] == [{"kind": "sync"}, {"kind": "async"}]
+    assert [outcome[0].output for outcome in outcomes] == [
+        {"kind": "sync"},
+        {"kind": "async"},
+    ]
 
 
 def test_arbitrary_sync_native_handler_is_rejected_without_invocation(
@@ -313,13 +366,24 @@ def test_host_success_and_failure_are_normalized_without_secret_messages(
         call_id=failed_call.call_id,
         retryable=True,
     )
-    host = _Host([_host_outcome(success_call, {"host": "ok"}), _host_outcome(failed_call, error=failure)])
-    executor = _executor(tool_registry_builder, policy_rule_builder, (spec,), host_invoker=host)
+    host = _Host(
+        [
+            _host_outcome(success_call, {"host": "ok"}),
+            _host_outcome(failed_call, error=failure),
+        ]
+    )
+    executor = _executor(
+        tool_registry_builder, policy_rule_builder, (spec,), host_invoker=host
+    )
 
     async def scenario() -> list[Any]:
         return [
-            await executor.execute(success_call, _request(policy_request_builder, success_call)),
-            await executor.execute(failed_call, _request(policy_request_builder, failed_call)),
+            await executor.execute(
+                success_call, _request(policy_request_builder, success_call)
+            ),
+            await executor.execute(
+                failed_call, _request(policy_request_builder, failed_call)
+            ),
         ]
 
     outcomes = asyncio.run(scenario())
@@ -350,12 +414,21 @@ def test_output_schema_validation_freezes_successful_output(
         tool_registry_builder,
         policy_rule_builder,
         (spec,),
-        native_handlers={spec.canonical_id: _cooperative(lambda _call, _stop: {"answer": 3})},
+        native_handlers={
+            spec.canonical_id: _cooperative(lambda _call, _stop: {"answer": 3})
+        },
     )
-    result, _trace = asyncio.run(executor.execute(call, _request(policy_request_builder, call)))
-    frozen = validate_schema_value({"type": "array", "items": {"type": "string"}}, ["ok"])
+    result, _trace = asyncio.run(
+        executor.execute(call, _request(policy_request_builder, call))
+    )
+    frozen = validate_schema_value(
+        {"type": "array", "items": {"type": "string"}}, ["ok"]
+    )
 
-    assert result.error is not None and result.error.code is ToolErrorCode.OUTPUT_SCHEMA_INVALID
+    assert (
+        result.error is not None
+        and result.error.code is ToolErrorCode.OUTPUT_SCHEMA_INVALID
+    )
     assert frozen == ("ok",)
     with pytest.raises(AttributeError):
         frozen.append("no")
@@ -380,7 +453,9 @@ def test_confirmation_and_hook_outcomes_are_typed(
         tool_registry_builder,
         policy_rule_builder,
         (confirmation_spec,),
-        native_handlers={confirmation_spec.canonical_id: _cooperative(lambda _call, _stop: {})},
+        native_handlers={
+            confirmation_spec.canonical_id: _cooperative(lambda _call, _stop: {})
+        },
     )
     cancel_executor = _executor(
         tool_registry_builder,
@@ -403,16 +478,26 @@ def test_confirmation_and_hook_outcomes_are_typed(
                 confirmation_call,
                 _request(policy_request_builder, confirmation_call),
             ),
-            await cancel_executor.execute(hook_call, _request(policy_request_builder, hook_call)),
-            await failed_hook_executor.execute(hook_call, _request(policy_request_builder, hook_call)),
+            await cancel_executor.execute(
+                hook_call, _request(policy_request_builder, hook_call)
+            ),
+            await failed_hook_executor.execute(
+                hook_call, _request(policy_request_builder, hook_call)
+            ),
         ]
 
     outcomes = asyncio.run(scenario())
     assert outcomes[0][0].error is not None
     assert outcomes[0][0].error.code is ToolErrorCode.CONFIRMATION_REQUIRED
     assert outcomes[1][0].status is ToolResultStatus.CANCELLED
-    assert outcomes[1][0].error is not None and outcomes[1][0].error.code is ToolErrorCode.HOOK_CANCELLED
-    assert outcomes[2][0].error is not None and outcomes[2][0].error.code is ToolErrorCode.HOOK_FAILED
+    assert (
+        outcomes[1][0].error is not None
+        and outcomes[1][0].error.code is ToolErrorCode.HOOK_CANCELLED
+    )
+    assert (
+        outcomes[2][0].error is not None
+        and outcomes[2][0].error.code is ToolErrorCode.HOOK_FAILED
+    )
     assert "secret" not in outcomes[2][0].error.message
 
 
@@ -456,7 +541,10 @@ def test_serial_calls_wait_and_parallel_reads_overlap(
         tool_registry_builder,
         policy_rule_builder,
         (serial_spec, parallel_spec),
-        native_handlers={serial_spec.canonical_id: serial_handler, parallel_spec.canonical_id: parallel_handler},
+        native_handlers={
+            serial_spec.canonical_id: serial_handler,
+            parallel_spec.canonical_id: parallel_handler,
+        },
     )
 
     async def scenario() -> None:
@@ -510,7 +598,9 @@ def test_mixed_batch_preserves_results_and_traces_in_input_order(
         policy_rule_builder,
         (native_spec, denied_spec, host_spec),
         native_handlers={
-            native_spec.canonical_id: _cooperative(lambda _call, _stop: {"source": "native"})
+            native_spec.canonical_id: _cooperative(
+                lambda _call, _stop: {"source": "native"}
+            )
         },
         host_invoker=host,
     )
@@ -519,16 +609,25 @@ def test_mixed_batch_preserves_results_and_traces_in_input_order(
             (native_call, denied_call, host_call),
             (
                 _request(policy_request_builder, native_call),
-                _request(policy_request_builder, denied_call, enabled_tool_ids=frozenset()),
+                _request(
+                    policy_request_builder, denied_call, enabled_tool_ids=frozenset()
+                ),
                 _request(policy_request_builder, host_call),
             ),
         )
     )
 
-    assert [result.call_id for result in results] == [call.call_id for call in (native_call, denied_call, host_call)]
-    assert [trace.call_id for trace in traces] == [call.call_id for call in (native_call, denied_call, host_call)]
+    assert [result.call_id for result in results] == [
+        call.call_id for call in (native_call, denied_call, host_call)
+    ]
+    assert [trace.call_id for trace in traces] == [
+        call.call_id for call in (native_call, denied_call, host_call)
+    ]
     assert results[0].output == {"source": "native"}
-    assert results[1].error is not None and results[1].error.code is ToolErrorCode.POLICY_DENIED
+    assert (
+        results[1].error is not None
+        and results[1].error.code is ToolErrorCode.POLICY_DENIED
+    )
     assert results[2].output == {"source": "host"}
 
 
@@ -569,9 +668,16 @@ def test_timeout_and_cancellation_reap_native_task(
     async def scenario() -> tuple[Any, Any]:
         timeout_result = await executor.execute(
             timeout_call,
-            _request(policy_request_builder, timeout_call, requested_timeout=0.01, maximum_timeout=1),
+            _request(
+                policy_request_builder,
+                timeout_call,
+                requested_timeout=0.01,
+                maximum_timeout=1,
+            ),
         )
-        task = asyncio.create_task(executor.execute(cancel_call, _request(policy_request_builder, cancel_call)))
+        task = asyncio.create_task(
+            executor.execute(cancel_call, _request(policy_request_builder, cancel_call))
+        )
         await cancel_started.wait()
         task.cancel()
         cancelled_result = await task
@@ -619,7 +725,12 @@ def test_cooperative_sync_timeout_signals_cleanup_before_terminal_result(
         task = asyncio.create_task(
             executor.execute(
                 call,
-                _request(policy_request_builder, call, requested_timeout=0.02, maximum_timeout=1),
+                _request(
+                    policy_request_builder,
+                    call,
+                    requested_timeout=0.02,
+                    maximum_timeout=1,
+                ),
             )
         )
         assert await asyncio.to_thread(started.wait, 1)
@@ -663,7 +774,9 @@ def test_cooperative_sync_cancellation_signals_cleanup_before_terminal_result(
     )
 
     async def scenario() -> Any:
-        task = asyncio.create_task(executor.execute(call, _request(policy_request_builder, call)))
+        task = asyncio.create_task(
+            executor.execute(call, _request(policy_request_builder, call))
+        )
         assert await asyncio.to_thread(started.wait, 1)
         task.cancel()
         return await task
@@ -696,12 +809,18 @@ def test_retry_is_limited_to_idempotent_host_failures(
         trace_sink=sink,
     )
     result, trace = asyncio.run(
-        executor.execute(call, _request(policy_request_builder, call, maximum_attempts=2))
+        executor.execute(
+            call, _request(policy_request_builder, call, maximum_attempts=2)
+        )
     )
 
     assert result.output == {"attempt": "two"}
     assert len(host.calls) == 2
-    assert [event.details.get("attempt") for event in trace.events if "attempt" in event.details] == [1, 2]
+    assert [
+        event.details.get("attempt")
+        for event in trace.events
+        if "attempt" in event.details
+    ] == [1, 2]
     assert sink.traces[-1] == trace
 
 
@@ -713,11 +832,20 @@ def test_non_idempotent_failure_and_spill_failure_never_retry(
     policy_request_builder: Any,
 ) -> None:
     mutation_spec = tool_spec_builder(
-        "sample.mutation", aliases=(), idempotency="non-idempotent", concurrency="serial"
+        "sample.mutation",
+        aliases=(),
+        idempotency="non-idempotent",
+        concurrency="serial",
     )
     mutation_call = tool_call_builder(mutation_spec, call_id="call-mutation")
     host = _Host(
-        [PluginHostCallError(PluginHostFailure(PluginHostErrorCode.CHILD_CRASHED, "secret", retryable=True))]
+        [
+            PluginHostCallError(
+                PluginHostFailure(
+                    PluginHostErrorCode.CHILD_CRASHED, "secret", retryable=True
+                )
+            )
+        ]
     )
     mutation_executor = _executor(
         tool_registry_builder,
@@ -781,7 +909,10 @@ def test_duplicate_call_ids_are_rejected_before_batch_execution(
         asyncio.run(
             executor.execute_batch(
                 (one, two),
-                (_request(policy_request_builder, one), _request(policy_request_builder, two)),
+                (
+                    _request(policy_request_builder, one),
+                    _request(policy_request_builder, two),
+                ),
             )
         )
 

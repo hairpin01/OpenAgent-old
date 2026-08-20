@@ -4,6 +4,7 @@
 This module deliberately contains no dispatch or execution code.  It is the
 boundary where tool declarations become immutable, validated v2 metadata.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,7 +14,6 @@ from math import isfinite
 import re
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
-
 
 TOOL_API_VERSION = "2"
 TOOL_SCHEMA_VERSION = "2"
@@ -111,8 +111,12 @@ class ToolError:
             object.__setattr__(self, "code", ToolErrorCode(self.code))
         if not isinstance(self.message, str) or not self.message.strip():
             raise ValueError("tool error message is required")
-        object.__setattr__(self, "canonical_id", _normalise_error_name(self.canonical_id))
-        object.__setattr__(self, "requested_name", _normalise_error_name(self.requested_name))
+        object.__setattr__(
+            self, "canonical_id", _normalise_error_name(self.canonical_id)
+        )
+        object.__setattr__(
+            self, "requested_name", _normalise_error_name(self.requested_name)
+        )
         path = tuple(self.field_path)
         if any(not isinstance(part, (str, int)) for part in path):
             raise TypeError("tool error field paths contain only strings and integers")
@@ -193,7 +197,9 @@ class SystemToolAdapterError(ToolKernelError):
     """A legacy system descriptor cannot be represented by a v2 spec."""
 
 
-def _required_text(value: object, field_name: str, error_type: type[ToolKernelError]) -> str:
+def _required_text(
+    value: object, field_name: str, error_type: type[ToolKernelError]
+) -> str:
     if not isinstance(value, str) or not value.strip():
         raise error_type(
             ToolErrorCode.INVALID_SPEC,
@@ -337,19 +343,28 @@ def _validate_schema_definition(schema: Any, path: tuple[str | int, ...] = ()) -
             raise _schema_error("properties must be an object", path + ("properties",))
         for property_name, property_schema in properties.items():
             if not isinstance(property_name, str) or not property_name:
-                raise _schema_error("property names must be non-empty strings", path + ("properties",))
+                raise _schema_error(
+                    "property names must be non-empty strings", path + ("properties",)
+                )
             _validate_schema_definition(
                 property_schema, path + ("properties", property_name)
             )
         required = schema.get("required", ())
         if isinstance(required, str) or not isinstance(required, (list, tuple)):
-            raise _schema_error("required must be an array of property names", path + ("required",))
+            raise _schema_error(
+                "required must be an array of property names", path + ("required",)
+            )
         if len(required) != len(set(required)) or any(
             not isinstance(property_name, str) for property_name in required
         ):
-            raise _schema_error("required must contain unique string property names", path + ("required",))
+            raise _schema_error(
+                "required must contain unique string property names",
+                path + ("required",),
+            )
         if any(property_name not in properties for property_name in required):
-            raise _schema_error("required properties must be declared", path + ("required",))
+            raise _schema_error(
+                "required properties must be declared", path + ("required",)
+            )
         additional = schema.get("additionalProperties", True)
         if not isinstance(additional, bool) and not isinstance(additional, Mapping):
             raise _schema_error(
@@ -357,16 +372,18 @@ def _validate_schema_definition(schema: Any, path: tuple[str | int, ...] = ()) -
                 path + ("additionalProperties",),
             )
         if isinstance(additional, Mapping):
-            _validate_schema_definition(
-                additional, path + ("additionalProperties",)
-            )
+            _validate_schema_definition(additional, path + ("additionalProperties",))
 
     if schema_type == "array" and "items" in schema:
         _validate_schema_definition(schema["items"], path + ("items",))
 
     if "enum" in schema:
         values = schema["enum"]
-        if isinstance(values, str) or not isinstance(values, (list, tuple)) or not values:
+        if (
+            isinstance(values, str)
+            or not isinstance(values, (list, tuple))
+            or not values
+        ):
             raise _schema_error("enum must be a non-empty array", path + ("enum",))
         for index, value in enumerate(values):
             _freeze_json_value(
@@ -394,9 +411,8 @@ def _json_values_equal(left: Any, right: Any) -> bool:
     if type(left) is not type(right):
         return False
     if isinstance(left, Mapping):
-        return (
-            set(left) == set(right)
-            and all(_json_values_equal(left[key], right[key]) for key in left)
+        return set(left) == set(right) and all(
+            _json_values_equal(left[key], right[key]) for key in left
         )
     if isinstance(left, (list, tuple)):
         return len(left) == len(right) and all(
@@ -631,8 +647,16 @@ class ToolSpec:
         object.__setattr__(self, "aliases", aliases)
         object.__setattr__(self, "input_schema", validate_schema(self.input_schema))
         object.__setattr__(self, "output_schema", validate_schema(self.output_schema))
-        object.__setattr__(self, "api_version", _required_text(self.api_version, "api_version", ToolRegistryError))
-        object.__setattr__(self, "schema_version", _required_text(self.schema_version, "schema_version", ToolRegistryError))
+        object.__setattr__(
+            self,
+            "api_version",
+            _required_text(self.api_version, "api_version", ToolRegistryError),
+        )
+        object.__setattr__(
+            self,
+            "schema_version",
+            _required_text(self.schema_version, "schema_version", ToolRegistryError),
+        )
 
         if isinstance(self.capabilities, str) or not isinstance(
             self.capabilities, (set, frozenset, list, tuple)
@@ -673,12 +697,16 @@ class ToolSpec:
         object.__setattr__(
             self,
             "concurrency",
-            _coerce_enum(self.concurrency, ConcurrencyClass, "concurrency", canonical_id),
+            _coerce_enum(
+                self.concurrency, ConcurrencyClass, "concurrency", canonical_id
+            ),
         )
         object.__setattr__(
             self,
             "idempotency",
-            _coerce_enum(self.idempotency, IdempotencyClass, "idempotency", canonical_id),
+            _coerce_enum(
+                self.idempotency, IdempotencyClass, "idempotency", canonical_id
+            ),
         )
         object.__setattr__(
             self,
@@ -718,10 +746,16 @@ class ToolContext:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "correlation_id", _required_text(self.correlation_id, "correlation_id", ToolRegistryError)
+            self,
+            "correlation_id",
+            _required_text(self.correlation_id, "correlation_id", ToolRegistryError),
         )
         if self.actor_id is not None:
-            object.__setattr__(self, "actor_id", _required_text(self.actor_id, "actor_id", ToolRegistryError))
+            object.__setattr__(
+                self,
+                "actor_id",
+                _required_text(self.actor_id, "actor_id", ToolRegistryError),
+            )
         frozen = _freeze_json_value(self.metadata, error_type=ToolRegistryError)
         if not isinstance(frozen, Mapping):
             raise ToolRegistryError(
@@ -745,7 +779,9 @@ class ToolCall:
     schema_version: str = TOOL_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "call_id", _required_text(self.call_id, "call_id", ToolRegistryError))
+        object.__setattr__(
+            self, "call_id", _required_text(self.call_id, "call_id", ToolRegistryError)
+        )
         if not isinstance(self.spec, ToolSpec):
             raise ToolRegistryError(
                 ToolErrorCode.INVALID_CALL,
@@ -763,7 +799,9 @@ class ToolCall:
             )
         object.__setattr__(self, "requested_name", requested_name)
         api_version = _required_text(self.api_version, "api_version", ToolRegistryError)
-        schema_version = _required_text(self.schema_version, "schema_version", ToolRegistryError)
+        schema_version = _required_text(
+            self.schema_version, "schema_version", ToolRegistryError
+        )
         if api_version != self.spec.api_version:
             raise ToolVersionError(
                 ToolErrorCode.API_VERSION_MISMATCH,
@@ -844,12 +882,18 @@ class ToolTrace:
     events: tuple[ToolTraceEvent, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "call_id", _required_text(self.call_id, "call_id", ToolRegistryError))
         object.__setattr__(
-            self, "correlation_id", _required_text(self.correlation_id, "correlation_id", ToolRegistryError)
+            self, "call_id", _required_text(self.call_id, "call_id", ToolRegistryError)
+        )
+        object.__setattr__(
+            self,
+            "correlation_id",
+            _required_text(self.correlation_id, "correlation_id", ToolRegistryError),
         )
         object.__setattr__(self, "state", ToolTraceState(self.state))
-        if not isinstance(self.created_at, datetime) or not isinstance(self.updated_at, datetime):
+        if not isinstance(self.created_at, datetime) or not isinstance(
+            self.updated_at, datetime
+        ):
             raise TypeError("trace timestamps must be datetimes")
         if self.updated_at < self.created_at:
             raise ToolRegistryError(
@@ -871,7 +915,9 @@ class ToolTrace:
         timestamp = now or datetime.now(timezone.utc)
         return cls(
             call_id=call.call_id,
-            correlation_id=call.context.correlation_id if call.context else call.call_id,
+            correlation_id=(
+                call.context.correlation_id if call.context else call.call_id
+            ),
             state=ToolTraceState.CREATED,
             created_at=timestamp,
             updated_at=timestamp,
@@ -889,14 +935,22 @@ class ToolResult:
     retryable: bool = False
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "call_id", _required_text(self.call_id, "call_id", ToolRegistryError))
+        object.__setattr__(
+            self, "call_id", _required_text(self.call_id, "call_id", ToolRegistryError)
+        )
         object.__setattr__(self, "status", ToolResultStatus(self.status))
         if not isinstance(self.retryable, bool):
             raise TypeError("retryable must be a boolean")
         object.__setattr__(
-            self, "output", _freeze_json_value(self.output, error_type=ToolRegistryError)
+            self,
+            "output",
+            _freeze_json_value(self.output, error_type=ToolRegistryError),
         )
-        error = self.error.details if isinstance(self.error, ToolKernelError) else self.error
+        error = (
+            self.error.details
+            if isinstance(self.error, ToolKernelError)
+            else self.error
+        )
         if error is not None and not isinstance(error, ToolError):
             raise TypeError("result errors must be ToolError or ToolKernelError")
         if self.status is ToolResultStatus.SUCCESS and error is not None:
@@ -924,8 +978,12 @@ class ToolRegistry:
         api_version: str = TOOL_API_VERSION,
         schema_version: str = TOOL_SCHEMA_VERSION,
     ) -> None:
-        self._api_version = _required_text(api_version, "api_version", ToolRegistryError)
-        self._schema_version = _required_text(schema_version, "schema_version", ToolRegistryError)
+        self._api_version = _required_text(
+            api_version, "api_version", ToolRegistryError
+        )
+        self._schema_version = _required_text(
+            schema_version, "schema_version", ToolRegistryError
+        )
         collected = tuple(specs)
         if any(not isinstance(spec, ToolSpec) for spec in collected):
             raise ToolRegistryError(
@@ -1101,7 +1159,9 @@ class SystemToolAdapter:
                 "SystemTool descriptors require string tool_class and name",
                 field_path=("descriptor",),
             )
-        return normalize_tool_name(f"{tool_class.strip().lower()}.{name.strip().lower()}", canonical=True)
+        return normalize_tool_name(
+            f"{tool_class.strip().lower()}.{name.strip().lower()}", canonical=True
+        )
 
     def to_spec(self, descriptor: Any) -> ToolSpec:
         canonical_id = self._descriptor_id(descriptor)
@@ -1150,7 +1210,9 @@ class SystemToolAdapter:
             )
         input_schema = getattr(descriptor, "input_schema", None)
         output_schema = getattr(descriptor, "output_schema", None)
-        if not isinstance(input_schema, Mapping) or not isinstance(output_schema, Mapping):
+        if not isinstance(input_schema, Mapping) or not isinstance(
+            output_schema, Mapping
+        ):
             raise SystemToolAdapterError(
                 ToolErrorCode.ADAPTER_DRIFT,
                 "SystemTool schemas must be objects",
@@ -1199,7 +1261,9 @@ class SystemToolAdapter:
                 raise SystemToolAdapterError(
                     ToolErrorCode.ADAPTER_DRIFT,
                     "SystemTool discovery keys must be canonical IDs or declared aliases",
-                    requested_name=mapping_key if isinstance(mapping_key, str) else None,
+                    requested_name=(
+                        mapping_key if isinstance(mapping_key, str) else None
+                    ),
                     field_path=("descriptors",),
                 ) from exc
             spec = self.to_spec(descriptor)

@@ -9,7 +9,6 @@ import pytest
 
 from conftest import ROOT, load_source_module
 
-
 sys.path.insert(0, str(ROOT / "Src"))
 sys.path.insert(0, str(ROOT / "Src/OpenAgentLib"))
 kernel = load_source_module(
@@ -142,7 +141,9 @@ def test_boolean_is_not_accepted_as_an_integer() -> None:
     ("arguments", "path"),
     [({"name": "one", "unknown": "value"}, ("unknown",)), ({}, ("name",))],
 )
-def test_schema_rejects_unknown_and_missing_fields(arguments: dict, path: tuple[str, ...]) -> None:
+def test_schema_rejects_unknown_and_missing_fields(
+    arguments: dict, path: tuple[str, ...]
+) -> None:
     registry = kernel.ToolRegistry([_spec()])
 
     with pytest.raises(kernel.ToolArgumentError) as error:
@@ -160,7 +161,10 @@ def test_registry_resolves_alias_to_the_same_spec_in_stable_order() -> None:
     alpha = _spec("alpha.read", aliases=("a",))
     registry = kernel.ToolRegistry([zulu, alpha])
 
-    assert [spec.canonical_id for spec in registry.specs()] == ["alpha.read", "zulu.read"]
+    assert [spec.canonical_id for spec in registry.specs()] == [
+        "alpha.read",
+        "zulu.read",
+    ]
     assert registry.resolve(" z ") is zulu
     assert registry.resolve("zulu.read") is zulu
     assert registry.register(_spec("middle.read", aliases=("m",))).specs() == (
@@ -173,7 +177,10 @@ def test_registry_resolves_alias_to_the_same_spec_in_stable_order() -> None:
 def test_registry_rejects_alias_collisions_with_canonical_names() -> None:
     with pytest.raises(kernel.ToolRegistryError) as error:
         kernel.ToolRegistry(
-            [_spec("alpha.read", aliases=("beta.read",)), _spec("beta.read", aliases=())]
+            [
+                _spec("alpha.read", aliases=("beta.read",)),
+                _spec("beta.read", aliases=()),
+            ]
         )
 
     assert error.value.code is kernel.ToolErrorCode.DUPLICATE_ALIAS

@@ -9,6 +9,7 @@ task.  Synchronous native handlers must use ``CooperativeSyncHandler`` and
 return after their stop event is set; the executor never returns a terminal
 result until that handler has finished cleanup.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -149,7 +150,9 @@ class ToolExecutor:
         registry: ToolRegistry,
         policy: ToolPolicyEngine,
         *,
-        native_handlers: Mapping[str, NativeToolHandler | CooperativeSyncHandler] | None = None,
+        native_handlers: (
+            Mapping[str, NativeToolHandler | CooperativeSyncHandler] | None
+        ) = None,
         host_invoker: ToolHostInvoker | None = None,
         hooks: ToolLifecycleHooks | None = None,
         trace_sink: ToolTraceSink | None = None,
@@ -170,6 +173,23 @@ class ToolExecutor:
         self.context_spill = context_spill
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._native_handlers = self._validate_native_handlers(native_handlers or {})
+        self._live_tasks: set[asyncio.Task[Any]] = set()
+
+    async def close(self) -> None:
+        """Cancel and await every timeout-wrapped operation still in flight."""
+
+        tasks = tuple(self._live_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._live_tasks.difference_update(tasks)
+
+    async def on_unload(self) -> None:
+        """Lifecycle hook used by the owning v2 runtime."""
+
+        await self.close()
 
     async def execute(
         self,
@@ -179,7 +199,9 @@ class ToolExecutor:
         """Return one terminal result/trace pair without propagating cancellation."""
 
         if not isinstance(call, ToolCall):
-            raise ToolExecutorError(ToolErrorCode.INVALID_CALL, "executor requires a ToolCall")
+            raise ToolExecutorError(
+                ToolErrorCode.INVALID_CALL, "executor requires a ToolCall"
+            )
         pipeline = _TracePipeline(ToolTrace.created(call, self._now()))
         await self._emit(pipeline.trace)
         try:
@@ -216,7 +238,9 @@ class ToolExecutor:
                 "calls and policy requests must have matching lengths",
             )
         if any(not isinstance(call, ToolCall) for call in call_items):
-            raise ToolExecutorError(ToolErrorCode.INVALID_CALL, "executor requires ToolCall values")
+            raise ToolExecutorError(
+                ToolErrorCode.INVALID_CALL, "executor requires ToolCall values"
+            )
         call_ids = tuple(call.call_id for call in call_items)
         if len(call_ids) != len(set(call_ids)):
             raise ToolExecutorError(
@@ -224,7 +248,10 @@ class ToolExecutor:
                 "batch call IDs must be unique",
             )
         completed = await asyncio.gather(
-            *(self.execute(call, request) for call, request in zip(call_items, request_items)),
+            *(
+                self.execute(call, request)
+                for call, request in zip(call_items, request_items)
+            ),
             return_exceptions=False,
         )
         return (
@@ -408,14 +435,19 @@ class ToolExecutor:
         if handler is not None:
             return await self._invoke_native(handler, call)
         if self.host_invoker is None:
-            raise RuntimeError("no native handler or isolated host invoker is registered")
+            raise RuntimeError(
+                "no native handler or isolated host invoker is registered"
+            )
         outcome = await self.host_invoker.invoke(
             call,
             retryable=call.spec.idempotency is IdempotencyClass.IDEMPOTENT,
         )
         if not isinstance(outcome, PluginHostOutcome):
             raise _HostFailure(PluginHostErrorCode.WORKER_ERROR, False)
-        if outcome.request.call_id != call.call_id or outcome.response.call_id != call.call_id:
+        if (
+            outcome.request.call_id != call.call_id
+            or outcome.response.call_id != call.call_id
+        ):
             raise _HostFailure(PluginHostErrorCode.RESPONSE_MISMATCH, False)
         if outcome.response.status is PluginHostStatus.SUCCESS:
             return outcome.response.result
@@ -484,7 +516,9 @@ class ToolExecutor:
             completion.result()
 
     async def _run_with_timeout(self, operation: Awaitable[Any], timeout: float) -> Any:
-        task = asyncio.create_task(operation)
+        task = asyncio.ensure_future(operation)
+        self._live_tasks.add(task)
+        task.add_done_callback(self._live_tasks.discard)
         try:
             return await asyncio.wait_for(task, timeout)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -572,7 +606,9 @@ class ToolExecutor:
         )
         await self._emit(pipeline.trace)
 
-    async def _record_terminal(self, pipeline: _TracePipeline, result: ToolResult) -> None:
+    async def _record_terminal(
+        self, pipeline: _TracePipeline, result: ToolResult
+    ) -> None:
         state = {
             ToolResultStatus.SUCCESS: ToolTraceState.COMPLETED,
             ToolResultStatus.ERROR: ToolTraceState.FAILED,
@@ -603,7 +639,9 @@ class ToolExecutor:
             normalized = normalize_tool_name(canonical_id, canonical=True)
             if normalized != canonical_id:
                 raise TypeError("native handlers require canonical callable keys")
-            if not isinstance(handler, CooperativeSyncHandler) and not _is_async_callable(handler):
+            if not isinstance(
+                handler, CooperativeSyncHandler
+            ) and not _is_async_callable(handler):
                 raise ToolExecutorError(
                     ToolErrorCode.INVALID_SPEC,
                     "native handlers must be async or CooperativeSyncHandler instances",

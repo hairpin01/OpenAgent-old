@@ -17,6 +17,7 @@ from typing import (
 )
 
 from .OASession import OASession
+
 try:  # Supports the isolated source-module loader used by session tests.
     from ..ToolTracePersistence import ToolTracePersistence
 except ImportError:  # pragma: no cover - production always uses the relative import
@@ -746,7 +747,9 @@ class SessionManager:
 
     def _session_payload(self) -> dict[str, Any]:
         return {
-            "sessions": [self._session_dict(session) for session in self.sessions.values()],
+            "sessions": [
+                self._session_dict(session) for session in self.sessions.values()
+            ],
             "active": {str(k): v for k, v in self.active_session.items()},
             "prefs": {str(k): v for k, v in self.session_prefs.items()},
         }
@@ -796,7 +799,9 @@ class SessionManager:
                 if session.id and session.chat_id:
                     # Terminal records are historical metadata only.  They never
                     # enter a pending queue or cause execution during reload.
-                    session.tool_traces = ToolTracePersistence.restore(raw.get("tool_traces"))
+                    session.tool_traces = ToolTracePersistence.restore(
+                        raw.get("tool_traces")
+                    )
                     self.sessions[session.id] = session
 
     def record_terminal_trace(self, session_id: str, trace: Any, result: Any) -> bool:

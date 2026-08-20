@@ -9,7 +9,6 @@ from types import ModuleType
 
 from conftest import load_source_module
 
-
 package_name = "openagent_manager_test"
 package = ModuleType(package_name)
 package.__path__ = []  # type: ignore[attr-defined]

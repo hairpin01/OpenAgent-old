@@ -50,7 +50,9 @@ class _OpenAgentResponseMixin:
             text = re.sub(pattern, " ", text, flags=re.I)
         return text.strip()
 
-    def _tool_terminal_status_summary(self, tool_trace: list[dict[str, Any]] | None) -> str:
+    def _tool_terminal_status_summary(
+        self, tool_trace: list[dict[str, Any]] | None
+    ) -> str:
         """Expose only normalized terminal statuses, never raw host output."""
         return ToolTracePersistence.response_summary(tool_trace)
 
@@ -331,18 +333,9 @@ class _OpenAgentResponseMixin:
 
         async def runner() -> None:
             started = time.monotonic()
-            local_log: list[str] = []
-            local_thinking: list[str] = []
             try:
-                result = await self._dispatch_tool(
-                    clean_tool,
-                    attrs_raw,
-                    body,
-                    source_event,
-                    status_event,
-                    local_log,
-                    started_at=started,
-                    thinking_notes=local_thinking,
+                result = await self._execute_v2_compatibility_call(
+                    clean_tool, attrs_raw, body
                 )
                 elapsed = time.monotonic() - started
                 comment = (

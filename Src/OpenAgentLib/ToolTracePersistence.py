@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 """Safe, terminal-only session envelopes for v2 tool execution."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
 import re
 from typing import Any, Mapping
-
 
 TOOL_TRACE_SCHEMA_VERSION = 1
 _TERMINAL_STATUSES = frozenset({"success", "error", "cancelled", "timed_out"})
@@ -43,7 +43,9 @@ class ToolTracePersistence:
         if depth >= _MAX_DEPTH:
             return "[depth-limited]"
         if value is None or isinstance(value, (bool, int, float, str)):
-            if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+            if isinstance(value, float) and (
+                value != value or value in (float("inf"), float("-inf"))
+            ):
                 return "[non-json-number]"
             if isinstance(value, str):
                 return value[:_MAX_TEXT]
@@ -55,7 +57,11 @@ class ToolTracePersistence:
                     safe["[truncated]"] = True
                     break
                 key_text = str(key)[:128]
-                safe[key_text] = "[redacted]" if _SECRET_KEY.search(key_text) else cls._json_safe(item, depth + 1)
+                safe[key_text] = (
+                    "[redacted]"
+                    if _SECRET_KEY.search(key_text)
+                    else cls._json_safe(item, depth + 1)
+                )
             return safe
         if isinstance(value, (list, tuple)):
             return [cls._json_safe(item, depth + 1) for item in value[:_MAX_ITEMS]]
@@ -83,8 +89,14 @@ class ToolTracePersistence:
         if state != _TERMINAL_STATES[status]:
             return None
         call_id = cls._text(getattr(trace, "call_id", None), limit=_MAX_ID)
-        correlation_id = cls._text(getattr(trace, "correlation_id", None), limit=_MAX_ID)
-        if not call_id or not correlation_id or getattr(result, "call_id", None) != call_id:
+        correlation_id = cls._text(
+            getattr(trace, "correlation_id", None), limit=_MAX_ID
+        )
+        if (
+            not call_id
+            or not correlation_id
+            or getattr(result, "call_id", None) != call_id
+        ):
             return None
         error = getattr(result, "error", None)
         error_code = getattr(error, "code", None)
@@ -95,7 +107,11 @@ class ToolTracePersistence:
             error_code = "executor_failed"
         # Errors carry only a stable code: host stderr and handler exception text
         # must never cross the session boundary.
-        output = cls._json_safe(getattr(result, "output", None)) if status == "success" else None
+        output = (
+            cls._json_safe(getattr(result, "output", None))
+            if status == "success"
+            else None
+        )
         spill_ref = None
         if isinstance(output, Mapping):
             candidate = output.get("spill_ref") or output.get("spill_path")
@@ -121,7 +137,10 @@ class ToolTracePersistence:
     @classmethod
     def validate_record(cls, record: Any) -> dict[str, Any] | None:
         """Validate persisted data strictly; invalid records are not restored."""
-        if not isinstance(record, Mapping) or record.get("version") != TOOL_TRACE_SCHEMA_VERSION:
+        if (
+            not isinstance(record, Mapping)
+            or record.get("version") != TOOL_TRACE_SCHEMA_VERSION
+        ):
             return None
         call_id = cls._text(record.get("call_id"), limit=_MAX_ID)
         correlation_id = cls._text(record.get("correlation_id"), limit=_MAX_ID)
@@ -165,7 +184,10 @@ class ToolTracePersistence:
 
     @classmethod
     def restore(cls, value: Any) -> list[dict[str, Any]]:
-        if not isinstance(value, Mapping) or value.get("version") != TOOL_TRACE_SCHEMA_VERSION:
+        if (
+            not isinstance(value, Mapping)
+            or value.get("version") != TOOL_TRACE_SCHEMA_VERSION
+        ):
             return []
         by_call: dict[str, dict[str, Any]] = {}
         for raw in value.get("records", []):
@@ -181,8 +203,14 @@ class ToolTracePersistence:
         if previous is None:
             records[record["call_id"]] = record
             return
-        previous_key = (previous["updated_at"], json.dumps(previous, sort_keys=True, separators=(",", ":")))
-        record_key = (record["updated_at"], json.dumps(record, sort_keys=True, separators=(",", ":")))
+        previous_key = (
+            previous["updated_at"],
+            json.dumps(previous, sort_keys=True, separators=(",", ":")),
+        )
+        record_key = (
+            record["updated_at"],
+            json.dumps(record, sort_keys=True, separators=(",", ":")),
+        )
         if record_key >= previous_key:
             records[record["call_id"]] = record
 
@@ -193,7 +221,10 @@ class ToolTracePersistence:
             record = cls.validate_record(raw)
             if record is not None:
                 cls.merge(indexed, record)
-        return {"version": TOOL_TRACE_SCHEMA_VERSION, "records": [indexed[key] for key in sorted(indexed)]}
+        return {
+            "version": TOOL_TRACE_SCHEMA_VERSION,
+            "records": [indexed[key] for key in sorted(indexed)],
+        }
 
     @classmethod
     def context_envelope(cls, record: Any) -> dict[str, str] | None:
@@ -206,12 +237,21 @@ class ToolTracePersistence:
         if safe.get("spill_ref"):
             text += f"\nSaved tool output: {safe['spill_ref']}"
         elif safe.get("output") is not None:
-            text += "\nResult: " + json.dumps(safe["output"], ensure_ascii=False, separators=(",", ":"))[:_MAX_TEXT]
+            text += (
+                "\nResult: "
+                + json.dumps(safe["output"], ensure_ascii=False, separators=(",", ":"))[
+                    :_MAX_TEXT
+                ]
+            )
         return {"role": "assistant", "content": text}
 
     @classmethod
     def response_summary(cls, records: Any) -> str:
-        valid = [cls.validate_record(record) for record in records if isinstance(records, list)]
+        valid = [
+            cls.validate_record(record)
+            for record in records
+            if isinstance(records, list)
+        ]
         valid = [record for record in valid if record is not None]
         if not valid:
             return ""

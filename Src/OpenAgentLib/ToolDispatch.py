@@ -298,7 +298,7 @@ class _OpenAgentToolRegistryMixin:
                 return "Specify a tool name, e.g. utility.tool_help tool=message.send"
             docs = self._get_tool_docs(query)
             if query not in docs:
-                return f"No documentation found for '{query}'. Available tools: {', '.join(sorted(self._get_tool_map().keys()))}"
+                return f"No documentation found for '{query}'. Available tools: {', '.join(sorted(self._retired_legacy_names().keys()))}"
             return self._format_tool_doc(query, docs[query])
         if tool_name == "utility.search_tool":
             attrs = self._parse_xml_attrs(attrs_raw)
@@ -526,7 +526,7 @@ class _OpenAgentToolRegistryMixin:
                 pass
         return text
 
-    def _get_tool_map(self) -> dict[str, Any]:
+    def _retired_legacy_names(self) -> dict[str, Any]:
         """Unified mapping of tool tags to internal methods. Merges core + plugin maps.
 
         Cached after first build; invalidated by _register_plugin / _unregister_plugin.
@@ -542,7 +542,7 @@ class _OpenAgentToolRegistryMixin:
         self._tool_map_cache = core
         return core
 
-    async def _dispatch_tool(
+    async def _retired_execute_legacy_tool(
         self,
         name: str,
         attrs_raw: str,
@@ -583,7 +583,7 @@ class _OpenAgentToolRegistryMixin:
         status_event = tool_context.status_event
         agent_log = tool_context.agent_log
         thinking_notes = tool_context.thinking_notes
-        tmap = self._get_tool_map()
+        tmap = self._retired_legacy_names()
         # Plugin dispatch handles aliases via tool_map.
 
         # 1. Direct match or alias
@@ -1282,35 +1282,14 @@ class _OpenAgentRuntimeToolsMixin:
             "```final\n"
             "completed answer for the user\n"
             "```\n"
-            "Plain text is NEVER a final answer. Do not mix final and tool_call blocks. "
+            "Plain text is treated as a candidate answer and checked by the completion gate; "
+            "unfinished prose returns to the action router. Do not mix final and tool_call blocks. "
             "Do not announce an action instead of calling its tool."
         )
         return prompt
 
     async def _run_terminal(self, command: str) -> str:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            cwd=self._workspace_dir(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=int(self.config["terminal_timeout"])
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            return f"Command timed out after {self.config['terminal_timeout']}s"
-
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
-        result = f"exit_code={proc.returncode}\n"
-        if out:
-            result += f"stdout:\n{out}\n"
-        if err:
-            result += f"stderr:\n{err}\n"
-        return result[-6000:]
+        raise RuntimeError("legacy terminal execution was removed; use terminal.run v2")
 
 
 __all__ = [

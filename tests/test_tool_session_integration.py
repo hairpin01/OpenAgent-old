@@ -44,7 +44,11 @@ def _terminal(
         call_id=call_id,
         status=SimpleNamespace(value=status),
         output=output,
-        error=(SimpleNamespace(code=SimpleNamespace(value=error_code)) if error_code else None),
+        error=(
+            SimpleNamespace(code=SimpleNamespace(value=error_code))
+            if error_code
+            else None
+        ),
     )
     trace = SimpleNamespace(
         call_id=call_id,
@@ -81,16 +85,21 @@ def test_trace_redaction_spill_context_and_response_summary(tmp_path: Path) -> N
         session = manager.new_session(1)
         redacted_trace, redacted_result = _terminal(
             call_id="redacted",
-            output={"api_key": "never-persist", "nested": {"password": "never-persist"}},
+            output={
+                "api_key": "never-persist",
+                "nested": {"password": "never-persist"},
+            },
         )
-        assert manager.record_terminal_trace(session.id, redacted_trace, redacted_result)
+        assert manager.record_terminal_trace(
+            session.id, redacted_trace, redacted_result
+        )
         trace, result = _terminal(
             call_id="spill",
             output={
                 "api_key": "never-persist",
                 "nested": {"password": "never-persist"},
                 "spill_ref": "openagent_tool_outputs/1/result.txt",
-            }
+            },
         )
         assert manager.record_terminal_trace(session.id, trace, result)
         assert session.tool_traces[0]["output"] == {
@@ -101,7 +110,9 @@ def test_trace_redaction_spill_context_and_response_summary(tmp_path: Path) -> N
         assert record["output"] == {"spill_ref": "openagent_tool_outputs/1/result.txt"}
         assert "never-persist" not in json.dumps(record)
 
-        entries = OpenAgentContextService().context_entries("prompt", "answer", [record])
+        entries = OpenAgentContextService().context_entries(
+            "prompt", "answer", [record]
+        )
         assert entries[1]["content"].endswith("openagent_tool_outputs/1/result.txt")
         summary = _OpenAgentResponseMixin()._tool_terminal_status_summary([record])
         assert summary == "Tool status: spill: success"
@@ -110,7 +121,9 @@ def test_trace_redaction_spill_context_and_response_summary(tmp_path: Path) -> N
     asyncio.run(scenario())
 
 
-def test_host_crash_cancellation_and_timeout_are_terminal_not_pending(tmp_path: Path) -> None:
+def test_host_crash_cancellation_and_timeout_are_terminal_not_pending(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         manager = _manager(tmp_path / "sessions.json")
         session = manager.new_session(1)
@@ -137,7 +150,9 @@ def test_host_crash_cancellation_and_timeout_are_terminal_not_pending(tmp_path: 
     asyncio.run(scenario())
 
 
-def test_malformed_trace_records_fail_closed_and_legacy_sessions_still_load(tmp_path: Path) -> None:
+def test_malformed_trace_records_fail_closed_and_legacy_sessions_still_load(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         path = tmp_path / "sessions.json"
         path.write_text(
@@ -150,7 +165,10 @@ def test_malformed_trace_records_fail_closed_and_legacy_sessions_still_load(tmp_
                             "chat_id": 1,
                             "created_at": 1,
                             "updated_at": 1,
-                            "tool_traces": {"version": 1, "records": [{"status": "pending"}]},
+                            "tool_traces": {
+                                "version": 1,
+                                "records": [{"status": "pending"}],
+                            },
                         },
                         {
                             "id": "no-traces",
@@ -173,7 +191,9 @@ def test_malformed_trace_records_fail_closed_and_legacy_sessions_still_load(tmp_
     asyncio.run(scenario())
 
 
-def test_duplicate_terminal_call_keeps_one_deterministic_latest_record(tmp_path: Path) -> None:
+def test_duplicate_terminal_call_keeps_one_deterministic_latest_record(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         manager = _manager(tmp_path / "sessions.json")
         session = manager.new_session(1)

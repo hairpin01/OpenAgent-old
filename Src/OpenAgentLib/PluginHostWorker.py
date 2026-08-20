@@ -220,6 +220,28 @@ def _write_response(response: Mapping[str, Any], max_frame_bytes: int) -> None:
     sys.stdout.buffer.flush()
 
 
+def _capability_probe(request: Mapping[str, Any], max_frame_bytes: int) -> Mapping[str, Any]:
+    """Exercise the bounded capability exchange without loading plugin code."""
+
+    frame = request["payload"].get("frame")
+    expected = {
+        "version", "kind", "host_request_id", "call_id", "canonical_tool_id", "actor_scope",
+        "grant_id", "capability", "operation", "capability_request_id", "payload",
+    }
+    if not isinstance(frame, dict) or set(frame) != expected or frame.get("version") != "2" or frame.get("kind") != "capability-request":
+        raise WorkerOperationError("capability probe frame is invalid")
+    if (frame["host_request_id"], frame["call_id"]) != (request["request_id"], request["call_id"]):
+        raise WorkerOperationError("capability probe identity is invalid")
+    _write_response(frame, max_frame_bytes)
+    response = json.loads(_read_frame(max_frame_bytes)[:-1].decode("utf-8"))
+    response_fields = {"version", "kind", "host_request_id", "call_id", "capability_request_id", "ok", "data", "error"}
+    if not isinstance(response, dict) or set(response) != response_fields or response.get("version") != "2" or response.get("kind") != "capability-response":
+        raise WorkerProtocolError("capability response is malformed")
+    if (response["host_request_id"], response["call_id"], response["capability_request_id"]) != (request["request_id"], request["call_id"], frame["capability_request_id"]):
+        raise WorkerProtocolError("capability response identity is invalid")
+    return {"capability_ok": response["ok"], "data": response["data"]}
+
+
 def main() -> int:
     args = _parse_args()
     if args.protocol_version != PLUGIN_HOST_PROTOCOL_VERSION or args.max_frame_bytes < 256:
@@ -227,7 +249,7 @@ def main() -> int:
     try:
         apply_resource_limits(args)
         request = _decode_request(_read_frame(args.max_frame_bytes), args.protocol_version)
-        result = _run_operation(request, args.max_frame_bytes)
+        result = _capability_probe(request, args.max_frame_bytes) if request["operation"] == "capability_probe" else _run_operation(request, args.max_frame_bytes)
         if request["operation"] not in {
             "malformed_response",
             "oversized_response",

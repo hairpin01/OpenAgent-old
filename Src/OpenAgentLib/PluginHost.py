@@ -23,7 +23,9 @@ import sys
 import tempfile
 import time
 from types import MappingProxyType
-from typing import Any, BinaryIO, Mapping, Sequence
+from typing import Any, Awaitable, BinaryIO, Callable, Mapping, Sequence
+
+from .PluginCapabilities import CapabilityProtocolError, CapabilityRequest, CapabilityResponse
 
 
 PLUGIN_HOST_PROTOCOL_VERSION = "1"
@@ -429,6 +431,7 @@ class PluginHost:
         mounts: Sequence[SandboxMount] = (),
         limits: WorkerResourceLimits | None = None,
         wall_timeout: float | None = None,
+        capability_handler: Callable[[CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]] | None = None,
     ) -> PluginHostOutcome:
         """Run exactly one request or fail without an unsandboxed fallback."""
 
@@ -478,7 +481,7 @@ class PluginHost:
                     )
                 except OSError as exc:
                     raise self._sandbox_unavailable(request, f"could not start bwrap: {exc}") from exc
-                return await self._exchange(process, request, request_frame, timeout)
+                return await self._exchange(process, request, request_frame, timeout, capability_handler)
         except PluginHostCallError:
             raise
 
@@ -617,19 +620,20 @@ class PluginHost:
         request: PluginHostRequest,
         request_frame: bytes,
         timeout: float,
+        capability_handler: Callable[[CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]] | None,
     ) -> PluginHostOutcome:
         deadline = time.monotonic() + timeout
         try:
             await self._await_with_deadline(
                 asyncio.to_thread(
-                    _write_and_close_stdin,
+                    _write_frame,
                     process.stdin,
                     request_frame,
                 ),
                 deadline,
             )
             line = await self._await_with_deadline(
-                asyncio.to_thread(_read_json_line, process.stdout, self.config.max_frame_bytes), deadline
+                self._read_terminal_frame(process, request, capability_handler, deadline), deadline
             )
             if line is None:
                 return_code = await self._await_with_deadline(
@@ -661,6 +665,9 @@ class PluginHost:
                     "worker response identity does not match the active request",
                 )
 
+            if process.stdin is not None:
+                process.stdin.close()
+
             return_code = await self._await_with_deadline(
                 asyncio.to_thread(process.wait), deadline
             )
@@ -680,6 +687,7 @@ class PluginHost:
                     f"isolated worker exited after responding (status {return_code})",
                 )
             return PluginHostOutcome(request=request, response=response)
+
         except asyncio.TimeoutError as exc:
             await self._stop_process(process)
             raise self._failure(
@@ -710,6 +718,44 @@ class PluginHost:
             _close_stream(process.stdin)
             _close_stream(process.stdout)
             _close_stream(process.stderr)
+
+    async def _read_terminal_frame(
+        self, process: subprocess.Popen[bytes], request: PluginHostRequest,
+        capability_handler: Callable[[CapabilityRequest], CapabilityResponse | Awaitable[CapabilityResponse]] | None,
+        deadline: float,
+    ) -> bytes | None:
+        """Only a terminal response ends an exchange; capability frames are routed back."""
+        while True:
+            line = await self._await_with_deadline(
+                asyncio.to_thread(_read_json_line, process.stdout, self.config.max_frame_bytes), deadline
+            )
+            if line is None:
+                return None
+            envelope = _decode_json_line(line, max_frame_bytes=self.config.max_frame_bytes)
+            if envelope.get("kind") == "response":
+                return line
+            if envelope.get("kind") != "capability-request" or capability_handler is None:
+                raise PluginHostProtocolError("worker emitted an unexpected non-terminal frame")
+            try:
+                capability_request = CapabilityRequest.from_envelope(envelope)
+            except CapabilityProtocolError as exc:
+                raise PluginHostProtocolError(f"malformed capability request: {exc}") from exc
+            if (capability_request.host_request_id, capability_request.call_id) != (request.request_id, request.call_id):
+                raise PluginHostProtocolError("capability request identity does not match active request")
+            capability_response = capability_handler(capability_request)
+            if hasattr(capability_response, "__await__"):
+                capability_response = await self._await_with_deadline(capability_response, deadline)
+            if not isinstance(capability_response, CapabilityResponse):
+                raise PluginHostProtocolError("capability handler returned an invalid response")
+            if (capability_response.host_request_id, capability_response.call_id, capability_response.capability_request_id) != (
+                request.request_id, request.call_id, capability_request.capability_request_id
+            ):
+                raise PluginHostProtocolError("capability response identity does not match request")
+            await self._await_with_deadline(
+                asyncio.to_thread(_write_frame, process.stdin, _encode_json_line(
+                    capability_response.to_envelope(), max_frame_bytes=self.config.max_frame_bytes
+                )), deadline,
+            )
 
     async def _await_with_deadline(self, awaitable: Any, deadline: float) -> Any:
         remaining = deadline - time.monotonic()
@@ -920,15 +966,20 @@ def _is_relative_to(path: Path | PurePosixPath, parent: Path | PurePosixPath) ->
     return True
 
 
-def _write_and_close_stdin(stream: BinaryIO | None, frame: bytes) -> None:
+def _write_frame(stream: BinaryIO | None, frame: bytes) -> None:
     if stream is None:
         raise BrokenPipeError("worker stdin is unavailable")
+    stream.write(frame)
+    stream.flush()
+
+
+def _write_and_close_stdin(stream: BinaryIO | None, frame: bytes) -> None:
     try:
-        stream.write(frame)
-        stream.flush()
+        _write_frame(stream, frame)
     finally:
-        with contextlib.suppress(OSError):
-            stream.close()
+        if stream is not None:
+            with contextlib.suppress(OSError):
+                stream.close()
 
 
 def _read_json_line(stream: BinaryIO | None, max_frame_bytes: int) -> bytes | None:

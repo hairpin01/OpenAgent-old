@@ -38,7 +38,6 @@ from OpenAgentLib.ToolPolicy import (
     ToolPolicyEngine,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

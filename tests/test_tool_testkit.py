@@ -23,7 +23,6 @@ from OpenAgentLib.ToolPolicy import (
     ToolPolicyEngine,
 )
 
-
 pytestmark = pytest.mark.usefixtures("offline_network")
 
 
@@ -64,7 +63,9 @@ def test_confirmed_mutation_uses_real_policy_validation(
     policy = ToolPolicyEngine(ToolPolicyCatalog((policy_rule_builder(spec),)))
     request = policy_request_builder(call)
 
-    assert policy.evaluate(call, request).kind is PolicyDecisionKind.CONFIRMATION_REQUIRED
+    assert (
+        policy.evaluate(call, request).kind is PolicyDecisionKind.CONFIRMATION_REQUIRED
+    )
     confirmed = replace(
         request,
         confirmation=ConfirmationState.APPROVED,

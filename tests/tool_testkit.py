@@ -11,7 +11,6 @@ import sys
 import threading
 from typing import Any, Iterable, Iterator, Mapping
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -30,7 +29,11 @@ def _runtime_import_path() -> Iterator[None]:
 with _runtime_import_path():
     from OpenAgentLib import PluginHost as plugin_host_module
     from OpenAgentLib.PluginCapabilities import CapabilityGrant, CapabilityRequest
-    from OpenAgentLib.PluginHost import PluginHostCallError, PluginHostErrorCode, PluginHostRequest
+    from OpenAgentLib.PluginHost import (
+        PluginHostCallError,
+        PluginHostErrorCode,
+        PluginHostRequest,
+    )
     from OpenAgentLib.PluginSDK import CapabilityFamily
     from OpenAgentLib.ToolCompatibility import ToolCompatibility
     from OpenAgentLib.ToolKernel import (
@@ -148,7 +151,10 @@ def build_policy_request(call: ToolCall, **overrides: Any) -> ToolPolicyRequest:
 
 
 def build_confirmation_grant(call: ToolCall, **overrides: Any) -> ToolConfirmationGrant:
-    values: dict[str, Any] = {"token": "confirmation-0001", "expires_at": FIXED_NOW + timedelta(minutes=5)}
+    values: dict[str, Any] = {
+        "token": "confirmation-0001",
+        "expires_at": FIXED_NOW + timedelta(minutes=5),
+    }
     values.update(overrides)
     return ToolConfirmationGrant.for_call(call=call, **values)
 
@@ -282,7 +288,9 @@ def exercise_compatibility_contract(
             decision = engine.evaluate(call, request)
         assert decision.kind is PolicyDecisionKind.ALLOW
     except Exception as exc:
-        raise AssertionError(f"{canonical_id}: compatibility contract failed: {exc}") from exc
+        raise AssertionError(
+            f"{canonical_id}: compatibility contract failed: {exc}"
+        ) from exc
 
 
 class _BlockingOutput(io.BytesIO):
@@ -345,9 +353,13 @@ class CancellationHarness:
             retryable=True,
         )
         task = asyncio.create_task(
-            self.host._exchange(self.process, request, request.to_json_line(), 5.0, None)
+            self.host._exchange(
+                self.process, request, request.to_json_line(), 5.0, None
+            )
         )
-        read_started = await asyncio.to_thread(self.process.stdout.read_started.wait, 1.0)
+        read_started = await asyncio.to_thread(
+            self.process.stdout.read_started.wait, 1.0
+        )
         if not read_started:
             raise AssertionError("fake child did not reach the transport read barrier")
         task.cancel()
@@ -356,7 +368,9 @@ class CancellationHarness:
             await task
         except PluginHostCallError as error:
             if error.code is not PluginHostErrorCode.CANCELLED:
-                raise AssertionError(f"unexpected cancellation code: {error.code}") from error
+                raise AssertionError(
+                    f"unexpected cancellation code: {error.code}"
+                ) from error
             cancellation_error = error
         else:
             raise AssertionError("cancelled host call unexpectedly completed")

@@ -126,7 +126,7 @@ def _plugin_declarations(root: Path) -> tuple[dict[str, Any], ...]:
                 isinstance(node, Assign)
                 and isinstance(node.value, Call)
                 and isinstance(node.value.func, Name)
-                and node.value.func.id == "build_plugin"
+                and node.value.func.id in {"build_plugin", "PluginManifest"}
                 for node in tree.body
             )
             if not has_v2_manifest:

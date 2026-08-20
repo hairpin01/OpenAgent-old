@@ -168,7 +168,7 @@ class PluginManifest:
         # a CapabilityFamily.TELEGRAM request.
         known = frozenset(item.value for item in CapabilityFamily) | frozenset({
             "telegram-read", "telegram-write", "telegram-admin",
-            "filesystem-read", "filesystem-write",
+            "filesystem-read", "filesystem-write", "network",
         })
         if not capabilities or not capabilities.issubset(known):
             raise PluginManifestError("manifest declares an unknown capability")

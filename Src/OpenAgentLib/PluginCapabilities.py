@@ -277,8 +277,58 @@ class CapabilityBroker:
         )
 
 
+_TELEGRAM_OPERATION_FIELDS = MappingProxyType({
+    # The broker accepts only these named operations and opaque JSON reference
+    # fields.  Plugins never get a Telegram client, peer resolver, or session.
+    "get-message": frozenset({"peer_id", "message_id"}),
+    "send-message": frozenset({"peer_id", "text", "reply_to_message_id"}),
+    "edit-message": frozenset({"peer_id", "message_id", "text"}),
+    "delete-message": frozenset({"peer_id", "message_id"}),
+    "react": frozenset({"peer_id", "message_id", "reaction"}),
+    "chat-info": frozenset({"peer_id"}), "chat-participants": frozenset({"peer_id", "limit"}),
+    "chat-admins": frozenset({"peer_id"}), "chat-permissions": frozenset({"peer_id"}),
+    "chat-common-with-user": frozenset({"user_id", "limit"}), "chat-set-title": frozenset({"peer_id", "title"}),
+    "chat-set-about": frozenset({"peer_id", "about"}), "chat-set-username": frozenset({"peer_id", "username"}),
+    "chat-slowmode": frozenset({"peer_id", "seconds"}), "chat-invite-link": frozenset({"peer_id"}),
+    "contacts-add": frozenset({"user_id", "first_name", "last_name", "phone"}),
+    "contacts-delete": frozenset({"user_id"}), "contacts-block": frozenset({"user_id"}),
+    "contacts-unblock": frozenset({"user_id"}), "contacts-entity": frozenset({"user_id"}),
+    "creation-channel": frozenset({"title", "about"}), "creation-group": frozenset({"title", "about"}),
+    "creation-bot": frozenset({"name", "username", "about"}), "creation-private-invite": frozenset({"invite_id"}),
+    "dialog-list-private": frozenset({"limit"}), "dialog-list-groups": frozenset({"limit"}),
+    "dialog-list-all": frozenset({"limit"}), "dialog-search": frozenset({"query", "limit"}),
+    "dialog-archive": frozenset({"peer_id"}), "dialog-unarchive": frozenset({"peer_id"}),
+    "dialog-leave": frozenset({"peer_id"}), "dialog-export-invite": frozenset({"peer_id"}),
+    "dialog-get-photo": frozenset({"peer_id"}), "dialog-set-photo": frozenset({"peer_id", "media_id"}),
+    "message-reply": frozenset({"peer_id", "message_id", "text"}),
+    "message-forward": frozenset({"peer_id", "message_id", "destination_peer_id"}),
+    "message-pin": frozenset({"peer_id", "message_id"}), "message-search": frozenset({"peer_id", "query", "limit"}),
+    "message-history": frozenset({"peer_id", "limit"}), "message-mark-read": frozenset({"peer_id", "message_id"}),
+    "message-typing": frozenset({"peer_id"}), "message-schedule": frozenset({"peer_id", "text", "schedule_at"}),
+    "message-draft": frozenset({"peer_id", "text"}),
+    "moderation-mute": frozenset({"peer_id", "user_id", "until_seconds"}),
+    "moderation-unmute": frozenset({"peer_id", "user_id"}), "moderation-ban": frozenset({"peer_id", "user_id", "reason"}),
+    "moderation-unban": frozenset({"peer_id", "user_id"}), "moderation-kick": frozenset({"peer_id", "user_id"}),
+    "moderation-promote": frozenset({"peer_id", "user_id", "rights"}), "moderation-demote": frozenset({"peer_id", "user_id"}),
+    "moderation-pin": frozenset({"peer_id", "message_id"}), "moderation-delete-messages": frozenset({"peer_id", "message_id"}),
+    "moderation-get-admins": frozenset({"peer_id"}),
+    "profile-get": frozenset({"user_id"}), "profile-get-full": frozenset({"user_id"}), "profile-get-me": frozenset(),
+    "profile-update-name": frozenset({"first_name", "last_name"}), "profile-update-bio": frozenset({"bio"}),
+    "profile-update-username": frozenset({"username"}), "profile-set-photo": frozenset({"media_id"}),
+    "profile-download-photo": frozenset({"user_id"}), "profile-get-photos": frozenset({"user_id", "limit"}),
+    "profile-common-chats": frozenset({"user_id", "limit"}),
+    "send-media": frozenset({"peer_id", "media_id", "caption"}), "download-media": frozenset({"peer_id", "message_id"}),
+})
+
+_TELEGRAM_REQUIRED_FIELDS = MappingProxyType({
+    "get-message": frozenset({"message_id"}), "send-message": frozenset({"peer_id", "text"}),
+    "edit-message": frozenset({"message_id", "text"}), "delete-message": frozenset({"message_id"}),
+    "react": frozenset({"message_id", "reaction"}), "send-media": frozenset({"peer_id", "media_id"}),
+    "download-media": frozenset({"peer_id", "message_id"}),
+})
+
 _OPERATIONS = MappingProxyType({
-    CapabilityFamily.TELEGRAM: frozenset({"get-message", "send-message", "edit-message", "delete-message", "react"}),
+    CapabilityFamily.TELEGRAM: frozenset(_TELEGRAM_OPERATION_FIELDS),
     CapabilityFamily.WORKSPACE_FS: frozenset({"read", "write", "list"}),
     CapabilityFamily.PROCESS: frozenset({"run"}),
     CapabilityFamily.HTTPS_FETCH: frozenset({"fetch"}),
@@ -329,13 +379,14 @@ def _normalize_payload(request: CapabilityRequest, grant: CapabilityGrant, resol
             raise CapabilityProtocolError("telegram data must be an opaque JSON object")
         if _has_ambient_key(payload["data"]):
             raise CapabilityProtocolError("telegram payload contains ambient credentials")
-        required = {
-            "get-message": {"message_id"}, "send-message": {"peer_id", "text"},
-            "edit-message": {"message_id", "text"}, "delete-message": {"message_id"},
-            "react": {"message_id", "reaction"},
-        }[request.operation]
+        allowed = _TELEGRAM_OPERATION_FIELDS[request.operation]
+        _only(payload["data"], allowed)
+        required = _TELEGRAM_REQUIRED_FIELDS.get(request.operation, frozenset())
         if not required.issubset(payload["data"]):
             raise CapabilityProtocolError("telegram operation is missing required opaque fields")
+        for key, value in payload["data"].items():
+            if key.endswith("_id") and (not isinstance(value, str) or not value):
+                raise CapabilityProtocolError("telegram references must be opaque non-empty IDs")
         return MappingProxyType({"data": payload["data"]})
     elif request.capability is CapabilityFamily.WORKSPACE_FS:
         allowed = frozenset({"path", "content"}) if request.operation == "write" else frozenset({"path"})

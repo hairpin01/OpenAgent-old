@@ -17,6 +17,10 @@ from typing import (
 )
 
 from .OASession import OASession
+try:  # Supports the isolated source-module loader used by session tests.
+    from ..ToolTracePersistence import ToolTracePersistence
+except ImportError:  # pragma: no cover - production always uses the relative import
+    from OpenAgentLib.ToolTracePersistence import ToolTracePersistence
 
 _SESSION_PREFERENCES = frozenset({"ask", "continue", "new"})
 
@@ -742,10 +746,18 @@ class SessionManager:
 
     def _session_payload(self) -> dict[str, Any]:
         return {
-            "sessions": [s.to_dict() for s in self.sessions.values()],
+            "sessions": [self._session_dict(session) for session in self.sessions.values()],
             "active": {str(k): v for k, v in self.active_session.items()},
             "prefs": {str(k): v for k, v in self.session_prefs.items()},
         }
+
+    @staticmethod
+    def _session_dict(session: OASession) -> dict[str, Any]:
+        payload = session.to_dict()
+        records = getattr(session, "tool_traces", [])
+        if records:
+            payload["tool_traces"] = ToolTracePersistence.session_field(records)
+        return payload
 
     @staticmethod
     def _payload_list(value: Any) -> list[Any]:
@@ -782,7 +794,26 @@ class SessionManager:
             with contextlib.suppress(Exception):
                 session = OASession.from_dict(raw)
                 if session.id and session.chat_id:
+                    # Terminal records are historical metadata only.  They never
+                    # enter a pending queue or cause execution during reload.
+                    session.tool_traces = ToolTracePersistence.restore(raw.get("tool_traces"))
                     self.sessions[session.id] = session
+
+    def record_terminal_trace(self, session_id: str, trace: Any, result: Any) -> bool:
+        """Store one validated terminal v2 result and use normal save scheduling."""
+        session = self.sessions.get(session_id)
+        record = ToolTracePersistence.from_terminal(trace, result)
+        if session is None or record is None:
+            return False
+        indexed: dict[str, dict[str, Any]] = {}
+        for existing in getattr(session, "tool_traces", []):
+            valid = ToolTracePersistence.validate_record(existing)
+            if valid is not None:
+                ToolTracePersistence.merge(indexed, valid)
+        ToolTracePersistence.merge(indexed, record)
+        session.tool_traces = [indexed[call_id] for call_id in sorted(indexed)]
+        self.touch_session(session)
+        return True
 
     def _restore_active_sessions(self, raw_active: Any) -> None:
         for chat_id_str, session_id in self._payload_dict(raw_active).items():

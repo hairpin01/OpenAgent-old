@@ -8,6 +8,7 @@ from typing import Any
 from .Plugin.PluginBase import OpenAgentPlugin
 from .Manager.Session import SessionManager
 from .HttpClient import OpenAgentHttpClient
+from .ToolTracePersistence import ToolTracePersistence
 
 
 class _OpenAgentLifecycleMixin:
@@ -112,6 +113,7 @@ class _OpenAgentLifecycleMixin:
             default_name_getter=lambda: self.strings("new_session_name"),
             session_limit=self.SESSION_LIMIT,
         )
+        self.tool_trace_persistence = ToolTracePersistence()
         self._sessions = self.session_manager.sessions
         self._active_session = self.session_manager.active_session
         self._session_prefs = self.session_manager.session_prefs
@@ -152,6 +154,12 @@ class _OpenAgentLifecycleMixin:
         await self._load_system_plugins()
         await self._load_installed_plugins()
         self.log.info("OpenAgent loaded")
+
+    def _record_terminal_tool_trace(
+        self, session_id: str, trace: Any, result: Any
+    ) -> bool:
+        """Persist v2 terminal metadata without creating resumable work."""
+        return self.session_manager.record_terminal_trace(session_id, trace, result)
 
 
 __all__ = ["_OpenAgentLifecycleMixin"]

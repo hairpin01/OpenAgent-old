@@ -9,6 +9,7 @@ from typing import Any
 from core.lib.types import Event
 
 from .AgentRuntime import estimate_messages_tokens, trim_messages_to_budget
+from .ToolTracePersistence import ToolTracePersistence
 
 
 class OpenAgentContextService:
@@ -56,10 +57,14 @@ class OpenAgentContextService:
         self,
         prompt: str,
         answer: str,
-        tool_trace: list[dict[str, str]] | None = None,
+        tool_trace: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, str]]:
         entries = [self.history_message("user", prompt, limit=8000)]
         for item in tool_trace or []:
+            envelope = ToolTracePersistence.context_envelope(item)
+            if envelope:
+                entries.append(envelope)
+                continue
             normalized = self.normalize_history_message(item, limit=6000)
             if normalized:
                 entries.append(normalized)

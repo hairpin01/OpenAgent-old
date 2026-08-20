@@ -10,6 +10,8 @@ import time
 import uuid
 import asyncio
 
+from .ToolTracePersistence import ToolTracePersistence
+
 
 class _OpenAgentResponseMixin:
     """Response formatting, answer delivery, follow-up and regeneration."""
@@ -47,6 +49,10 @@ class _OpenAgentResponseMixin:
         for pattern in patterns:
             text = re.sub(pattern, " ", text, flags=re.I)
         return text.strip()
+
+    def _tool_terminal_status_summary(self, tool_trace: list[dict[str, Any]] | None) -> str:
+        """Expose only normalized terminal statuses, never raw host output."""
+        return ToolTracePersistence.response_summary(tool_trace)
 
     async def _send_answer_file(
         self,

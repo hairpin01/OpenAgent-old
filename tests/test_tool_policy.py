@@ -8,7 +8,6 @@ import pytest
 
 from conftest import ROOT
 
-
 sys.path.insert(0, str(ROOT / "Src"))
 
 from OpenAgentLib.ToolKernel import (  # noqa: E402
@@ -81,7 +80,9 @@ def _call(
         confirmation=confirmation if confirmation is not None else rule.confirmation,
         concurrency=concurrency if concurrency is not None else rule.concurrency,
         idempotency=idempotency if idempotency is not None else rule.idempotency,
-        migration_disposition=disposition if disposition is not None else rule.migration_disposition,
+        migration_disposition=(
+            disposition if disposition is not None else rule.migration_disposition
+        ),
     )
     return ToolCall(
         call_id=f"call-{correlation_id}-{actor_id or 'none'}",
@@ -137,7 +138,9 @@ def test_forged_safe_spec_metadata_is_denied_and_cannot_use_parallel_lane() -> N
         idempotency=IdempotencyClass.IDEMPOTENT,
     )
     engine = _engine(rule)
-    decision = engine.evaluate(call, _request(rule, granted_capabilities=frozenset({"read-only"})))
+    decision = engine.evaluate(
+        call, _request(rule, granted_capabilities=frozenset({"read-only"}))
+    )
 
     assert decision.reason is PolicyReasonCode.SPEC_METADATA_DRIFT
     assert engine.lane_for(call) is ToolExecutionLane.SERIAL
@@ -164,7 +167,9 @@ def test_confirmation_is_required_before_allowing_a_privileged_call() -> None:
 
 
 @pytest.mark.parametrize("replay", ("call", "tool", "scope"))
-def test_confirmation_grant_cannot_be_replayed_across_call_tool_or_scope(replay: str) -> None:
+def test_confirmation_grant_cannot_be_replayed_across_call_tool_or_scope(
+    replay: str,
+) -> None:
     rule = _rule(confirmation=ConfirmationRequirement.REQUIRED)
     source_call = _call(rule, correlation_id="source", actor_id="source")
     grant = ToolConfirmationGrant.for_call("approved-once", source_call)
@@ -176,9 +181,17 @@ def test_confirmation_grant_cannot_be_replayed_across_call_tool_or_scope(replay:
     target_call = (
         _call(target_rule, correlation_id="source", actor_id="source")
         if replay == "tool"
-        else _call(rule, correlation_id="target" if replay == "call" else "source", actor_id="target" if replay == "scope" else "source")
+        else _call(
+            rule,
+            correlation_id="target" if replay == "call" else "source",
+            actor_id="target" if replay == "scope" else "source",
+        )
     )
-    catalog = ToolPolicyCatalog([rule, target_rule]) if replay == "tool" else ToolPolicyCatalog([rule])
+    catalog = (
+        ToolPolicyCatalog([rule, target_rule])
+        if replay == "tool"
+        else ToolPolicyCatalog([rule])
+    )
     decision = ToolPolicyEngine(catalog).evaluate(
         target_call,
         _request(
@@ -224,11 +237,17 @@ def test_expired_confirmation_grant_is_denied() -> None:
 
 def test_rejected_migration_and_unknown_tool_are_denied() -> None:
     rejected = _rule(disposition=MigrationDisposition.REJECT)
-    assert _engine(rejected).evaluate(_call(rejected), _request(rejected)).reason is PolicyReasonCode.MIGRATION_REJECTED
+    assert (
+        _engine(rejected).evaluate(_call(rejected), _request(rejected)).reason
+        is PolicyReasonCode.MIGRATION_REJECTED
+    )
 
     known = _rule()
     unknown = _rule("other.inspect")
-    assert _engine(known).evaluate(_call(unknown), _request(unknown)).reason is PolicyReasonCode.UNKNOWN_TOOL
+    assert (
+        _engine(known).evaluate(_call(unknown), _request(unknown)).reason
+        is PolicyReasonCode.UNKNOWN_TOOL
+    )
 
 
 @pytest.mark.parametrize(
@@ -250,21 +269,35 @@ def test_timeout_and_budget_requests_are_denied_without_clamping(
     assert decision.reason is reason
 
 
-def test_retry_requires_authoritative_idempotency_retryable_error_and_attempt_budget() -> None:
+def test_retry_requires_authoritative_idempotency_retryable_error_and_attempt_budget() -> (
+    None
+):
     rule = _rule()
     engine = _engine(rule)
     call = _call(rule)
     error = ToolError(ToolErrorCode.INVALID_ARGUMENT, "transient failure")
-    retryable = ToolResult(call.call_id, ToolResultStatus.ERROR, error=error, retryable=True)
-    cancelled = ToolResult(call.call_id, ToolResultStatus.CANCELLED, error=error, retryable=True)
+    retryable = ToolResult(
+        call.call_id, ToolResultStatus.ERROR, error=error, retryable=True
+    )
+    cancelled = ToolResult(
+        call.call_id, ToolResultStatus.CANCELLED, error=error, retryable=True
+    )
 
-    assert engine.retry_eligible(call, retryable, _request(rule, retry_attempt=1, maximum_attempts=2))
-    assert not engine.retry_eligible(call, cancelled, _request(rule, retry_attempt=1, maximum_attempts=2))
-    assert not engine.retry_eligible(call, retryable, _request(rule, retry_attempt=2, maximum_attempts=2))
+    assert engine.retry_eligible(
+        call, retryable, _request(rule, retry_attempt=1, maximum_attempts=2)
+    )
+    assert not engine.retry_eligible(
+        call, cancelled, _request(rule, retry_attempt=1, maximum_attempts=2)
+    )
+    assert not engine.retry_eligible(
+        call, retryable, _request(rule, retry_attempt=2, maximum_attempts=2)
+    )
 
     mutation = _rule(idempotency=IdempotencyClass.NON_IDEMPOTENT)
     assert not _engine(mutation).retry_eligible(
-        _call(mutation), retryable, _request(mutation, retry_attempt=1, maximum_attempts=2)
+        _call(mutation),
+        retryable,
+        _request(mutation, retry_attempt=1, maximum_attempts=2),
     )
 
 
@@ -272,20 +305,30 @@ def test_retry_rechecks_result_identity_and_current_authorization() -> None:
     rule = _rule()
     call = _call(rule)
     error = ToolError(ToolErrorCode.INVALID_ARGUMENT, "transient failure")
-    mismatched = ToolResult("other-call", ToolResultStatus.ERROR, error=error, retryable=True)
-    result = ToolResult(call.call_id, ToolResultStatus.ERROR, error=error, retryable=True)
+    mismatched = ToolResult(
+        "other-call", ToolResultStatus.ERROR, error=error, retryable=True
+    )
+    result = ToolResult(
+        call.call_id, ToolResultStatus.ERROR, error=error, retryable=True
+    )
     engine = _engine(rule)
 
-    assert not engine.retry_eligible(call, mismatched, _request(rule, retry_attempt=1, maximum_attempts=2))
     assert not engine.retry_eligible(
-        call,
-        result,
-        _request(rule, granted_capabilities=frozenset(), retry_attempt=1, maximum_attempts=2),
+        call, mismatched, _request(rule, retry_attempt=1, maximum_attempts=2)
     )
     assert not engine.retry_eligible(
         call,
         result,
-        _request(rule, enabled_tool_ids=frozenset(), retry_attempt=1, maximum_attempts=2),
+        _request(
+            rule, granted_capabilities=frozenset(), retry_attempt=1, maximum_attempts=2
+        ),
+    )
+    assert not engine.retry_eligible(
+        call,
+        result,
+        _request(
+            rule, enabled_tool_ids=frozenset(), retry_attempt=1, maximum_attempts=2
+        ),
     )
     assert not engine.retry_eligible(
         call,
@@ -298,7 +341,9 @@ def test_catalog_from_matrix_is_complete_and_canonical_only() -> None:
     from OpenAgentLib.ToolCompatibility import compatibility_matrix
 
     catalog = ToolPolicyCatalog.from_compatibility_matrix()
-    assert set(catalog.rules) == {entry.canonical_id for entry in compatibility_matrix()}
+    assert set(catalog.rules) == {
+        entry.canonical_id for entry in compatibility_matrix()
+    }
     assert catalog.get("chat") is None
 
 
@@ -317,7 +362,9 @@ def test_concurrency_gate_serializes_one_scope_but_not_other_scopes() -> None:
                 await asyncio.sleep(0.02)
                 active -= 1
 
-        same_scope = [_call(rule, correlation_id="same", actor_id="one") for _ in range(3)]
+        same_scope = [
+            _call(rule, correlation_id="same", actor_id="one") for _ in range(3)
+        ]
         await asyncio.gather(*(run(call) for call in same_scope))
         same_maximum = maximum
         active = maximum = 0
@@ -339,7 +386,9 @@ def test_concurrency_gate_allows_approved_parallel_reads_to_overlap() -> None:
 
         async def run(index: int) -> None:
             nonlocal active, maximum
-            async with gate.acquire(_call(rule, correlation_id=f"scope-{index}", actor_id=f"actor-{index}")):
+            async with gate.acquire(
+                _call(rule, correlation_id=f"scope-{index}", actor_id=f"actor-{index}")
+            ):
                 active += 1
                 maximum = max(maximum, active)
                 await asyncio.sleep(0.02)
@@ -388,7 +437,9 @@ def test_concurrency_gate_cleans_up_transient_scopes_and_cancelled_holders() -> 
         gate = ToolConcurrencyGate(_engine(rule))
 
         for index in range(20):
-            async with gate.acquire(_call(rule, correlation_id=f"scope-{index}", actor_id=f"actor-{index}")):
+            async with gate.acquire(
+                _call(rule, correlation_id=f"scope-{index}", actor_id=f"actor-{index}")
+            ):
                 assert gate.active_scope_count == 1
             assert gate.active_scope_count == 0
 

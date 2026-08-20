@@ -4,6 +4,7 @@
 This module only decides whether a validated call may run.  It deliberately does
 not invoke handlers, hooks, confirmations, or any other runtime integration.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -103,14 +104,22 @@ class ToolConfirmationGrant:
             raise ValueError("confirmation grant expiry must be timezone-aware")
         object.__setattr__(self, "token", token)
         object.__setattr__(self, "call_id", self.call_id.strip())
-        object.__setattr__(self, "canonical_id", normalize_tool_name(self.canonical_id, canonical=True))
+        object.__setattr__(
+            self, "canonical_id", normalize_tool_name(self.canonical_id, canonical=True)
+        )
         object.__setattr__(self, "scope", self.scope.strip())
 
     @classmethod
     def for_call(
         cls, token: str, call: ToolCall, *, expires_at: datetime | None = None
     ) -> "ToolConfirmationGrant":
-        return cls(token, call.call_id, call.spec.canonical_id, tool_scope_for(call), expires_at)
+        return cls(
+            token,
+            call.call_id,
+            call.spec.canonical_id,
+            tool_scope_for(call),
+            expires_at,
+        )
 
 
 @dataclass(frozen=True)
@@ -126,15 +135,23 @@ class ToolPolicyRule:
 
     def __post_init__(self) -> None:
         canonical_id = normalize_tool_name(self.canonical_id, canonical=True)
-        capabilities = frozenset(str(capability).strip().lower() for capability in self.capabilities)
+        capabilities = frozenset(
+            str(capability).strip().lower() for capability in self.capabilities
+        )
         if not capabilities or any(not capability for capability in capabilities):
             raise ToolPolicyCatalogError("policy rules require reviewed capabilities")
         object.__setattr__(self, "canonical_id", canonical_id)
         object.__setattr__(self, "capabilities", capabilities)
-        object.__setattr__(self, "confirmation", ConfirmationRequirement(self.confirmation))
+        object.__setattr__(
+            self, "confirmation", ConfirmationRequirement(self.confirmation)
+        )
         object.__setattr__(self, "concurrency", ConcurrencyClass(self.concurrency))
         object.__setattr__(self, "idempotency", IdempotencyClass(self.idempotency))
-        object.__setattr__(self, "migration_disposition", MigrationDisposition(self.migration_disposition))
+        object.__setattr__(
+            self,
+            "migration_disposition",
+            MigrationDisposition(self.migration_disposition),
+        )
 
     @classmethod
     def from_compatibility(cls, entry: ToolCompatibility) -> "ToolPolicyRule":
@@ -160,16 +177,22 @@ class ToolPolicyCatalog:
         indexed: dict[str, ToolPolicyRule] = {}
         for rule in rules:
             if not isinstance(rule, ToolPolicyRule):
-                raise ToolPolicyCatalogError("policy catalogs contain only ToolPolicyRule values")
+                raise ToolPolicyCatalogError(
+                    "policy catalogs contain only ToolPolicyRule values"
+                )
             if rule.canonical_id in indexed:
-                raise ToolPolicyCatalogError(f"duplicate canonical policy ID {rule.canonical_id!r}")
+                raise ToolPolicyCatalogError(
+                    f"duplicate canonical policy ID {rule.canonical_id!r}"
+                )
             indexed[rule.canonical_id] = rule
         if matrix is not None:
             expected: dict[str, ToolPolicyRule] = {}
             for entry in matrix:
                 rule = ToolPolicyRule.from_compatibility(entry)
                 if rule.canonical_id in expected:
-                    raise ToolPolicyCatalogError(f"duplicate matrix canonical ID {rule.canonical_id!r}")
+                    raise ToolPolicyCatalogError(
+                        f"duplicate matrix canonical ID {rule.canonical_id!r}"
+                    )
                 expected[rule.canonical_id] = rule
             missing = sorted(set(expected) - set(indexed))
             unknown = sorted(set(indexed) - set(expected))
@@ -183,14 +206,19 @@ class ToolPolicyCatalog:
                     "catalog must exactly match the committed matrix: "
                     f"missing={missing}, unknown={unknown}, drifted={drifted}"
                 )
-        self._rules: Mapping[str, ToolPolicyRule] = MappingProxyType(dict(sorted(indexed.items())))
+        self._rules: Mapping[str, ToolPolicyRule] = MappingProxyType(
+            dict(sorted(indexed.items()))
+        )
 
     @classmethod
     def from_compatibility_matrix(
         cls, matrix: Iterable[ToolCompatibility] | None = None
     ) -> "ToolPolicyCatalog":
         entries = tuple(compatibility_matrix() if matrix is None else matrix)
-        return cls((ToolPolicyRule.from_compatibility(entry) for entry in entries), matrix=entries)
+        return cls(
+            (ToolPolicyRule.from_compatibility(entry) for entry in entries),
+            matrix=entries,
+        )
 
     @property
     def rules(self) -> Mapping[str, ToolPolicyRule]:
@@ -222,8 +250,18 @@ class ToolPolicyRequest:
     now: datetime | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "enabled_tool_ids", frozenset(str(value).strip().lower() for value in self.enabled_tool_ids))
-        object.__setattr__(self, "granted_capabilities", frozenset(str(value).strip().lower() for value in self.granted_capabilities))
+        object.__setattr__(
+            self,
+            "enabled_tool_ids",
+            frozenset(str(value).strip().lower() for value in self.enabled_tool_ids),
+        )
+        object.__setattr__(
+            self,
+            "granted_capabilities",
+            frozenset(
+                str(value).strip().lower() for value in self.granted_capabilities
+            ),
+        )
         object.__setattr__(self, "confirmation", ConfirmationState(self.confirmation))
         if self.confirmation_grant is not None and not isinstance(
             self.confirmation_grant, ToolConfirmationGrant
@@ -253,7 +291,9 @@ class ToolPolicyEngine:
     def __init__(self, catalog: ToolPolicyCatalog) -> None:
         self.catalog = catalog
 
-    def evaluate(self, call: ToolCall, request: ToolPolicyRequest) -> ToolPolicyDecision:
+    def evaluate(
+        self, call: ToolCall, request: ToolPolicyRequest
+    ) -> ToolPolicyDecision:
         canonical_id = call.spec.canonical_id
         rule = self.catalog.get(canonical_id)
         if rule is None:
@@ -354,7 +394,9 @@ class ToolPolicyEngine:
     @staticmethod
     def _budget_reason(request: ToolPolicyRequest) -> PolicyReasonCode | None:
         if not all(
-            isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and isfinite(value)
             for value in (request.requested_timeout, request.maximum_timeout)
         ):
             return PolicyReasonCode.INVALID_TIMEOUT
@@ -362,7 +404,14 @@ class ToolPolicyEngine:
             return PolicyReasonCode.INVALID_TIMEOUT
         if request.requested_timeout > request.maximum_timeout:
             return PolicyReasonCode.TIMEOUT_EXCEEDED
-        if not all(isinstance(value, int) and not isinstance(value, bool) for value in (request.remaining_calls, request.remaining_token_budget, request.estimated_tokens)):
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in (
+                request.remaining_calls,
+                request.remaining_token_budget,
+                request.estimated_tokens,
+            )
+        ):
             return PolicyReasonCode.INVALID_BUDGET
         if request.remaining_calls <= 0:
             return PolicyReasonCode.CALL_BUDGET_EXHAUSTED

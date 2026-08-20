@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 from typing import Any, Mapping
 
@@ -22,7 +23,7 @@ from OpenAgentLib.ToolPolicy import ToolPolicyCatalog, ToolPolicyEngine, ToolPol
 
 
 TARGET_MODULES = ("chat", "contacts", "creation", "dialog", "message", "moderation", "profile", "file")
-DEFERRED_FILE_TOOLS = {"file.read_text", "file.write", "file.edit", "file.patch"}
+_FILE_LOCAL_TOOLS = {"file.read_text", "file.write", "file.edit", "file.patch"}
 
 
 class FakeTelegramTransport:
@@ -54,7 +55,7 @@ def _arguments(schema: Mapping[str, Any]) -> dict[str, Any]:
 def test_matrix_canonical_ids_are_declared_or_explicitly_deferred() -> None:
     expected = {entry.canonical_id for entry in TOOL_COMPATIBILITY_MATRIX if entry.source_module in TARGET_MODULES}
     declared = {tool.canonical_id for module in _modules() for tool in module.MANIFEST.tools}
-    missing = sorted(expected - declared - DEFERRED_FILE_TOOLS)
+    missing = sorted(expected - declared)
 
     assert not missing, f"missing migrated canonical IDs: {', '.join(missing)}"
     assert "chat.search" not in declared
@@ -63,6 +64,8 @@ def test_matrix_canonical_ids_are_declared_or_explicitly_deferred() -> None:
 @pytest.mark.parametrize("module", _modules(), ids=TARGET_MODULES)
 def test_every_telegram_tool_uses_one_exact_opaque_capability_request(module: object) -> None:
     for declaration in module.MANIFEST.tools:
+        if declaration.canonical_id in _FILE_LOCAL_TOOLS:
+            continue
         transport = FakeTelegramTransport()
         call = ToolCall(
             call_id=f"call-{declaration.canonical_id}", spec=declaration.to_tool_spec(),
@@ -100,7 +103,7 @@ def test_media_and_profile_mutation_return_only_opaque_artifact_metadata() -> No
     assert "profile.set_photo" in profile.HANDLERS
     assert "file.send" in media.HANDLERS
     assert "file.download_media" in media.HANDLERS
-    assert set(media.DEFERRED_WORKSPACE_TOOL_IDS) == DEFERRED_FILE_TOOLS
+    assert _FILE_LOCAL_TOOLS.issubset(media.HANDLERS)
 
 
 def test_moderation_requires_parent_confirmation_before_transport() -> None:
@@ -123,11 +126,16 @@ def test_moderation_requires_parent_confirmation_before_transport() -> None:
 
 def test_migrated_modules_have_no_telegram_or_ambient_runtime_imports() -> None:
     plugins_root = ROOT.parent / "repo-MCUB-fork" / "OpenAgent" / "plugins"
-    forbidden = ("telethon", "agent.", "client.", "source_event", "kernel", "tool_registry", "tool_map")
+    forbidden = ("telethon", "client.", "source_event", "kernel", "tool_registry", "tool_map")
     offenders = {
         path.name: token
         for path in (plugins_root / f"{name}.py" for name in TARGET_MODULES)
         for token in forbidden
         if token in path.read_text(encoding="utf-8")
     }
+    offenders.update({
+        path.name: "agent."
+        for path in (plugins_root / f"{name}.py" for name in TARGET_MODULES)
+        if re.search(r"(?<!open)agent\.", path.read_text(encoding="utf-8"))
+    })
     assert not offenders

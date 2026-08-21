@@ -936,3 +936,112 @@ def test_batch_length_mismatch_is_rejected_before_execution(
         asyncio.run(executor.execute_batch((call,), ()))
 
     assert error.value.code is ToolErrorCode.BATCH_LENGTH_MISMATCH
+
+
+def test_confirmation_grant_is_consumed_once_across_concurrent_execute_calls(
+    tool_spec_builder: Any,
+    tool_registry_builder: Any,
+    tool_call_builder: Any,
+    policy_rule_builder: Any,
+    policy_request_builder: Any,
+    confirmation_grant_builder: Any,
+) -> None:
+    spec = tool_spec_builder(
+        "sample.confirm-once", aliases=(), confirmation="required", concurrency="serial"
+    )
+    call = tool_call_builder(spec, call_id="call-confirm-once")
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    invocations = 0
+
+    async def handler(_call: Any) -> dict[str, bool]:
+        nonlocal invocations
+        invocations += 1
+        handler_started.set()
+        await release_handler.wait()
+        return {"ok": True}
+
+    executor = _executor(
+        tool_registry_builder,
+        policy_rule_builder,
+        (spec,),
+        native_handlers={spec.canonical_id: handler},
+    )
+    request = _request(
+        policy_request_builder,
+        call,
+        confirmation="approved",
+        confirmation_grant=confirmation_grant_builder(call),
+    )
+
+    async def scenario() -> tuple[Any, Any, Any]:
+        first = asyncio.create_task(executor.execute(call, request))
+        await handler_started.wait()
+        concurrent, _trace = await executor.execute(call, request)
+        release_handler.set()
+        completed, _trace = await first
+        replayed, _trace = await executor.execute(call, request)
+        return completed, concurrent, replayed
+
+    completed, concurrent, replayed = asyncio.run(scenario())
+
+    assert completed.status is ToolResultStatus.SUCCESS
+    assert concurrent.error is not None
+    assert concurrent.error.code is ToolErrorCode.CONFIRMATION_REPLAYED
+    assert replayed.error is not None
+    assert replayed.error.code is ToolErrorCode.CONFIRMATION_REPLAYED
+    assert invocations == 1
+
+
+def test_idempotent_retry_reuses_spent_grant_only_within_its_execute_chain(
+    tool_spec_builder: Any,
+    tool_registry_builder: Any,
+    tool_call_builder: Any,
+    policy_rule_builder: Any,
+    policy_request_builder: Any,
+    confirmation_grant_builder: Any,
+) -> None:
+    spec = tool_spec_builder(
+        "sample.confirm-retry",
+        aliases=(),
+        confirmation="required",
+        concurrency="serial",
+        idempotency="idempotent",
+    )
+    call = tool_call_builder(spec, call_id="call-confirm-retry")
+    host = _Host(
+        [
+            _host_outcome(
+                call,
+                error=PluginHostFailure(
+                    PluginHostErrorCode.WORKER_ERROR, "transient", retryable=True
+                ),
+            ),
+            _host_outcome(call, output={"ok": True}),
+        ]
+    )
+    executor = _executor(
+        tool_registry_builder,
+        policy_rule_builder,
+        (spec,),
+        host_invoker=host,
+    )
+    request = _request(
+        policy_request_builder,
+        call,
+        confirmation="approved",
+        confirmation_grant=confirmation_grant_builder(call),
+        maximum_attempts=2,
+    )
+
+    async def scenario() -> tuple[Any, Any]:
+        completed, _trace = await executor.execute(call, request)
+        replayed, _trace = await executor.execute(call, request)
+        return completed, replayed
+
+    completed, replayed = asyncio.run(scenario())
+
+    assert completed.status is ToolResultStatus.SUCCESS
+    assert host.calls == [(call.call_id, True), (call.call_id, True)]
+    assert replayed.error is not None
+    assert replayed.error.code is ToolErrorCode.CONFIRMATION_REPLAYED

@@ -609,7 +609,8 @@ def test_broker_rejects_symlink_escape_and_normalizes_guarded_write(
         {
             "operation": "write",
             "payload": {
-                "path": str(tmp_path / "notes" / "todo.txt"),
+                "root": str(tmp_path),
+                "components": ("notes", "todo.txt"),
                 "content": "new",
                 "mode": "overwrite",
                 "expected_hash": "hash-1",

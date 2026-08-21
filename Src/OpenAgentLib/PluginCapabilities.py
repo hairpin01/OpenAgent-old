@@ -9,9 +9,10 @@ import ipaddress
 from math import isfinite
 from pathlib import Path, PurePosixPath
 import socket
+import time
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .PluginSDK import CapabilityFamily, PLUGIN_SDK_API_VERSION, thaw_json
 from .ToolKernel import ToolCall, normalize_tool_name
@@ -279,7 +280,7 @@ class TelegramBackend(CapabilityBackend, Protocol):
 
 
 class WorkspaceFilesystemBackend(CapabilityBackend, Protocol):
-    """Must enforce normalized paths and atomically compare any expected_hash."""
+    """Must traverse grant-root relative components with no-follow dirfd operations."""
 
 
 class ProcessBackend(CapabilityBackend, Protocol):
@@ -287,7 +288,7 @@ class ProcessBackend(CapabilityBackend, Protocol):
 
 
 class PublicHttpsBackend(CapabilityBackend, Protocol):
-    """Must call ``validate_public_https_url`` for the initial URL and redirects."""
+    """Receives broker-pinned HTTPS targets and returns one unfollowed redirect."""
 
 
 class SchedulingBackend(CapabilityBackend, Protocol):
@@ -329,16 +330,24 @@ def resolve_workspace_directory(root: str | Path, relative_path: str) -> Path:
     return _resolve_workspace_path(root, relative)
 
 
-def validate_public_https_url(url: str, resolver: Any = socket.getaddrinfo) -> str:
-    """Validate HTTPS and every DNS result; call again after each redirect."""
+def _resolve_public_https_target(
+    url: str, resolver: Callable[..., Any]
+) -> Mapping[str, Any]:
+    """Resolve one HTTPS URL once and retain the exact address for the transport."""
 
-    parsed = urlparse(_required(url, "url"))
+    try:
+        parsed = urlparse(_required(url, "url"))
+        port = parsed.port
+    except ValueError as exc:
+        raise CapabilityProtocolError(
+            "only credential-free HTTPS URLs are allowed"
+        ) from exc
     if (
         parsed.scheme != "https"
         or not parsed.hostname
         or parsed.username
         or parsed.password
-        or parsed.port not in (None, 443)
+        or port not in (None, 443)
     ):
         raise CapabilityProtocolError("only credential-free HTTPS URLs are allowed")
     try:
@@ -347,11 +356,50 @@ def validate_public_https_url(url: str, resolver: Any = socket.getaddrinfo) -> s
         raise CapabilityProtocolError("could not resolve HTTPS host") from exc
     if not records:
         raise CapabilityProtocolError("HTTPS host has no addresses")
+
+    selected: tuple[str, int] | None = None
     for record in records:
-        address = ipaddress.ip_address(record[4][0])
+        try:
+            record_family = record[0]
+            address = ipaddress.ip_address(record[4][0])
+        except (IndexError, TypeError, ValueError) as exc:
+            raise CapabilityProtocolError(
+                "HTTPS host returned an invalid address"
+            ) from exc
         if not address.is_global:
             raise CapabilityProtocolError("HTTPS host resolves to a non-public address")
-    return parsed.geturl()
+        if record_family is None:
+            family = socket.AF_INET if address.version == 4 else socket.AF_INET6
+        elif record_family in (socket.AF_INET, socket.AF_INET6):
+            family = record_family
+        else:
+            raise CapabilityProtocolError(
+                "HTTPS host returned an unsupported address family"
+            )
+        if (family == socket.AF_INET) != (address.version == 4):
+            raise CapabilityProtocolError(
+                "HTTPS host returned an unsupported address family"
+            )
+        if selected is None:
+            selected = (str(address), family)
+
+    if selected is None:
+        raise CapabilityProtocolError("HTTPS host has no usable addresses")
+    return MappingProxyType(
+        {
+            "url": parsed.geturl(),
+            "hostname": parsed.hostname,
+            "port": 443,
+            "address": selected[0],
+            "address_family": selected[1],
+        }
+    )
+
+
+def validate_public_https_url(url: str, resolver: Any = socket.getaddrinfo) -> str:
+    """Validate an HTTPS URL and every DNS result without retaining its target."""
+
+    return _resolve_public_https_target(url, resolver)["url"]
 
 
 class CapabilityBroker:
@@ -369,6 +417,8 @@ class CapabilityBroker:
         self._resolver = resolver
         self._used_request_ids: set[tuple[str, str]] = set()
         self._scheduled_child_ids: set[str] = set()
+
+    _MAX_HTTPS_REDIRECTS = 5
 
     def dispatch(
         self,
@@ -414,11 +464,15 @@ class CapabilityBroker:
         if request.capability is CapabilityFamily.SCHEDULING:
             self._scheduled_child_ids.add(normalized_payload["call_id"])
         try:
-            data = _json(backend.invoke(request.operation, normalized_payload, grant))
+            data = (
+                self._invoke_https_backend(
+                    backend, request.operation, normalized_payload, grant
+                )
+                if request.capability is CapabilityFamily.HTTPS_FETCH
+                else _json(backend.invoke(request.operation, normalized_payload, grant))
+            )
             if not isinstance(data, Mapping):
                 raise CapabilityProtocolError("backend result must be an object")
-            for redirect in data.get("redirect_urls", ()):
-                validate_public_https_url(redirect, self._resolver)
         except (
             CapabilityProtocolError,
             TypeError,
@@ -434,6 +488,66 @@ class CapabilityBroker:
             True,
             data,
         )
+
+    def _invoke_https_backend(
+        self,
+        backend: CapabilityBackend,
+        operation: str,
+        payload: Mapping[str, Any],
+        grant: CapabilityGrant,
+    ) -> Mapping[str, Any]:
+        """Follow only broker-validated redirects within one request deadline."""
+
+        deadline = time.monotonic() + float(payload["timeout_seconds"])
+        target = payload
+        redirects = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CapabilityProtocolError("HTTPS request exceeded its timeout")
+            attempt = MappingProxyType(
+                {
+                    **target,
+                    "timeout_seconds": remaining,
+                    "max_bytes": payload["max_bytes"],
+                    "redirects": "broker-validated-only",
+                }
+            )
+            data = _json(backend.invoke(operation, attempt, grant))
+            if not isinstance(data, Mapping):
+                raise CapabilityProtocolError("backend result must be an object")
+            redirect = self._backend_redirect_location(data)
+            if redirect is None:
+                return data
+            if redirects >= self._MAX_HTTPS_REDIRECTS:
+                raise CapabilityProtocolError("HTTPS redirect limit exceeded")
+            target = _resolve_public_https_target(
+                urljoin(str(target["url"]), redirect), self._resolver
+            )
+            redirects += 1
+
+    @staticmethod
+    def _backend_redirect_location(data: Mapping[str, Any]) -> str | None:
+        if "redirect_url" in data and "redirect_urls" in data:
+            raise CapabilityProtocolError(
+                "HTTPS backend returned conflicting redirects"
+            )
+        if "redirect_url" in data:
+            location = data["redirect_url"]
+            if not isinstance(location, str) or not location:
+                raise CapabilityProtocolError(
+                    "HTTPS backend returned an invalid redirect"
+                )
+            return location
+        if "redirect_urls" not in data:
+            return None
+        locations = data["redirect_urls"]
+        if not isinstance(locations, tuple) or len(locations) != 1:
+            raise CapabilityProtocolError("HTTPS backend returned an invalid redirect")
+        location = locations[0]
+        if not isinstance(location, str) or not location:
+            raise CapabilityProtocolError("HTTPS backend returned an invalid redirect")
+        return location
 
     @staticmethod
     def _grant_matches(
@@ -671,12 +785,14 @@ def _normalize_payload(
         root = grant.constraints.get("root")
         if not isinstance(root, str) or not root:
             raise CapabilityProtocolError("filesystem grants require a root")
-        resolved = (
+        # This is only a preflight check.  The backend receives the original root
+        # and components so it can enforce containment while opening each entry.
+        _ = (
             resolve_workspace_directory(root, path)
             if request.operation == "list"
             else resolve_workspace_path(root, path)
         )
-        normalized = {"path": str(resolved)}
+        normalized = {"root": root, "components": PurePosixPath(path).parts}
         if request.operation == "write":
             normalized["content"] = payload["content"]
             normalized["mode"] = mode
@@ -751,7 +867,7 @@ def _normalize_payload(
         _only(payload, frozenset({"url", "timeout_seconds", "max_bytes"}))
         if not {"max_timeout_seconds", "max_bytes"}.issubset(grant.constraints):
             raise CapabilityProtocolError("HTTPS grant lacks mandatory bounds")
-        url = validate_public_https_url(payload.get("url"), resolver)
+        target = _resolve_public_https_target(payload.get("url"), resolver)
         timeout = payload.get("timeout_seconds")
         if (
             not isinstance(timeout, (int, float))
@@ -765,7 +881,7 @@ def _normalize_payload(
         )
         return MappingProxyType(
             {
-                "url": url,
+                **target,
                 "timeout_seconds": timeout,
                 "max_bytes": max_bytes,
                 "redirects": "broker-validated-only",

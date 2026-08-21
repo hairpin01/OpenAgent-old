@@ -29,6 +29,7 @@ from .PluginHost import (
     PluginHostStatus,
 )
 from .ToolKernel import (
+    ConfirmationRequirement,
     IdempotencyClass,
     ToolArgumentError,
     ToolCall,
@@ -180,6 +181,8 @@ class ToolExecutor:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._native_handlers = self._validate_native_handlers(native_handlers or {})
         self._live_tasks: set[asyncio.Task[Any]] = set()
+        self._confirmation_lock = threading.Lock()
+        self._consumed_confirmations: set[tuple[str, str, str, str]] = set()
 
     async def close(self) -> None:
         """Cancel and await every timeout-wrapped operation still in flight."""
@@ -290,8 +293,13 @@ class ToolExecutor:
 
         await self._record(pipeline, ToolTraceState.VALIDATED, {"stage": "registry"})
         current_request = request
+        # A retried idempotent call keeps its own spent grant, but no other
+        # execute() invocation may reuse it after the first attempt starts.
+        retry_confirmation_keys: set[tuple[str, str, str, str]] = set()
         while True:
-            result = await self._attempt(call, current_request, pipeline)
+            result = await self._attempt(
+                call, current_request, pipeline, retry_confirmation_keys
+            )
             if not self.policy.retry_eligible(call, result, current_request):
                 return result
             current_request = replace(
@@ -304,6 +312,7 @@ class ToolExecutor:
         call: ToolCall,
         request: ToolPolicyRequest,
         pipeline: _TracePipeline,
+        retry_confirmation_keys: set[tuple[str, str, str, str]],
     ) -> ToolResult:
         try:
             decision = self.policy.evaluate(call, request)
@@ -336,6 +345,13 @@ class ToolExecutor:
                 ToolResultStatus.ERROR,
                 ToolErrorCode.POLICY_DENIED,
                 "tool execution was denied by policy",
+            )
+        if not self._consume_confirmation(call, request, retry_confirmation_keys):
+            return self._result(
+                call,
+                ToolResultStatus.ERROR,
+                ToolErrorCode.CONFIRMATION_REPLAYED,
+                "tool confirmation grant was already consumed",
             )
 
         if self.hooks is not None:
@@ -391,6 +407,29 @@ class ToolExecutor:
                     "tool lifecycle hook failed",
                 )
         return result
+
+    def _consume_confirmation(
+        self,
+        call: ToolCall,
+        request: ToolPolicyRequest,
+        retry_confirmation_keys: set[tuple[str, str, str, str]],
+    ) -> bool:
+        """Spend an approval before hooks or handlers can cause a side effect."""
+
+        if call.spec.confirmation is not ConfirmationRequirement.REQUIRED:
+            return True
+        grant = request.confirmation_grant
+        if grant is None:
+            return False
+        key = grant.consumption_key
+        if key in retry_confirmation_keys:
+            return True
+        with self._confirmation_lock:
+            if key in self._consumed_confirmations:
+                return False
+            self._consumed_confirmations.add(key)
+        retry_confirmation_keys.add(key)
+        return True
 
     async def _invoke(self, call: ToolCall, request: ToolPolicyRequest) -> ToolResult:
         try:

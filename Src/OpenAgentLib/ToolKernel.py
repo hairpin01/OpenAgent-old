@@ -37,6 +37,7 @@ class ToolErrorCode(str, Enum):
     INVALID_SPEC = "invalid_spec"
     POLICY_DENIED = "policy_denied"
     CONFIRMATION_REQUIRED = "confirmation_required"
+    CONFIRMATION_REPLAYED = "confirmation_replayed"
     HOOK_CANCELLED = "hook_cancelled"
     HOOK_FAILED = "hook_failed"
     HANDLER_FAILED = "handler_failed"

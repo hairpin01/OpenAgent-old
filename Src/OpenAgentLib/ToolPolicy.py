@@ -82,7 +82,7 @@ def tool_scope_for(call: ToolCall) -> str:
 
 @dataclass(frozen=True)
 class ToolConfirmationGrant:
-    """One immutable approval, bound to exactly one tool call and scope."""
+    """One immutable approval, bound to one call and spent by the executor."""
 
     token: str
     call_id: str
@@ -120,6 +120,12 @@ class ToolConfirmationGrant:
             tool_scope_for(call),
             expires_at,
         )
+
+    @property
+    def consumption_key(self) -> tuple[str, str, str, str]:
+        """Return the stable identity consumed once before a side effect begins."""
+
+        return (self.token, self.call_id, self.canonical_id, self.scope)
 
 
 @dataclass(frozen=True)

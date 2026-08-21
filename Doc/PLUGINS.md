@@ -1,423 +1,185 @@
 # OpenAgent Plugins
 
-## Overview
+OpenAgent plugins use the shipped isolated v2 system. A plugin is a Python source
+file that publishes a static `PluginManifest`. The parent process inspects the
+source with the AST and records its hash, but never imports or executes the
+plugin. A statically admitted handler runs only in a Linux Bubblewrap host.
 
-OpenAgent uses a **dynamic plugin system** similar to how MCUB loads modules:
-the agent does **not** know in advance which plugins are installed.
-Plugins are auto-discovered from two directories, loaded at runtime,
-and register their tools into the shared registry.
+Linux with `/usr/bin/bwrap` is required for external plugins. There is no
+unsandboxed fallback.
 
-Plugins replace the old hardcoded tool map.
-This makes the tool set extensible without modifying the module itself.
+## Manifest
 
----
-
-## Architecture
-
-```
-OpenAgent-MCUB-repo.py          # module (loader, core tools, dispatch)
-OpenAgent/
-├── doc/                         # this documentation
-└── plugins/                     # bundled plugins (shipped with repo)
-    ├── terminal.py
-    ├── ast_grep.py
-    ├── web.py
-    ├── mcub.py
-    ├── message.py
-    ├── dialog.py
-    ├── chat.py
-    ├── moderation.py
-    ├── profile.py
-    ├── file.py
-    ├── contacts.py
-    └── creation.py
-```
-
-**Scan order** (at startup):
-
-1. `OpenAgent/plugins/` — bundled plugins (repo/main branch)
-2. `openagent_plugins/` — external installed plugins (user's workspace)
-
-External plugins override bundled ones with the same name without warning.
-
----
-
-## Plugin Lifecycle
-
-1. **Discovery** — `_load_installed_plugins()` scans both directories.
-2. **Import** — `_register_plugin_from_file()` imports the `.py` file dynamically.
-3. **Registration** — `_register_plugin()` stores the plugin and its config defaults.
-4. **Tool map merge** — `_get_tool_map()` merges core entries with each plugin's `tool_map`.
-5. **Dispatch** — `_dispatch_tool()` looks up the handler either from the plugin or from the module itself.
-
----
-
-## Plugin API
-
-### Base class (`OpenAgentPlugin`)
-
-```python
-class OpenAgentPlugin:
-    name: str = ""                    # unique plugin identifier
-    version: str = "0.1.0"
-    tool_registry: tuple[str, ...] = ()    # advertised tool names
-    tool_map: dict[str, str] = {}          # tool name → handler method
-    config_defaults: dict[str, object] = {}  # optional config keys
-
-    def __init__(self, agent):
-        self._agent = agent
-
-    @property
-    def agent(self):
-        return self._agent
-
-    async def on_load(self):
-        """Called after registration (optional)."""
-```
-
-### Required fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | `str` | Unique plugin name. Used as tool group prefix. |
-| `tool_registry` | `tuple[str]` | Tool names advertised to the model. |
-| `tool_map` | `dict[str, str]` | Maps each tool name → a handler method name (string). |
-
-### Handler methods
-
-Each handler is an `async` method on the plugin class.
-The dispatch system inspects the method signature and passes arguments by name.
-
-**Supported parameter names (any subset, order irrelevant):**
-
-| Parameter | Value |
-|-----------|-------|
-| `tool_name` | The matched tool name (e.g. `"message.send"`) |
-| `attrs_raw` | Raw XML attributes string from the tool call |
-| `body` | The body text (after attributes) |
-| `source_event` | The Telegram `NewMessage.Event` that triggered the conversation |
-| `command` | Same as `body` (for terminal-like tools) |
-| `query` | Same as `body` (for search-like tools) |
-| `mode` | One of `private`/`groups`/`all` (for dialog listing) |
-| `target` | Target user/chat name |
-| `kind` | `"group"` or `"channel"` (for creation tools) |
-
-**Example:**
-
-```python
-class MyPlugin:
-    name = "myplugin"
-    tool_map = {
-        "myplugin.hello": "cmd_hello",
-    }
-
-    async def cmd_hello(self, body: str) -> str:
-        return f"Hello, {body or 'world'}!"
-```
-
-### Config defaults
-
-If your plugin needs runtime configuration:
-
-```python
-class TerminalPlugin:
-    name = "terminal"
-    config_defaults = {
-        "terminal_timeout": 30,       # int
-        "terminal_enabled": True,     # bool
-        "terminal_steps": 3,          # int
-    }
-```
-
-The loader creates proper `ConfigValue` entries with automatic type detection
-(`Boolean` for `bool`, `Integer` for `int`, `Float` for `float`,
-`List` for `list`, `String` for everything else).
-
-### Lifecycle hooks
-
-Plugins may optionally implement hook methods. Hooks are fully trusted: they run
-inside the OpenAgent process and can see or mutate tool calls, prompts, messages,
-results, and errors.
-
-Hook order is controlled by `hook_priority` on the plugin class. Higher priority
-runs first; equal priority keeps plugin registration order.
-
-| Hook | When it runs | Typical use |
-|------|--------------|-------------|
-| `on_load()` | After plugin registration | Initialize state, patch methods, warm caches |
-| `on_unload()` | When plugin is unregistered/disabled when possible | Cleanup resources; patches are restored automatically |
-| `before_tool(context)` | Before tool resolution and dangerous-tool confirmation | Rewrite/cancel tool calls, enforce policy, aliases |
-| `after_tool(context)` | After a tool succeeds, before result is shown | Post-process result, audit, redact output |
-| `on_tool_error(context)` | After a tool handler raises | Replace error text, audit failures |
-| `before_agent(context)` | Before provider-specific user content/messages are built | Rewrite prompt, attachments, provider/system override |
-| `before_agent_messages(context)` | After provider messages are built, before model requests | Inject system/context messages, inspect final prompt |
-| `after_agent(context)` | Before final answer is returned | Format/redact/append final answer |
-
-#### Hook result
-
-Hooks can either mutate the context object directly or return
-`PluginHookResult`:
-
-```python
-from OpenAgentLib.PluginBase import PluginHookResult
-
-return PluginHookResult(cancel=True, result="Tool was blocked")
-```
-
-Fields:
+Import declarations from `OpenAgentLib.PluginSDK`. `PluginManifest` is immutable
+and versioned. Its fields are:
 
 | Field | Meaning |
-|-------|---------|
-| `cancel` | Stop the current hook chain. In `before_*` hooks this can skip the operation. |
-| `result` | Replacement tool result / agent answer. |
-| `reason` | Human-readable fallback when cancelling without `result`. |
+| --- | --- |
+| `plugin_id` | Lowercase dotted identifier, such as `example.echo`. |
+| `version` | Plugin version. |
+| `api_version` | Must be `"2"`. |
+| `entrypoint` | Dotted symbol resolved inside the isolated worker, normally `plugins.example.HANDLERS`. |
+| `tools` | Non-empty tuple of `PluginToolDeclaration` values. |
+| `capabilities` | Declared capability classes used by the plugin's tools. |
+| `manifest_version` | Must be `"2"`. |
+| `metadata` | Frozen JSON metadata. |
 
-Returning a plain non-`None` value is treated like
-`PluginHookResult(result=value)`. For `before_tool`, `before_agent`, and
-`before_agent_messages`, plain return values do **not** cancel execution; use
-`cancel=True` when you intentionally want to stop the operation.
+Each `PluginToolDeclaration` defines a canonical tool ID, optional normalized
+aliases, JSON input and output schemas, a description, confirmation policy,
+concurrency and idempotency classes, migration disposition, and one or more
+declared capability classes. Canonical IDs and aliases must be unique. An alias
+cannot collide with a canonical ID.
 
-#### Tool hook context
-
-`before_tool`, `after_tool`, and `on_tool_error` receive `ToolHookContext`:
-
-```python
-context.agent          # OpenAgent instance
-context.tool_name      # mutable tool name
-context.attrs_raw      # mutable raw XML attrs
-context.body           # mutable body
-context.source_event   # Telegram source event
-context.status_event   # status/edit event
-context.agent_log      # current agent log list
-context.started_at     # monotonic start timestamp or None
-context.thinking_notes # thinking note list or None
-context.plugin_owner   # resolved plugin owner after tool lookup
-context.result         # tool result or HOOK_NO_RESULT
-context.error          # exception in on_tool_error, else None
-context.metadata       # free dict for cooperating hooks
-```
-
-Example alias/safety hook:
+The minimal safe shape is:
 
 ```python
-from OpenAgentLib.PluginBase import PluginHookResult
+from typing import Any, Callable, Mapping
 
-class GuardPlugin:
-    name = "guard"
-    hook_priority = 100
+from OpenAgentLib.PluginSDK import CapabilityClient, PluginManifest, PluginToolDeclaration
+from OpenAgentLib.ToolKernel import ToolCall
 
-    async def before_tool(self, context):
-        if context.tool_name == "shell":
-            context.tool_name = "terminal.run"
 
-        if context.tool_name == "terminal.run" and "rm -rf" in context.body:
-            return PluginHookResult(cancel=True, result="Blocked dangerous command")
+def echo(call: ToolCall, capability: CapabilityClient) -> Mapping[str, Any]:
+    return {"text": call.arguments["text"]}
+
+
+MANIFEST = PluginManifest(
+    plugin_id="example.echo",
+    version="2.0.0",
+    api_version="2",
+    entrypoint="plugins.example.HANDLERS",
+    tools=(PluginToolDeclaration(
+        canonical_id="example.echo",
+        input_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        output_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        capabilities=frozenset({"configuration"}),
+    ),),
+    capabilities=frozenset({"configuration"}),
+)
+
+HANDLERS: Mapping[str, Callable[[ToolCall, CapabilityClient], Mapping[str, Any]]] = {
+    "example.echo": echo,
+}
 ```
 
-`before_tool` runs before dangerous-tool confirmation. If a hook rewrites a safe
-tool into a dangerous one, confirmation is checked against the rewritten
-`tool_name` and `body`.
+A handler receives a validated `ToolCall` and a `CapabilityClient`. It returns a
+JSON object matching the declared output schema. It must not use parent objects,
+ambient credentials, direct Telegram clients, direct filesystem APIs, or direct
+network and process APIs.
 
-#### Agent hook context
+## Admission And Execution
 
-`before_agent`, `before_agent_messages`, and `after_agent` receive
-`AgentHookContext`:
+Top-level plugin files are discovered deterministically. For each file,
+`PluginDiscovery.inspect_v2_plugin_source` parses the source without importing
+it. Admission recognizes either a `MANIFEST` or `PLUGIN_MANIFEST` assignment
+calling `PluginManifest` imported from `OpenAgentLib.PluginSDK`, or the shipped
+static factory marker: `build_plugin(...)` imported from `_telegram_v2`, as used
+by the sibling Telegram modules. The factory marker is recognized only for
+static admission and data extraction; it does not execute the factory in the
+parent. Arbitrary factories, aliases, or dynamic manifest construction remain
+rejected. The admitted source is stored with its SHA-256 digest.
 
-```python
-context.agent              # OpenAgent instance
-context.prompt             # mutable user prompt
-context.provider           # mutable provider key; normalized after before_agent
-context.source_event       # Telegram source event
-context.status_event       # status/edit event
-context.attachments        # mutable list of attachment dicts
-context.cancel_token       # generation cancel token
-context.system_override    # mutable system prompt override
-context.flash_mode         # bool
-context.messages           # provider messages after they are built
-context.thinking_messages  # thinking-pass messages after they are built
-context.agent_log          # current agent log list
-context.thinking_notes     # current thinking notes list
-context.tool_trace         # collected tool trace messages
-context.answer             # final answer in after_agent
-context.metadata           # free dict for cooperating hooks
+At tool-call time the isolated invoker verifies the admitted source hash,
+plugin ID, plugin version, canonical tool ID, and declared `HANDLERS` entrypoint.
+The worker then loads the handler inside Bubblewrap. The parent owns tool policy,
+confirmation, retry and concurrency decisions. The worker cannot change those
+decisions through its manifest or return value.
+
+## Capabilities And Grants
+
+`CapabilityClient.request` sends correlated JSON frames. It carries the host
+request ID, call ID, canonical tool ID, actor scope, grant ID, capability family,
+operation, request ID, and JSON payload. The client has no ambient parent object.
+
+The supported capability families and their grant-controlled operations are:
+
+| Family | Operations |
+| --- | --- |
+| `telegram` | Telegram operations defined by the frozen schemas, using opaque IDs and data. |
+| `workspace-fs` | `read`, `write`, `list`, within the granted workspace root. |
+| `process` | `run`, with an allowlisted executable, arguments, environment, root, and timeout. |
+| `https-fetch` | `fetch`, restricted to validated public HTTPS URLs. |
+| `scheduling` | `schedule`. |
+| `configuration` | `get`, `set`, in the grant-namespaced JSON settings store. |
+| `mcub-control` | The explicitly defined MCUB control operations only. |
+
+The parent issues an immutable `CapabilityGrant` for exactly one active tool
+call. A request is accepted only when its grant matches the call, actor scope,
+canonical tool, capability family, operation, constraints, and correlation
+IDs. Grants are not capabilities themselves: policy and grant validation still
+apply, requests are replay-protected, and unknown families or operations fail
+closed. A manifest may declare required capabilities, but cannot grant itself
+access or widen a parent grant.
+
+## Aliases And Migration
+
+The v2 registry is built from the canonical tool IDs and aliases in the frozen
+`TOOL_COMPATIBILITY_MATRIX`. Aliases are explicit migration mappings, not
+runtime ownership inferred from declaration order. The matrix also freezes
+schemas, confirmation, capability, concurrency, idempotency, and migration
+disposition.
+
+Migration lasts one release. A legacy declaration may be converted to a v2
+manifest only when its canonical ID, handler ownership, aliases, schemas, and
+policy metadata match the matrix. The conversion is a boundary aid and does not
+restore legacy execution.
+
+These legacy APIs and execution paths are removed and rejected before module
+execution:
+
+- `OpenAgentPlugin` class loading and its `on_load` or lifecycle hooks.
+- `tool_registry` and `tool_map` declarations.
+- `_dispatch_tool` and the old in-process plugin loader.
+- Legacy `agent`, `client`, `kernel`, or watcher injection and callbacks.
+- Parent-side importing of plugin modules or direct handler calls.
+- Unsandboxed execution, ambient agent or configuration access, and direct resource APIs.
+- Explicitly rejected aliases, including `chat.search` and `eval.python.telegram`.
+
+`tool_registry` and `tool_map` may appear in migration diagnostics or tests as
+rejected legacy input, but they are not valid v2 plugin fields. A source that
+does not contain the direct manifest marker or the shipped `build_plugin(...)`
+marker raises a migration error without executing its module code.
+
+## Testing And Examples
+
+The sibling v2 examples live in `../repo-MCUB-fork/OpenAgent/plugins/`. They
+include Telegram handlers, workspace and process resource handlers, web fetch,
+task scheduling, MCUB control, and the `eval` example. Telegram siblings use
+the statically recognized `build_plugin("...")` marker from `_telegram_v2` and
+publish its resulting `MANIFEST` and `HANDLERS`; other examples construct a
+`PluginManifest` directly. In both forms, the parent extracts declarations
+without running plugin code, and resource handlers use `CapabilityClient`
+rather than direct resource APIs.
+
+Relevant checks include:
+
+```bash
+python -m pytest -q tests/test_plugin_sdk.py tests/test_plugin_host.py tests/test_legacy_execution_removed.py
+python -m pytest -q tests/test_plugin_telegram_v2.py tests/test_plugin_resource_v2.py tests/test_plugin_runtime_v2.py
 ```
 
-Example final-answer formatter:
+The release verification also requires `cubkit check . --release`,
+`cubkit lint . --release --no-cache`, a reproducible release build, and
+`python -m py_compile` on the built artifact. A host without `/usr/bin/bwrap`
+must fail closed rather than execute a plugin outside isolation.
 
-```python
-class FormatPlugin:
-    name = "format"
+## Migration Checklist
 
-    async def after_agent(self, context):
-        context.answer = context.answer.strip()
-        if context.answer and not context.answer.endswith("."):
-            context.answer += "."
-```
-
-> Security note: `before_agent_messages` can see system prompts, history,
-> thinking messages, tool traces, and user content. Only install trusted plugins.
-
-### Method patch helpers
-
-`OpenAgentPlugin` also provides helpers for temporary method/attribute patching.
-All patches are tracked and restored in LIFO order by `restore_patches()`.
-The plugin engine also restores them automatically during unload, even if a
-custom `on_unload()` does not call `super().on_unload()`.
-
-| Helper | Purpose |
-|--------|---------|
-| `patch_attr(target, name, value, create=False)` | Replace an attribute and remember the original value. |
-| `patch_method(target, method_name, replacement, bind=None)` | Replace a method. Instance plain functions are auto-bound. |
-| `patch_agent_method(method_name, replacement, bind=None)` | Shortcut for patching `self.agent`. |
-| `wrap_method(target, method_name, wrapper, bind=None)` | Wrap an existing method with `wrapper(original, *args, **kwargs)`. |
-| `wrap_agent_method(method_name, wrapper, bind=None)` | Shortcut for wrapping `self.agent`. |
-| `restore_patch(patch)` | Restore one `MethodPatch`. |
-| `restore_patches()` / `unpatch_all()` | Restore all patches registered by this plugin. |
-
-Example: wrapping OpenAgent tool dispatch:
-
-```python
-class DispatchAuditPlugin:
-    name = "dispatch_audit"
-
-    async def on_load(self):
-        self.wrap_agent_method("_dispatch_tool", self.audit_dispatch)
-
-    async def audit_dispatch(self, original, *args, **kwargs):
-        tool_name = args[0] if args else kwargs.get("name", "unknown")
-        self.agent.log.info(f"Tool started: {tool_name}")
-        try:
-            return await original(*args, **kwargs)
-        finally:
-            self.agent.log.info(f"Tool finished: {tool_name}")
-```
-
-Example: temporarily replacing a method:
-
-```python
-class PatchExamplePlugin:
-    name = "patch_example"
-
-    async def on_load(self):
-        async def replacement(agent_self, *args, **kwargs):
-            return "patched result"
-
-        self.patch_agent_method("some_agent_method", replacement)
-
-    async def on_unload(self):
-        # Optional: PluginEngine restores patches automatically too.
-        self.restore_patches()
-```
-
-Patch behavior:
-
-- Patching an instance method creates a temporary shadow attribute on that
-  instance; restore removes the shadow and exposes the original class method.
-- Patching a class method restores the original class attribute.
-- `patch_attr(..., create=False)` requires the target attribute to exist and is
-  safer against typos. Use `create=True` for temporary new attributes.
-- `MethodPatch.restore()` is idempotent and returns `True` only on first restore.
-
----
-
-## Installing plugins
-
-### From reply (`.oaplugin` on a `.py` file)
-
-1. Send or forward a `.py` plugin file to the chat.
-2. Reply to it with `.oaplugin`.
-3. The plugin is validated (compiled), saved to `openagent_plugins/`, and registered.
-
-```text
-You:  .oaplugin
-      ↑ reply to file.py
-Bot:  Plugin installed: myplugin
-```
-
-### From catalog (`📦 Каталог`)
-
-1. Run `.oaplugin` → tap `📦 Каталог`.
-2. Browse plugins from the repository.
-3. Tap `📥 Установить`.
-
-Installed plugins appear in `⚙️ Менеджер` where you can also delete them.
-
----
-
-## Creating a plugin
-
-Simplest plugin skeleton:
-
-```python
-# scop: inline
-# SPDX-License-Identifier: MIT
-
-from typing import Any
-
-
-class PingPlugin:
-    name = "ping"
-    version = "0.1.0"
-    description = "Simple ping tool"
-
-    tool_registry = ("ping.check",)
-    tool_map = {
-        "ping": "cmd_ping",
-        "ping.check": "cmd_ping",
-    }
-
-    def __init__(self, agent: Any) -> None:
-        self.agent = agent
-
-    async def cmd_ping(self, body: str) -> str:
-        return "pong"
-```
-
-Save it, reply with `.oaplugin`, done.
-
-### Calling module internals
-
-Plugins can access the agent's methods through `self.agent`:
-
-```python
-await self.agent._web_search(query)          # web search
-await self.agent._run_mcub_command(cmd, ev)  # MCUB command
-await self.agent._send_userbot_message(msg, ev, chat=...)  # send message
-await self.agent._misc_tool(name, attrs, body, ev)         # misc Telegram ops
-data = self.agent._parse_xml_attrs(attrs_raw)              # parse XML attributes
-```
-
-> ⚠️ Methods starting with `_` are not public API — they may change between versions.
-
----
-
-## Bundled plugins
-
-| File | Name | Tools | Description |
-|------|------|-------|-------------|
-| `terminal.py` | `terminal` | `terminal.run`, `.inspect`, `.list_files`, `.read_file`, `.git_status` | Shell commands |
-| `ast_grep.py` | `ast_grep` | `ast_grep.search`, `.replace` | AST-based structural search and rewrites |
-| `web.py` | `web` | `web.search`, `.fetch_url`, `.read_html`, `.extract_links`, `.summarize_page` | Web search/fetch |
-| `mcub.py` | `mcub` | `mcub.command`, `.config`, `.modules`, `.install`, `.reload` | MCUB kernel commands |
-| `message.py` | `message` | `message.send*`, `.reply`, `.edit`, `.forward`, `.delete`, `.pin`, `.react`, `.get`, `.search`, `.history`, `.mark_read`, `.typing`, `.schedule`, `.draft` | Telegram messaging |
-| `dialog.py` | `dialog` | `dialog.list_*`, `.search`, `.archive`, `.unarchive`, `.leave`, `.export_invite`, `.get_photo`, `.set_photo` | Dialog management |
-| `chat.py` | `chat` | `chat.info`, `.participants`, `.admins`, `.permissions`, `.common_with_user`, `.set_*`, `.slowmode`, `.invite_link` | Chat settings |
-| `moderation.py` | `moderation` | `moderation.mute`, `.unmute`, `.ban`, `.unban`, `.kick`, `.promote`, `.demote`, `.pin`, `.delete_messages`, `.get_admins` | Moderation |
-| `profile.py` | `profile` | `profile.get*`, `.update_*`, `.set_photo`, `.download_photo`, `.common_chats` | User profile |
-| `file.py` | `file` | `file.send`, `.download_media`, `.read_text` | File operations |
-| `contacts.py` | `contacts` | `contacts.add`, `.delete`, `.block`, `.unblock`, `.entity` | Contact management |
-| `creation.py` | `creation` | `creation.channel`, `.group`, `.bot`, `.private_invite` | Channel/group/bot creation |
-
----
-
-## Tool dispatch rules
-
-When the model calls a tool:
-
-1. **Plugin `tool_map` is checked first** — exact match by tool name.
-2. **Core map is checked** — module-tied tools (skills, code, context, todo, utility, thinking).
-3. **Misc aliases** — legacy shortcuts like `get_admins`, `edit_message`, `block_user` are routed to `_misc_tool`.
-4. If nothing matches, the closest tool names are suggested.
-
-The tool group (first segment before `.`) is used to find the owning plugin,
-but the tool map lookup can match any key regardless of group.
+- Define one immutable v2 `PluginManifest` with API and manifest version `"2"`.
+- Define every tool with `PluginToolDeclaration`, JSON schemas, aliases, policy metadata, and capabilities.
+- Export a mapping named by the manifest entrypoint, normally `HANDLERS`.
+- Make every handler accept `(ToolCall, CapabilityClient)` and return schema-valid JSON.
+- Replace direct Telegram, filesystem, process, network, scheduling, configuration, and MCUB access with the matching capability request.
+- Compare canonical IDs and aliases with `TOOL_COMPATIBILITY_MATRIX`; reject unmapped legacy aliases.
+- Run the static admission, isolated-host, capability, migration, and release checks.
+- Verify Bubblewrap is present on the target Linux host. Do not add an unsandboxed fallback.

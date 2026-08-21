@@ -38,7 +38,6 @@ from ..TodoService import _WHITESPACE_RE
 from ..AgentRuntime import (
     ModelCallBudget,
     accepts_completion_verdict,
-    build_action_router_messages,
     classify_agent_output,
     extract_explicit_final,
     is_transient_provider_error,
@@ -2931,21 +2930,6 @@ class _OpenAgentAgentLoopMixin:
                 )
             return accepted
 
-        async def route_next_action(previous_response: str) -> str:
-            router_messages = build_action_router_messages(
-                prompt,
-                previous_response,
-                self._effective_tool_registry(),
-            )
-            routed = await ask_provider(router_messages, max_tokens_override=800)
-            if self.DEBUG:
-                self._debug_log(
-                    "agent.action_router",
-                    previous_response=previous_response,
-                    routed_response=routed,
-                )
-            return routed
-
         if provider == "google":
             user_content = self._build_google_content(prompt, attachments)
         else:
@@ -2988,8 +2972,6 @@ class _OpenAgentAgentLoopMixin:
         )
         invalid_tool_retries = 0
         answer = ""
-        pending_answer: str | None = None
-        last_auto_note = ""
 
         if cancel_token and cancel_token in self._cancelled_generations:
             raise RuntimeError("Generation cancelled")
@@ -3033,16 +3015,12 @@ class _OpenAgentAgentLoopMixin:
                 messages.append(runtime_comment)
                 agent_log.append("user.comment")
 
-            if pending_answer is not None:
-                answer = pending_answer
-                pending_answer = None
-            else:
-                try:
-                    answer = await ask_provider(messages)
-                except RuntimeError as exc:
-                    if "model-call budget exhausted" not in str(exc):
-                        raise
-                    break
+            try:
+                answer = await ask_provider(messages)
+            except RuntimeError as exc:
+                if "model-call budget exhausted" not in str(exc):
+                    raise
+                break
             if cancel_token and cancel_token in self._cancelled_generations:
                 raise RuntimeError("Generation cancelled")
             runtime_comment = self._runtime_comment_message(cancel_token)
@@ -3083,21 +3061,12 @@ class _OpenAgentAgentLoopMixin:
                     )
                     continue
                 candidate = output_text
+                if output_kind == "final":
+                    agent_log.append("answer.accepted")
+                    return await finish_agent(candidate)
                 if candidate and await verify_final(candidate):
                     agent_log.append("answer.accepted")
                     return await finish_agent(candidate)
-                if output_kind == "final":
-                    if self.DEBUG:
-                        self._debug_log(
-                            "agent.final_rejected",
-                            reason="semantic_gate_continue",
-                            final=output_text,
-                        )
-                note = output_text
-                if note and note != last_auto_note:
-                    thinking_notes.append(note)
-                    agent_log.append("thinking.model_progress")
-                    last_auto_note = note
                 messages.append({"role": "assistant", "content": answer or ""})
                 messages.append(
                     {
@@ -3111,15 +3080,6 @@ class _OpenAgentAgentLoopMixin:
                         ),
                     }
                 )
-                if call_budget.remaining:
-                    try:
-                        pending_answer = await route_next_action(note or answer or "")
-                    except RuntimeError as exc:
-                        if "model-call budget exhausted" not in str(exc):
-                            raise
-                        pending_answer = None
-                    if pending_answer:
-                        agent_log.append("router.action")
                 continue
             invalid_tool_retries = 0
 
@@ -3238,14 +3198,9 @@ class _OpenAgentAgentLoopMixin:
                 continue
             clean = extract_explicit_final(answer) or ""
             if clean:
-                if call_budget.remaining and await verify_final(clean):
-                    return await finish_agent(clean)
-                if self.DEBUG:
-                    self._debug_log(
-                        "agent.final_rejected",
-                        reason="forced_final_semantic_gate_continue",
-                        final=clean,
-                    )
+                agent_log.append("answer.accepted")
+                return await finish_agent(clean)
+            messages.append({"role": "assistant", "content": answer or ""})
             max_tokens = int(self.config["max_tokens"])
             completion_exhausted = (
                 provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other")
@@ -3259,13 +3214,22 @@ class _OpenAgentAgentLoopMixin:
                     {
                         "role": "user",
                         "content": (
-                            "Your previous final answer was empty because the completion budget was exhausted. "
+                            "Your previous response did not contain a valid final answer because the completion budget was exhausted. "
                             "Answer now in 800 characters or less inside one ```final``` block. No tools."
                         ),
                     }
                 )
                 continue
-            break
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response did not contain one valid ```final``` block. "
+                        "Return exactly one ```final``` fenced block with the completed answer. "
+                        "Do not call tools or include text outside that block."
+                    ),
+                }
+            )
         return await finish_agent(self.strings("tools_no_final"))
 
     def _tool_names(self) -> set[str]:

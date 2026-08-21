@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 import sys
 from types import SimpleNamespace
 from types import MappingProxyType
@@ -17,6 +19,10 @@ from OpenAgentLib.PluginCapabilities import (  # noqa: E402
     CapabilityRequest,
 )
 from OpenAgentLib.PluginHost import PluginHost, PluginHostRequest  # noqa: E402
+from OpenAgentLib.RuntimeCapabilityBackends import (  # noqa: E402
+    RuntimeFilesystemBackend,
+    RuntimeHttpsBackend,
+)
 from OpenAgentLib.PluginSDK import (  # noqa: E402
     CapabilityFamily,
     LegacyPluginMigrationError,
@@ -573,8 +579,12 @@ def test_nested_ambient_and_child_or_config_scope_escape_are_denied() -> None:
 
 def test_broker_revalidates_backend_redirects() -> None:
     class RedirectBackend:
+        def __init__(self) -> None:
+            self.hostnames: list[str] = []
+
         def invoke(self, operation, payload, grant):
-            return {"redirect_urls": ["https://redirect.invalid"]}
+            self.hostnames.append(payload["hostname"])
+            return {"status": 302, "redirect_url": "https://redirect.invalid"}
 
     call, policy, policy_request = _call()
     grant = CapabilityGrant.for_call(
@@ -601,11 +611,218 @@ def test_broker_revalidates_backend_redirects() -> None:
         address = "127.0.0.1" if host == "redirect.invalid" else "93.184.216.34"
         return [(None, None, None, None, (address, 443))]
 
-    assert (
-        CapabilityBroker(
-            policy, {CapabilityFamily.HTTPS_FETCH: RedirectBackend()}, resolver=resolver
-        )
-        .dispatch(call, policy_request, grant, request)
-        .error
-        is CapabilityErrorCode.BACKEND_ERROR
+    backend = RedirectBackend()
+    response = CapabilityBroker(
+        policy, {CapabilityFamily.HTTPS_FETCH: backend}, resolver=resolver
+    ).dispatch(call, policy_request, grant, request)
+
+    assert response.error is CapabilityErrorCode.BACKEND_ERROR
+    assert backend.hostnames == ["initial.invalid"]
+
+
+def test_https_transport_returns_location_without_following_redirect() -> None:
+    class Response:
+        status = 302
+
+        @staticmethod
+        def getheader(name: str) -> str | None:
+            return "/next"
+
+    class Connection:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str, dict[str, str]]] = []
+            self.closed = False
+
+        def request(self, method: str, target: str, headers: dict[str, str]) -> None:
+            self.requests.append((method, target, headers))
+
+        @staticmethod
+        def getresponse() -> Response:
+            return Response()
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = Connection()
+    addresses: list[tuple[str, int, str, int, float]] = []
+
+    def connection_factory(
+        hostname: str,
+        port: int,
+        address: str,
+        family: int,
+        timeout: float,
+    ) -> Connection:
+        addresses.append((hostname, port, address, family, timeout))
+        return connection
+
+    result = RuntimeHttpsBackend(connection_factory).invoke(
+        "fetch",
+        {
+            "url": "https://origin.invalid/path?query=value",
+            "hostname": "origin.invalid",
+            "port": 443,
+            "address": "93.184.216.34",
+            "address_family": socket.AF_INET,
+            "timeout_seconds": 3.0,
+            "max_bytes": 10,
+        },
+        object(),
     )
+
+    assert result == {"status": 302, "redirect_url": "/next"}
+    assert addresses == [("origin.invalid", 443, "93.184.216.34", socket.AF_INET, 3.0)]
+    assert connection.requests == [
+        (
+            "GET",
+            "/path?query=value",
+            {"Host": "origin.invalid", "User-Agent": "OpenAgent"},
+        )
+    ]
+    assert connection.closed
+
+
+def test_https_broker_pins_resolved_address_against_dns_rebinding() -> None:
+    class Response:
+        status = 200
+
+        @staticmethod
+        def read(limit: int) -> bytes:
+            assert limit == 11
+            return b"response"
+
+    class Connection:
+        def request(self, method: str, target: str, headers: dict[str, str]) -> None:
+            assert method == "GET"
+            assert target == "/"
+            assert headers["Host"] == "rebind.invalid"
+
+        @staticmethod
+        def getresponse() -> Response:
+            return Response()
+
+        @staticmethod
+        def close() -> None:
+            pass
+
+    resolved_hosts: list[str] = []
+    connected_addresses: list[str] = []
+
+    def resolver(
+        host: str, *_args: object, **_kwargs: object
+    ) -> list[tuple[object, ...]]:
+        resolved_hosts.append(host)
+        address = "93.184.216.34" if len(resolved_hosts) == 1 else "127.0.0.1"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+    def connection_factory(
+        hostname: str,
+        port: int,
+        address: str,
+        family: int,
+        timeout: float,
+    ) -> Connection:
+        assert (hostname, port, family) == ("rebind.invalid", 443, socket.AF_INET)
+        assert timeout > 0
+        connected_addresses.append(address)
+        return Connection()
+
+    call, policy, policy_request = _call()
+    grant = CapabilityGrant.for_call(
+        "net",
+        "host-1",
+        call,
+        CapabilityFamily.HTTPS_FETCH,
+        frozenset({"fetch"}),
+        {"max_timeout_seconds": 1, "max_bytes": 10},
+    )
+    request = _request(
+        CapabilityFamily.HTTPS_FETCH,
+        "fetch",
+        {"url": "https://rebind.invalid", "timeout_seconds": 1, "max_bytes": 10},
+        grant,
+    )
+
+    response = CapabilityBroker(
+        policy,
+        {CapabilityFamily.HTTPS_FETCH: RuntimeHttpsBackend(connection_factory)},
+        resolver=resolver,
+    ).dispatch(call, policy_request, grant, request)
+
+    assert response.ok
+    assert resolved_hosts == ["rebind.invalid"]
+    assert connected_addresses == ["93.184.216.34"]
+
+
+def test_runtime_filesystem_backend_rejects_a_symlink_swap_before_openat(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "workspace"
+    notes = root / "notes"
+    outside = tmp_path / "outside"
+    notes.mkdir(parents=True)
+    outside.mkdir()
+    original_open = os.open
+    swapped = False
+
+    def swap_before_component_open(
+        path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None
+    ) -> int:
+        nonlocal swapped
+        if path == "notes" and dir_fd is not None and not swapped:
+            notes.rename(root / "notes-original")
+            notes.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", swap_before_component_open)
+    call, policy, policy_request = _call()
+    grant = CapabilityGrant.for_call(
+        "fs",
+        "host-1",
+        call,
+        CapabilityFamily.WORKSPACE_FS,
+        frozenset({"write"}),
+        {"root": str(root)},
+    )
+    request = _request(
+        CapabilityFamily.WORKSPACE_FS,
+        "write",
+        {"path": "notes/escape.txt", "content": "denied"},
+        grant,
+    )
+
+    response = CapabilityBroker(
+        policy, {CapabilityFamily.WORKSPACE_FS: RuntimeFilesystemBackend()}
+    ).dispatch(call, policy_request, grant, request)
+
+    assert swapped
+    assert response.error is CapabilityErrorCode.BACKEND_ERROR
+    assert not (outside / "escape.txt").exists()
+
+
+def test_runtime_filesystem_backend_uses_grant_root_relative_components(
+    tmp_path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    backend = RuntimeFilesystemBackend()
+    payload = {
+        "root": str(root),
+        "components": ("notes", "todo.txt"),
+        "content": "one",
+        "mode": "overwrite",
+    }
+
+    written = backend.invoke("write", payload, object())
+    appended = backend.invoke(
+        "write", {**payload, "content": " two", "mode": "append"}, object()
+    )
+    read = backend.invoke(
+        "read", {"root": str(root), "components": ("notes", "todo.txt")}, object()
+    )
+    listed = backend.invoke("list", {"root": str(root), "components": ()}, object())
+
+    assert written["changed"] and appended["changed"]
+    assert read["content"] == "one two"
+    assert listed == {"entries": ["notes"]}

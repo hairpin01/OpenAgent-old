@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .AgentRuntime import search_tool_docs
+from .NativeToolCalls import json_schema_text
 from .ToolKernel import ToolRegistry
 
 JsonObject = Mapping[str, Any]
@@ -58,7 +59,7 @@ class RuntimeNativeSystemServices:
             spec.canonical_id: {
                 "tool": spec.canonical_id,
                 "desc": spec.description,
-                "args": "JSON object matching the declared schema",
+                "args": json_schema_text(spec.input_schema),
                 "source": spec.source_family,
             }
             for spec in self._registry.specs()

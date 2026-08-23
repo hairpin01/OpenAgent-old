@@ -471,8 +471,10 @@ class _OpenAgentResponseMixin:
         attachments: list[dict[str, str]],
         *,
         source_event: Any = None,
+        agent_log: list[str] | None = None,
     ) -> list[list[Any]]:
         regen_token = str(uuid.uuid4())
+        expires_at = time.time() + 900
         self._regen_payloads[regen_token] = {
             "chat_id": chat_id,
             "prompt": prompt,
@@ -480,6 +482,9 @@ class _OpenAgentResponseMixin:
             "attachments": attachments,
             "source_event": source_event,
             "created_at": time.time(),
+            "actor_id": self._response_actor_id(source_event),
+            "expires_at": expires_at,
+            "plugin_generations": self._regen_plugin_generations(agent_log or []),
         }
         self.log.debug(
             "OA final_buttons: regen_token=%s chat_id=%s source_event=%s attachments=%d",
@@ -615,6 +620,7 @@ class _OpenAgentResponseMixin:
                     prompt,
                     attachments,
                     source_event=source_event,
+                    agent_log=agent_log,
                 ),
                 edit_current=True,
             )
@@ -641,7 +647,7 @@ class _OpenAgentResponseMixin:
         # Button.input delivers UpdateBotInlineSend as event — it has no .chat_id / .edit().
         # Extract source_event and chat_id from the payload first so that show_feedback
         # and the loading-status setup both have a real message context to work with.
-        payload = self._regen_payloads.get(str(token))
+        payload = self._validate_regen_payload(str(token), event, consume=False)
         prompt = (text or "").strip()
         source_event = (payload.get("source_event") if payload else None) or event
         chat_id = payload.get("chat_id") if payload else None
@@ -675,6 +681,11 @@ class _OpenAgentResponseMixin:
         if not prompt:
             self.log.debug("OA regen_prompt: empty prompt token=%s", token)
             await show_feedback(self.strings("regen_prompt_placeholder"))
+            return
+
+        payload = self._validate_regen_payload(str(token), event, consume=True)
+        if not payload:
+            await show_feedback(self.strings("regen_stale"))
             return
 
         attachments = payload.get("attachments") or []
@@ -760,6 +771,7 @@ class _OpenAgentResponseMixin:
                     prompt,
                     attachments,
                     source_event=source_event,
+                    agent_log=agent_log,
                 ),
                 edit_current=True,
             )
@@ -780,7 +792,7 @@ class _OpenAgentResponseMixin:
             )
 
     async def _regenerate_response(self, event: Any, token: str) -> None:
-        payload = self._regen_payloads.get(token)
+        payload = self._validate_regen_payload(token, event, consume=True)
         if not payload:
             try:
                 await event.answer(self.strings("regen_stale"), alert=True)
@@ -845,6 +857,7 @@ class _OpenAgentResponseMixin:
                     payload["full_prompt"],
                     payload.get("attachments") or [],
                     source_event=event,
+                    agent_log=agent_log,
                 ),
                 edit_current=True,
             )
@@ -862,6 +875,60 @@ class _OpenAgentResponseMixin:
                 started_at=started,
                 source="OpenAgent:regenerate",
             )
+
+    @staticmethod
+    def _response_actor_id(event: Any) -> int | None:
+        for owner in (event, getattr(event, "message", None)):
+            actor_id = getattr(owner, "sender_id", None)
+            if isinstance(actor_id, int) and not isinstance(actor_id, bool):
+                return actor_id
+        return None
+
+    def _regen_plugin_generations(
+        self, agent_log: list[str]
+    ) -> tuple[tuple[str, int], ...]:
+        registry = getattr(self, "_installed_plugin_registry", None)
+        if registry is None:
+            return ()
+        owners: dict[str, int] = {}
+        for tool_name in agent_log:
+            if not isinstance(tool_name, str):
+                continue
+            try:
+                owner = registry.get_active_tool_owner(tool_name)
+            except Exception:
+                continue
+            owners[owner.plugin_id] = owner.generation
+        return tuple(sorted(owners.items()))
+
+    def _validate_regen_payload(
+        self, token: str, event: Any, *, consume: bool
+    ) -> dict[str, Any] | None:
+        """Validate the original actor and only plugin generations it used."""
+
+        payload = self._regen_payloads.get(token)
+        if not payload:
+            return None
+        actor_id = payload.get("actor_id")
+        if actor_id is not None and actor_id != self._response_actor_id(event):
+            self._regen_payloads.pop(token, None)
+            return None
+        if time.time() >= float(payload.get("expires_at", 0)):
+            self._regen_payloads.pop(token, None)
+            return None
+        registry = getattr(self, "_installed_plugin_registry", None)
+        for plugin_id, generation in payload.get("plugin_generations", ()):
+            try:
+                record = registry.get(plugin_id)
+            except Exception:
+                self._regen_payloads.pop(token, None)
+                return None
+            if record.generation != generation or record.status.value != "active":
+                self._regen_payloads.pop(token, None)
+                return None
+        if consume:
+            self._regen_payloads.pop(token, None)
+        return payload
 
 
 __all__ = [

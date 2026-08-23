@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import sys
 import threading
 import time
@@ -119,6 +120,12 @@ class _Host:
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
+
+
+class _StagedFailure(RuntimeError):
+    def __init__(self, stage: str, detail: str) -> None:
+        self.tool_failure_stage = stage
+        super().__init__(detail)
 
 
 class _Spill:
@@ -394,6 +401,123 @@ def test_host_success_and_failure_are_normalized_without_secret_messages(
     assert outcomes[1][0].error.code is ToolErrorCode.HOST_FAILED
     assert "secret" not in outcomes[1][0].error.message
     assert outcomes[1][0].retryable is True
+
+
+def test_dispatch_failures_log_stage_and_correlation_without_leaking_details(
+    tool_spec_builder: Any,
+    tool_registry_builder: Any,
+    tool_call_builder: Any,
+    policy_rule_builder: Any,
+    policy_request_builder: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    handler_spec = tool_spec_builder("sample.handler", aliases=())
+    admission_spec = tool_spec_builder("sample.admission", aliases=())
+    capability_spec = tool_spec_builder("sample.capability", aliases=())
+    worker_spec = tool_spec_builder("sample.worker", aliases=())
+    serialization_spec = tool_spec_builder("sample.serialization", aliases=())
+    handler_call = tool_call_builder(handler_spec, call_id="handler-call")
+    admission_call = tool_call_builder(admission_spec, call_id="admission-call")
+    capability_call = tool_call_builder(capability_spec, call_id="capability-call")
+    worker_call = tool_call_builder(worker_spec, call_id="worker-call")
+    serialization_call = tool_call_builder(
+        serialization_spec, call_id="serialization-call"
+    )
+    host = _Host(
+        [
+            _StagedFailure("admission", "source /private/plugins was rejected"),
+            _StagedFailure("capability", "command --secret backend failed"),
+            _host_outcome(
+                worker_call,
+                error=PluginHostFailure(
+                    PluginHostErrorCode.WORKER_ERROR,
+                    "worker validation failed for /private/plugin.py",
+                ),
+            ),
+        ]
+    )
+
+    async def native_handler(call: Any) -> Any:
+        if call.canonical_id == handler_spec.canonical_id:
+            raise RuntimeError("handler command leaked /private/workspace")
+        return []
+
+    correlation_ids = iter(
+        (
+            "diagnostic-handler",
+            "diagnostic-admission",
+            "diagnostic-capability",
+            "diagnostic-worker",
+            "diagnostic-serialization",
+        )
+    )
+    executor = _executor(
+        tool_registry_builder,
+        policy_rule_builder,
+        (
+            handler_spec,
+            admission_spec,
+            capability_spec,
+            worker_spec,
+            serialization_spec,
+        ),
+        native_handlers={
+            handler_spec.canonical_id: native_handler,
+            serialization_spec.canonical_id: native_handler,
+        },
+        host_invoker=host,
+        failure_correlation_id_factory=lambda: next(correlation_ids),
+    )
+
+    async def scenario() -> list[Any]:
+        return [
+            await executor.execute(call, _request(policy_request_builder, call))
+            for call in (
+                handler_call,
+                admission_call,
+                capability_call,
+                worker_call,
+                serialization_call,
+            )
+        ]
+
+    caplog.set_level(logging.ERROR, logger="OpenAgentLib.ToolExecutor")
+    outcomes = asyncio.run(scenario())
+
+    assert [result.error.code for result, _trace in outcomes] == [
+        ToolErrorCode.HANDLER_FAILED,
+        ToolErrorCode.HOST_FAILED,
+        ToolErrorCode.HOST_FAILED,
+        ToolErrorCode.HOST_FAILED,
+        ToolErrorCode.OUTPUT_SCHEMA_INVALID,
+    ]
+    assert [result.error.correlation_id for result, _trace in outcomes] == [
+        "diagnostic-handler",
+        "diagnostic-admission",
+        "diagnostic-capability",
+        "diagnostic-worker",
+        "diagnostic-serialization",
+    ]
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "OpenAgentLib.ToolExecutor"
+    ]
+    assert [record.tool_failure_stage for record in records] == [
+        "handler",
+        "admission",
+        "capability",
+        "host",
+        "serialization",
+    ]
+    assert [record.tool_failure_correlation_id for record in records] == [
+        "diagnostic-handler",
+        "diagnostic-admission",
+        "diagnostic-capability",
+        "diagnostic-worker",
+        "diagnostic-serialization",
+    ]
+    assert all(record.exc_info is not None for record in records)
 
 
 def test_output_schema_validation_freezes_successful_output(

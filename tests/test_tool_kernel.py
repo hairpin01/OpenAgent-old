@@ -31,6 +31,7 @@ def _spec(
     *,
     aliases: tuple[str, ...] = ("inspect",),
     input_schema: dict | None = None,
+    output_schema: dict | None = None,
     api_version: str = kernel.TOOL_API_VERSION,
     schema_version: str = kernel.TOOL_SCHEMA_VERSION,
 ) -> object:
@@ -47,7 +48,7 @@ def _spec(
             "required": ["name"],
             "additionalProperties": False,
         },
-        output_schema={"type": "object", "additionalProperties": True},
+        output_schema=output_schema or {"type": "object", "additionalProperties": True},
         api_version=api_version,
         schema_version=schema_version,
         capabilities={"read-only"},
@@ -72,6 +73,26 @@ def _discover_real_system_tools() -> dict:
             if name.startswith(prefix):
                 sys.modules.pop(name)
         sys.modules.update(cached)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        entry
+        for entry in compatibility.compatibility_matrix()
+        if entry.migration_disposition == "migrate"
+    ],
+    ids=lambda entry: entry.canonical_id,
+)
+def test_migrated_compatibility_schemas_create_tool_specs(entry) -> None:
+    spec = _spec(
+        canonical_id=entry.canonical_id,
+        aliases=entry.aliases,
+        input_schema=dict(entry.v2_input_schema),
+        output_schema=dict(entry.v2_output_schema),
+    )
+
+    assert spec.canonical_id == entry.canonical_id
 
 
 def test_valid_nested_schema_creates_a_frozen_call() -> None:

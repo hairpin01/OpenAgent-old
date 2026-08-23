@@ -631,6 +631,7 @@ class _OpenAgentSessionsMixin:
                     full_prompt,
                     attachments,
                     source_event=source_event,
+                    agent_log=agent_log,
                 ),
                 edit_current=True,
             )

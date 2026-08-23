@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable
 from pathlib import Path
+from types import MappingProxyType
 import ast
 import contextlib
 import asyncio
@@ -19,6 +22,7 @@ import difflib
 import mimetypes
 import uuid
 import inspect
+import os
 
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.functions.channels import EditPhotoRequest
@@ -48,15 +52,126 @@ from ..AgentRuntime import (
     trim_messages_to_budget,
 )
 from ..SystemPlugins import SystemTool, SystemToolRegistry
-from ..PluginDiscovery import inspect_v2_plugin_source
+from ..InstalledPluginRegistry import (
+    InstalledPluginRecord,
+    InstalledPluginRegistry,
+    InstalledPluginStatus,
+)
+from ..InstalledPluginActions import InstalledPluginActionStore
+from ..PluginDiscovery import (
+    InstalledPluginAdmission,
+    inspect_installed_v2_plugin_source,
+    inspect_v2_plugin_source,
+    parse_v2_plugin_metadata,
+    rebuild_installed_plugin_record,
+)
 from ..PluginSDK import LegacyPluginMigrationError
-from ..ToolKernel import ToolCall, ToolContext
+from ..ToolKernel import ToolCall, ToolContext, ToolResultStatus, validate_arguments
+from ..ToolModelBoundary import ToolModelBoundary
+from ..NativeToolCalls import (
+    build_native_tool_catalog,
+    json_schema_text,
+    native_response_to_fences,
+    native_tool_call_error,
+)
 from ..ToolPolicy import (
     ConfirmationState,
     ToolConfirmationGrant,
     ToolPolicyRequest,
 )
-from .PluginBase import AgentHookContext, OpenAgentPlugin, PluginHookResult
+from .PluginBase import AgentHookContext, PluginHookResult
+
+_MAX_REPO_PLUGIN_BYTES = 200_000
+_V2_HELPERS = {
+    "ast_grep": ("_resource_v2.py",),
+    "terminal": ("_resource_v2.py",),
+    "web": ("_resource_v2.py",),
+    "file": ("_telegram_v2.py", "_resource_v2.py"),
+    "chat": ("_telegram_v2.py",),
+    "contacts": ("_telegram_v2.py",),
+    "creation": ("_telegram_v2.py",),
+    "dialog": ("_telegram_v2.py",),
+    "message": ("_telegram_v2.py",),
+    "moderation": ("_telegram_v2.py",),
+    "profile": ("_telegram_v2.py",),
+}
+
+
+class PluginSourceAdmissionStatus(str, Enum):
+    """Safe startup classification for a reviewed sibling plugin source."""
+
+    MISSING = "missing"
+    INVALID = "invalid"
+    ADMITTED = "admitted"
+
+
+@dataclass(frozen=True)
+class InstalledPluginPresentation:
+    """Immutable command-facing values derived from one installed record."""
+
+    plugin_id: str
+    source_stem: str
+    display_name: str
+    version: str
+    author: str
+    description: str
+    tools: tuple[str, ...]
+    permissions: tuple[str, ...]
+    requirements: tuple[str, ...]
+    enabled: bool
+    status: str
+    generation: int
+    diagnostic: str
+
+
+@dataclass(frozen=True)
+class ProviderToolCall:
+    """Normalized executable data for one provider-issued tool call."""
+
+    provider_kind: str
+    call_id: str | None
+    tool_name: str
+    arguments: Mapping[str, Any]
+    raw_arguments: Any
+
+    def __post_init__(self) -> None:
+        if self.call_id is not None and (
+            not isinstance(self.call_id, str) or not self.call_id
+        ):
+            raise ValueError("provider tool call IDs must be non-empty strings")
+        if not isinstance(self.arguments, Mapping):
+            raise TypeError("provider tool arguments must be a mapping")
+
+    def to_session_metadata(self) -> dict[str, Any]:
+        return {
+            "provider_kind": self.provider_kind,
+            "call_id": self.call_id,
+            "tool_name": self.tool_name,
+            "arguments": dict(self.arguments),
+            "raw_arguments": self.raw_arguments,
+        }
+
+
+@dataclass(frozen=True)
+class ProviderToolTurn:
+    """Provider-native assistant data kept apart from executable tool calls."""
+
+    calls: tuple[ProviderToolCall, ...]
+    native_assistant_turn: Any | None = None
+
+    def to_session_metadata(self) -> dict[str, Any]:
+        metadata = {"calls": [call.to_session_metadata() for call in self.calls]}
+        if self.native_assistant_turn is not None:
+            metadata["native_assistant_turn"] = self.native_assistant_turn
+        return metadata
+
+
+@dataclass(frozen=True)
+class ProviderResponse:
+    """Text response plus optional native tool-turn data for the agent loop."""
+
+    content: str
+    tool_turn: ProviderToolTurn | None = None
 
 
 class _OpenAgentPluginSkillMixin:
@@ -105,12 +220,28 @@ class _OpenAgentPluginSkillMixin:
 
     def _save_disabled_plugins(self) -> None:
         try:
-            data = {"disabled": sorted(getattr(self, "_disabled_plugins", set()))}
-            self._disabled_plugins_file().write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            self._persist_disabled_plugins()
         except Exception as exc:
             self.log.warning(f"OpenAgent: failed to save disabled plugins: {exc}")
+
+    def _persist_disabled_plugins(self) -> None:
+        """Durably save canonical disabled IDs without a partial JSON file."""
+
+        target = self._disabled_plugins_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        disabled_ids = sorted(
+            record.plugin_id
+            for record in self._get_installed_plugin_registry().snapshot(
+                status=InstalledPluginStatus.DISABLED
+            )
+        )
+        payload = json.dumps({"disabled": disabled_ids}, ensure_ascii=False, indent=2)
+        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _builtin_plugins_dir(self) -> Path:
         """Directory with bundled plugins shipped with OpenAgent."""
@@ -151,24 +282,119 @@ class _OpenAgentPluginSkillMixin:
             "System tools registered: %s", len(getattr(self, "_system_tools", {}))
         )
 
-    async def _load_installed_plugins(self) -> None:
-        """Admit v2 plugin sources without importing their code in the parent."""
-        self._v2_plugin_sources = {}
-        for plugins_dir in self._plugin_scan_dirs():
-            for fpath in sorted(plugins_dir.glob("*.py")):
-                if fpath.name.startswith("_") or fpath.name == "__init__.py":
+    async def _load_installed_plugins(self, disabled_plugin_ids: set[str]) -> None:
+        """Rebuild installed v2 state from the installed directory only."""
+        registry = getattr(self, "_installed_plugin_registry", None)
+        if not isinstance(registry, InstalledPluginRegistry):
+            registry = self._installed_plugin_registry = InstalledPluginRegistry()
+        diagnostics: dict[str, str] = {}
+        admission_statuses = {
+            "terminal": PluginSourceAdmissionStatus.MISSING,
+        }
+        admissions = []
+        disabled = set(disabled_plugin_ids)
+        for fpath in sorted(self._resolve_plugins_dir().glob("*.py")):
+            if fpath.name == "__init__.py" or fpath.name.startswith("_"):
+                continue
+            try:
+                admission = inspect_installed_v2_plugin_source(
+                    fpath, disabled=self._safe_plugin_name(fpath.stem) in disabled
+                )
+            except Exception as exc:
+                diagnostics[str(fpath.resolve())] = str(exc)
+                if fpath.stem in admission_statuses:
+                    admission_statuses[fpath.stem] = PluginSourceAdmissionStatus.INVALID
+                continue
+            if admission.record.plugin_id in disabled:
+                admission = inspect_installed_v2_plugin_source(fpath, disabled=True)
+            admissions.append(admission)
+
+        conflicting_paths: set[str] = set()
+        owners: dict[str, str] = {}
+        for admission in admissions:
+            record = admission.record
+            names = (
+                record.plugin_id,
+                admission.source_module,
+                *(name for tool in record.manifest.tools for name in tool.names),
+            )
+            for name in names:
+                owner = owners.setdefault(name, record.source.path)
+                if owner != record.source.path:
+                    conflicting_paths.update({owner, record.source.path})
+        for path in sorted(conflicting_paths):
+            diagnostics[path] = (
+                "duplicate installed plugin ID, source module, or tool name"
+            )
+
+        canonical_disabled: set[str] = set()
+        invoker = getattr(self, "_v2_plugin_invoker", None)
+        for admission in admissions:
+            record = admission.record
+            if record.source.path in conflicting_paths:
+                continue
+            registered_source = False
+            previous_registration = None
+            try:
+                rebuilt = rebuild_installed_plugin_record(registry, admission)
+                if not rebuilt.enabled:
+                    canonical_disabled.add(rebuilt.plugin_id)
                     continue
+                source = inspect_v2_plugin_source(Path(rebuilt.source.path))
+                if invoker is None:
+                    raise RuntimeError("isolated plugin invoker is unavailable")
+                snapshot_source = getattr(invoker, "snapshot_source", None)
+                if callable(snapshot_source):
+                    previous_registration = snapshot_source(admission.source_module)
+                invoker.register_source(admission.source_module, source, record=rebuilt)
+                registered_source = True
+                if rebuilt.status is InstalledPluginStatus.ACTIVE:
+                    active = rebuilt
+                else:
+                    active = registry.activate(
+                        rebuilt.plugin_id, expected_generation=rebuilt.generation
+                    )
+                    invoker.register_source(
+                        admission.source_module, source, record=active
+                    )
+                if active.enabled:
+                    canonical_disabled.discard(active.plugin_id)
+                if admission.source_module in admission_statuses:
+                    admission_statuses[admission.source_module] = (
+                        PluginSourceAdmissionStatus.ADMITTED
+                    )
+            except Exception as exc:
+                diagnostics[record.source.path] = str(exc)
+                if admission.source_module in admission_statuses:
+                    admission_statuses[admission.source_module] = (
+                        PluginSourceAdmissionStatus.INVALID
+                    )
+                if registered_source and invoker is not None:
+                    unregister_source = getattr(invoker, "unregister_source", None)
+                    if callable(unregister_source):
+                        unregister_source(admission.source_module)
+                    restore_source = getattr(invoker, "restore_source", None)
+                    if previous_registration is not None and callable(restore_source):
+                        restore_source(admission.source_module, previous_registration)
+                current = registry.find(record.plugin_id)
                 if (
-                    self._is_builtin_plugin_file(fpath)
-                    and self._safe_plugin_name(fpath.stem) in self._disabled_plugins
+                    current is not None
+                    and current.status is not InstalledPluginStatus.DISABLED
                 ):
-                    self.log.debug(f"Plugin skipped (disabled): {fpath.stem}")
-                    continue
-                source = inspect_v2_plugin_source(fpath)
-                self._v2_plugin_sources[fpath.stem] = source
+                    registry.fail(
+                        current.plugin_id,
+                        "startup_binding_failed",
+                        str(exc).replace("\n", " ")[:512] or "startup binding failed",
+                        expected_generation=current.generation,
+                    )
+        self._installed_plugin_diagnostics = MappingProxyType(
+            dict(sorted(diagnostics.items()))
+        )
+        self._sibling_plugin_admissions = MappingProxyType(admission_statuses)
+        self._save_disabled_plugins()
         self.log.info(
-            "V2 plugin sources admitted for isolated execution: %s",
-            len(self._v2_plugin_sources),
+            "Installed v2 plugin sources admitted for isolated execution: %s",
+            len(registry.snapshot(status=InstalledPluginStatus.ACTIVE)),
         )
 
     async def _reload_plugin_config_values(self) -> None:
@@ -195,31 +421,336 @@ class _OpenAgentPluginSkillMixin:
                 self.kernel._live_module_configs = {}
             self.kernel._live_module_configs[self.name] = self.config
 
-    async def _register_plugin_from_file(self, fpath: Path) -> None:
-        """Reject the removed in-process plugin execution API."""
-        raise LegacyPluginMigrationError(
-            f"plugin {fpath.name} cannot be loaded in-process; migrate it to v2"
+    def _get_installed_plugin_registry(self) -> InstalledPluginRegistry:
+        registry = getattr(self, "_installed_plugin_registry", None)
+        if not isinstance(registry, InstalledPluginRegistry):
+            registry = self._installed_plugin_registry = InstalledPluginRegistry()
+        return registry
+
+    @staticmethod
+    def _record_metadata_text(record: InstalledPluginRecord, key: str) -> str:
+        value = record.manifest.metadata.get(key)
+        return value.strip() if isinstance(value, str) and value.strip() else ""
+
+    @staticmethod
+    def _record_metadata_strings(
+        record: InstalledPluginRecord, key: str
+    ) -> tuple[str, ...]:
+        value = record.manifest.metadata.get(key)
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(
+            item.strip() for item in value if isinstance(item, str) and item.strip()
         )
 
-    def _register_plugin(self, plugin: OpenAgentPlugin) -> None:
-        """Register plugin: add config_defaults, tools, handlers."""
-        name = str(getattr(plugin, "name", "") or "").strip().lower()
-        if not name:
-            name = plugin.__class__.__name__.replace("Plugin", "").strip().lower()
-        plugin.name = name
-        if name in self._plugins:
-            self.log.debug(
-                f"Plugin {name} already registered, external overrides bundled"
+    @staticmethod
+    def _safe_installed_plugin_diagnostic(record: InstalledPluginRecord) -> str:
+        if record.status is not InstalledPluginStatus.FAILED:
+            return ""
+        reason = " ".join(str(record.failure_reason or "Plugin failed").split())
+        reason = re.sub(
+            r"(?i)\b(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+",
+            r"\1=[redacted]",
+            reason,
+        )
+        reason = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1[redacted]@", reason)
+        if len(reason) > 160:
+            reason = reason[:157].rstrip() + "..."
+        code = str(record.failure_code or "failed")
+        return f"{code}: {reason}"
+
+    def _installed_plugin_presentation(
+        self, record: InstalledPluginRecord
+    ) -> InstalledPluginPresentation:
+        display_name = record.manifest.display_name.strip() or record.plugin_id
+        author = self._record_metadata_text(record, "author") or record.plugin_id
+        description = self._record_metadata_text(record, "description")
+        if not description:
+            description = f"{display_name} plugin"
+        return InstalledPluginPresentation(
+            plugin_id=record.plugin_id,
+            source_stem=Path(record.source.path).stem.lower(),
+            display_name=display_name,
+            version=record.manifest.version,
+            author=author,
+            description=description,
+            tools=tuple(tool.canonical_id for tool in record.manifest.tools),
+            permissions=tuple(sorted(record.manifest.capabilities)),
+            requirements=self._record_metadata_strings(record, "requirements"),
+            enabled=record.enabled,
+            status=record.status.value,
+            generation=record.generation,
+            diagnostic=self._safe_installed_plugin_diagnostic(record),
+        )
+
+    def _registry_catalog_snapshot(self) -> tuple[InstalledPluginPresentation, ...]:
+        return tuple(
+            self._installed_plugin_presentation(record)
+            for record in self._get_installed_plugin_registry().catalog_snapshot()
+        )
+
+    def _find_installed_plugin_presentation(
+        self, *, plugin_id: object = "", source_stem: object = ""
+    ) -> InstalledPluginPresentation | None:
+        snapshot = self._registry_catalog_snapshot()
+        canonical = str(plugin_id or "").strip().lower()
+        if canonical:
+            exact = [item for item in snapshot if item.plugin_id == canonical]
+            if exact:
+                return exact[0]
+        stem = Path(str(source_stem or "")).stem.strip().lower()
+        if not stem:
+            return None
+        matches = [item for item in snapshot if item.source_stem == stem]
+        return matches[0] if len(matches) == 1 else None
+
+    def _installed_record_tool_docs(
+        self, record: InstalledPluginRecord
+    ) -> dict[str, dict[str, str]]:
+        docs: dict[str, dict[str, str]] = {}
+        plugin_desc = self._installed_plugin_presentation(record).description
+        for tool in record.manifest.tools:
+            for name in tool.names:
+                docs[name] = {
+                    "tool": name,
+                    "category": name.split(".", 1)[0],
+                    "source": "plugin",
+                    "plugin": record.plugin_id,
+                    "plugin_desc": plugin_desc,
+                    "desc": tool.description or f"Plugin tool from {record.plugin_id}",
+                    "args": json_schema_text(tool.input_schema),
+                    "body": "not used",
+                    "returns": json_schema_text(tool.output_schema),
+                }
+                if tool.confirmation != "none":
+                    docs[name]["dangerous"] = "true"
+        return docs
+
+    def _inspect_installed_plugin_admission(
+        self,
+        fpath: Path,
+        *,
+        disabled: bool | None = None,
+    ) -> InstalledPluginAdmission:
+        """Inspect one installed source with its persisted disabled intent."""
+
+        if disabled is None:
+            disabled = False
+        return inspect_installed_v2_plugin_source(fpath, disabled=disabled)
+
+    def _current_install_record(
+        self,
+        registry: InstalledPluginRegistry,
+        fpath: Path,
+        plugin_id: str,
+    ) -> InstalledPluginRecord | None:
+        """Resolve an existing target without permitting identity relocation."""
+
+        path_record = registry.find_by_path(fpath)
+        id_record = registry.find(plugin_id)
+        if path_record is not None and path_record.plugin_id != plugin_id:
+            raise ValueError("an installed source cannot change its plugin identity")
+        if (
+            path_record is not None
+            and id_record is not None
+            and path_record.plugin_id != id_record.plugin_id
+        ):
+            raise ValueError("plugin source and plugin identity have different owners")
+        if (
+            id_record is not None
+            and path_record is None
+            and id_record.source.path != str(fpath)
+        ):
+            raise ValueError("plugin identity is already installed from another source")
+        return path_record or id_record
+
+    def _snapshot_plugin_files(
+        self, targets: Mapping[str, bytes], plugins_dir: Path
+    ) -> dict[Path, tuple[bytes, int] | None]:
+        snapshots: dict[Path, tuple[bytes, int] | None] = {}
+        for filename in targets:
+            target = (plugins_dir / filename).resolve()
+            if target.parent != plugins_dir.resolve() or target.suffix != ".py":
+                raise ValueError("plugin transaction files must be direct Python files")
+            snapshots[target] = (
+                (target.read_bytes(), target.stat().st_mode)
+                if target.exists()
+                else None
             )
-        # Set default config values if not already set
-        for key, value in getattr(plugin, "config_defaults", {}).items():
-            if key not in self.config.keys():
-                self.config._values[key] = self._plugin_config_value(key, value)
-        self._refresh_live_config_schema()
-        self._plugins[name] = plugin
-        self._tool_map_cache = None  # invalidate after plugin list changes
-        self._tool_registry_cache = None
-        self.log.info(f"Plugin registered: {name} v{plugin.version}")
+        return snapshots
+
+    def _write_plugin_files(
+        self,
+        files: Mapping[str, bytes],
+        snapshots: Mapping[Path, tuple[bytes, int] | None],
+    ) -> None:
+        """Atomically replace each transaction file while preserving its mode."""
+
+        for target, snapshot in snapshots.items():
+            content = files[target.name]
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{target.name}.", dir=target.parent
+            )
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if snapshot is not None:
+                    os.chmod(temp_name, snapshot[1])
+                os.replace(temp_name, target)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    Path(temp_name).unlink()
+
+    def _restore_plugin_files(
+        self, snapshots: Mapping[Path, tuple[bytes, int] | None]
+    ) -> None:
+        """Restore every file touched before an unpublished transaction failed."""
+
+        for target, snapshot in snapshots.items():
+            if snapshot is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(snapshot[0])
+                os.chmod(target, snapshot[1])
+
+    async def _install_v2_plugin_files(
+        self, files: Mapping[str, bytes], requested: str
+    ) -> InstalledPluginRecord:
+        """Preflight, write, and publish a v2 plugin without partial state."""
+
+        plugins_dir = self._resolve_plugins_dir().resolve()
+        raw_requested = str(requested)
+        requested = Path(raw_requested).name
+        if requested != raw_requested or requested.startswith("_"):
+            raise ValueError("plugin source must be a direct non-helper filename")
+        if requested not in files:
+            raise ValueError("plugin transaction is missing its requested source")
+
+        # Validate the downloaded declaration before snapshotting or replacing live files.
+        with tempfile.TemporaryDirectory(
+            prefix=".plugin-admission-", dir=plugins_dir
+        ) as temp_dir:
+            candidate_path = Path(temp_dir) / requested
+            candidate_path.write_bytes(files[requested])
+            candidate = self._inspect_installed_plugin_admission(candidate_path)
+
+        target = plugins_dir / requested
+        registry = self._get_installed_plugin_registry()
+        current = self._current_install_record(
+            registry, target, candidate.record.plugin_id
+        )
+        if (
+            current is not None
+            and current.source.path == str(target.resolve())
+            and current.source.digest == candidate.record.source.digest
+            and current.manifest == candidate.record.manifest
+        ):
+            return current
+        expected_generation = current.generation if current is not None else None
+        snapshots = self._snapshot_plugin_files(files, plugins_dir)
+        try:
+            self._write_plugin_files(files, snapshots)
+            return await self._register_plugin_from_file(
+                target,
+                expected_generation=expected_generation,
+                expected_plugin_id=candidate.record.plugin_id,
+            )
+        except Exception:
+            self._restore_plugin_files(snapshots)
+            raise
+
+    async def _register_plugin_from_file(
+        self,
+        fpath: Path,
+        *,
+        expected_generation: int | None = None,
+        expected_plugin_id: str | None = None,
+    ) -> InstalledPluginRecord:
+        """Publish one fully written v2 source without importing it locally."""
+
+        fpath = Path(fpath).resolve()
+        registry = self._get_installed_plugin_registry()
+        initial = self._inspect_installed_plugin_admission(fpath)
+        if (
+            expected_plugin_id is not None
+            and initial.record.plugin_id != expected_plugin_id
+        ):
+            raise ValueError("plugin identity changed after static preflight")
+        current = self._current_install_record(
+            registry, fpath, initial.record.plugin_id
+        )
+        if current is None and expected_generation is not None:
+            raise ValueError("plugin generation disappeared before publication")
+        if current is not None:
+            admission = self._inspect_installed_plugin_admission(
+                fpath, disabled=not current.enabled
+            )
+            if admission.record.plugin_id != initial.record.plugin_id:
+                raise ValueError("plugin identity changed during registration")
+        else:
+            admission = initial
+        candidate = admission.record
+        source = inspect_v2_plugin_source(fpath)
+        module = fpath.stem
+
+        invoker = getattr(self, "_v2_plugin_invoker", None)
+        should_bind = candidate.enabled and (
+            current is None or current.status is InstalledPluginStatus.ACTIVE
+        )
+        validated = None
+        if should_bind:
+            if invoker is None:
+                raise ValueError("enabled plugin requires an isolated invoker")
+            validate_source = getattr(invoker, "validate_source", None)
+            register_validated = getattr(invoker, "register_validated_source", None)
+            if not callable(validate_source) or not callable(register_validated):
+                raise ValueError(
+                    "isolated invoker must support validated source registration"
+                )
+            validated = validate_source(module, source, record=candidate)
+
+        try:
+            if current is None:
+                published = registry.install_active(candidate)
+            elif current.status is InstalledPluginStatus.ACTIVE:
+                published = registry.replace_active(
+                    candidate,
+                    expected_generation=(
+                        expected_generation
+                        if expected_generation is not None
+                        else current.generation
+                    ),
+                )
+            else:
+                published = registry.replace(
+                    candidate,
+                    expected_generation=(
+                        expected_generation
+                        if expected_generation is not None
+                        else current.generation
+                    ),
+                )
+
+            if should_bind:
+                invoker.register_validated_source(validated, source, record=published)
+            else:
+                if invoker is not None:
+                    invoker.unregister_source(module)
+        except Exception:
+            raise
+
+        self._plugins_cache = None
+        self._invalidate_tool_caches()
+        return published
+
+    def _register_plugin(self, _plugin: object) -> None:
+        """Reject the removed in-process plugin registration protocol."""
+
+        raise LegacyPluginMigrationError(
+            "removed legacy execution: register a static v2 PluginManifest instead"
+        )
 
     def _plugin_config_value(self, key: str, value: object) -> ConfigValue:
         description = f"OpenAgent plugin setting: {key}"
@@ -253,86 +784,179 @@ class _OpenAgentPluginSkillMixin:
         self._tool_registry_cache = registry
         return registry
 
-    def _unregister_plugin(self, name: str) -> None:
-        """Remove a plugin by name."""
-        name = str(name or "").strip().lower()
-        plugin = self._plugins.pop(name, None)
-        self._plugin_files.pop(name, None)
-        self._tool_map_cache = None  # invalidate after plugin list changes
+    def _invalidate_tool_caches(self) -> None:
+        """Invalidate tool views when the executable runtime changes."""
+        self._tool_map_cache = None
         self._tool_registry_cache = None
-        if plugin is not None:
-            self._schedule_plugin_unload(plugin)
-        self.log.info(f"Plugin unregistered: {name}")
 
-    def _plugin_hook_priority(self, plugin: OpenAgentPlugin) -> int:
+    def _unregister_plugin(self, name: str) -> None:
+        """Delete one installed v2 source after its active generation is quiet."""
+
+        registry = self._get_installed_plugin_registry()
+        requested = str(name or "").strip()
+        record = None
         try:
-            return int(getattr(plugin, "hook_priority", 0) or 0)
-        except (TypeError, ValueError):
-            return 0
+            record = registry.find(requested)
+        except ValueError:
+            pass
+        if record is None:
+            stem = Path(requested).stem.lower()
+            matches = [
+                candidate
+                for candidate in registry.snapshot()
+                if Path(candidate.source.path).stem.lower() == stem
+            ]
+            if len(matches) != 1:
+                raise ValueError(f"installed plugin {requested!r} was not found")
+            record = matches[0]
 
-    def _iter_hook_plugins(self) -> list[OpenAgentPlugin]:
-        indexed = list(enumerate((getattr(self, "_plugins", {}) or {}).values()))
-        indexed.sort(key=lambda item: (-self._plugin_hook_priority(item[1]), item[0]))
-        return [plugin for _index, plugin in indexed]
+        fpath = Path(record.source.path)
+        if fpath.suffix != ".py" or not fpath.is_file():
+            raise ValueError("installed plugin source is not a removable Python file")
+        snapshot = (fpath.read_bytes(), fpath.stat().st_mode)
+        module = fpath.stem
+        invoker = getattr(self, "_v2_plugin_invoker", None)
+        source_snapshot = None
+        if invoker is not None and callable(getattr(invoker, "snapshot_source", None)):
+            source_snapshot = invoker.snapshot_source(module)
+        invoker_unregistered = False
+        try:
+            fpath.unlink()
+            if invoker is not None:
+                invoker.unregister_source(module)
+                invoker_unregistered = True
+            if record.status is InstalledPluginStatus.ACTIVE:
+                registry.remove_active(
+                    record.plugin_id, expected_generation=record.generation
+                )
+            else:
+                registry.remove(record.plugin_id, expected_generation=record.generation)
+        except Exception:
+            if not fpath.exists():
+                fpath.write_bytes(snapshot[0])
+                os.chmod(fpath, snapshot[1])
+            if invoker_unregistered and invoker is not None:
+                if source_snapshot is not None and callable(
+                    getattr(invoker, "restore_source", None)
+                ):
+                    invoker.restore_source(module, source_snapshot)
+            raise
 
-    def _is_default_plugin_hook(self, method: object, hook_name: str) -> bool:
-        base_method = getattr(OpenAgentPlugin, hook_name, None)
-        return getattr(method, "__func__", None) is base_method
+        self._invalidate_tool_caches()
 
-    def _coerce_plugin_hook_result(self, value: object) -> PluginHookResult | None:
-        if value is None:
-            return None
-        if isinstance(value, PluginHookResult):
-            return value
-        return PluginHookResult(result=value)
+    async def _set_installed_plugin_enabled(
+        self, plugin_id: str, *, expected_generation: int, enabled: bool
+    ) -> InstalledPluginRecord:
+        """Toggle an admitted record while keeping source and disk state aligned."""
+
+        registry = self._get_installed_plugin_registry()
+        current = registry.get(plugin_id)
+        if current.generation != expected_generation:
+            raise ValueError("installed plugin action is stale")
+        module = Path(current.source.path).stem
+        invoker = getattr(self, "_v2_plugin_invoker", None)
+        actions = getattr(self, "_installed_plugin_actions", None)
+
+        def revoke_actions(
+            transition: Callable[[], InstalledPluginRecord],
+        ) -> InstalledPluginRecord:
+            if not isinstance(actions, InstalledPluginActionStore):
+                return transition()
+            return actions.revoke_generation(
+                registry,
+                current.plugin_id,
+                expected_generation=current.generation,
+                transition=transition,
+            )
+
+        if not enabled:
+            if current.status is not InstalledPluginStatus.ACTIVE:
+                raise ValueError("only active installed plugins can be disabled")
+            if invoker is not None and callable(getattr(invoker, "quiesce", None)):
+                await invoker.quiesce(current.plugin_id, current.generation)
+
+            def disable() -> InstalledPluginRecord:
+                unloading = registry.set_enabled(
+                    current.plugin_id, False, expected_generation=current.generation
+                )
+                source_snapshot = (
+                    invoker.snapshot_source(module) if invoker is not None else None
+                )
+                try:
+                    if invoker is not None:
+                        invoker.unregister_source(module)
+                    disabled = registry.complete_unload(
+                        current.plugin_id, expected_generation=unloading.generation
+                    )
+                    self._persist_disabled_plugins()
+                except Exception as exc:
+                    if source_snapshot is not None and invoker is not None:
+                        invoker.restore_source(module, source_snapshot)
+                    registry.fail(
+                        current.plugin_id,
+                        expected_generation=unloading.generation,
+                        code="disable_failed",
+                        reason=str(exc),
+                    )
+                    raise
+                return disabled
+
+            disabled = revoke_actions(disable)
+            self._invalidate_tool_caches()
+            return disabled
+
+        if current.status is not InstalledPluginStatus.DISABLED:
+            raise ValueError("only disabled installed plugins can be enabled")
+        source_path = Path(current.source.path)
+        installed_path = self._resolve_plugins_dir() / source_path.name
+        if installed_path.is_file():
+            source_path = installed_path
+        source = inspect_v2_plugin_source(source_path)
+        if invoker is None:
+            raise ValueError("disabled plugin requires an isolated invoker")
+
+        def enable() -> InstalledPluginRecord:
+            installing = registry.set_enabled(
+                current.plugin_id, True, expected_generation=current.generation
+            )
+            try:
+                validated = invoker.validate_source(module, source, record=installing)
+                invoker.register_validated_source(validated, source, record=installing)
+                active = registry.activate(
+                    installing.plugin_id, expected_generation=installing.generation
+                )
+                # The invoker must retain the executable ACTIVE generation, not
+                # the transitional INSTALLED record used during validation.
+                invoker.register_validated_source(validated, source, record=active)
+                self._persist_disabled_plugins()
+            except Exception:
+                invoker.unregister_source(module)
+                rollback = registry.set_enabled(
+                    installing.plugin_id,
+                    False,
+                    expected_generation=installing.generation,
+                )
+                if rollback.status is InstalledPluginStatus.UNLOADING:
+                    registry.complete_unload(
+                        rollback.plugin_id, expected_generation=rollback.generation
+                    )
+                raise
+            return active
+
+        active = revoke_actions(enable)
+        self._invalidate_tool_caches()
+        return active
 
     async def _run_plugin_hooks(
         self,
-        hook_name: str,
-        context: object,
+        _hook_name: str,
+        _context: object,
     ) -> PluginHookResult | None:
-        """Run plugin hooks in priority order and return the last result.
+        """External v2 plugins do not support in-process lifecycle hooks."""
 
-        Hook failures are logged and isolated so one plugin cannot break the
-        whole OpenAgent runtime.
-        """
-        last_result: PluginHookResult | None = None
-        for plugin in self._iter_hook_plugins():
-            method = getattr(plugin, hook_name, None)
-            if not callable(method) or self._is_default_plugin_hook(method, hook_name):
-                continue
-            try:
-                maybe_result = method(context)
-                if inspect.isawaitable(maybe_result):
-                    maybe_result = await maybe_result
-            except Exception as exc:
-                self.log.warning(
-                    "OpenAgent plugin hook failed: %s.%s: %s",
-                    getattr(plugin, "name", plugin.__class__.__name__),
-                    hook_name,
-                    exc,
-                )
-                continue
-            result = self._coerce_plugin_hook_result(maybe_result)
-            if result is None:
-                continue
-            if result.has_result:
-                if hasattr(context, "result"):
-                    setattr(context, "result", result.result)
-                if hasattr(context, "answer"):
-                    setattr(
-                        context,
-                        "answer",
-                        "" if result.result is None else str(result.result),
-                    )
-                last_result = result
-            if result.cancel:
-                return result
-        return last_result
+        return None
 
-    def _restore_plugin_patches(
-        self, plugin: OpenAgentPlugin, plugin_name: str
-    ) -> None:
+    def _restore_plugin_patches(self, plugin: object, plugin_name: str) -> None:
         restore = getattr(plugin, "restore_patches", None)
         if not callable(restore):
             return
@@ -345,7 +969,7 @@ class _OpenAgentPluginSkillMixin:
                 exc,
             )
 
-    def _schedule_plugin_unload(self, plugin: OpenAgentPlugin) -> None:
+    def _schedule_plugin_unload(self, plugin: object) -> None:
         on_unload = getattr(plugin, "on_unload", None)
         has_custom_unload = callable(on_unload) and not self._is_default_plugin_hook(
             on_unload, "on_unload"
@@ -426,29 +1050,9 @@ class _OpenAgentPluginSkillMixin:
         await self._cancel_plugin_unload_tasks()
         await super().on_unload()
 
-    def _get_plugin_for_tool(self, tool_name: str) -> OpenAgentPlugin | None:
-        """Find which plugin handles a given tool name."""
-        tool_name = (tool_name or "").lower().strip()
-        plugins = tuple(self._plugins.values())
-        for candidate in reversed(plugins):
-            tool_map = {
-                str(key).lower().strip(): value
-                for key, value in getattr(candidate, "tool_map", {}).items()
-            }
-            if tool_name in tool_map:
-                return candidate
-        for candidate in reversed(plugins):
-            registry = {
-                str(item).lower().strip()
-                for item in getattr(candidate, "tool_registry", ())
-                if item
-            }
-            if tool_name in registry:
-                return candidate
-        group = self._tool_group(tool_name)
-        plugin = self._plugins.get(group)
-        if plugin is not None:
-            return plugin
+    def _get_plugin_for_tool(self, _tool_name: str) -> None:
+        """Legacy plugin instances have no v2 dispatch representation."""
+
         return None
 
     def _get_system_tool(self, tool_name: str) -> SystemTool | None:
@@ -834,7 +1438,7 @@ class _OpenAgentPluginSkillMixin:
                     spec.canonical_id,
                     {
                         "desc": spec.description,
-                        "args": "JSON object matching the declared schema",
+                        "args": json_schema_text(spec.input_schema),
                     },
                     source=spec.source_family,
                 )
@@ -885,46 +1489,48 @@ class _OpenAgentPluginSkillMixin:
     def _format_plugin_docs(
         self, plugin_name: str | None = None, *, max_tools: int | None = None
     ) -> str:
-        plugins = getattr(self, "_plugins", {}) or {}
-        if not plugins:
-            return "No activated plugins."
-        selected: list[tuple[str, object]] = []
+        records = self._get_installed_plugin_registry().catalog_snapshot()
+        if not records:
+            return "No installed plugins."
+        selected: list[InstalledPluginRecord] = []
         query = str(plugin_name or "").strip().lower()
-        for name, plugin in sorted(plugins.items(), key=lambda item: str(item[0])):
+        for record in records:
+            view = self._installed_plugin_presentation(record)
             aliases = {
-                str(name).strip().lower(),
-                self._doc_text(getattr(plugin, "name", "")).lower(),
+                view.plugin_id,
+                view.display_name.lower(),
+                view.source_stem,
             }
             if query and query not in aliases:
                 continue
-            selected.append((str(name), plugin))
+            selected.append(record)
         if query and not selected:
-            return f"No activated plugin named '{query}'. Activated plugins: {', '.join(sorted(plugins))}"
+            installed = ", ".join(record.plugin_id for record in records)
+            return (
+                f"No installed plugin named '{query}'. Installed plugins: {installed}"
+            )
 
-        lines = ["🧩 Activated plugin docs:"]
-        for name, plugin in selected:
-            docs = self._plugin_tool_docs(plugin)
-            display_name = self._plugin_meta_text(plugin, "name", default=name)
-            desc = self._plugin_meta_text(
-                plugin, "description", default="no description"
-            )
-            version = self._plugin_meta_text(plugin, "version", default="?")
-            author = self._plugin_meta_text(plugin, "author")
+        lines = ["🧩 Installed plugin docs:"]
+        for record in selected:
+            view = self._installed_plugin_presentation(record)
+            docs = self._installed_record_tool_docs(record)
             title = (
-                display_name
-                if display_name.lower() == name.lower()
-                else f"{display_name} ({name})"
+                view.display_name
+                if view.display_name.lower() == view.plugin_id
+                else f"{view.display_name} ({view.plugin_id})"
             )
-            header = f"\n{title} v{version} — {desc}"
-            if author:
-                header += f" (author: {author})"
+            header = (
+                f"\n{title} v{view.version} — {view.description} "
+                f"(author: {view.author}; state: {view.status}; "
+                f"enabled: {'yes' if view.enabled else 'no'}; generation: {view.generation})"
+            )
             lines.append(header)
-            permissions = self._plugin_permissions(plugin)
-            requirements = self._plugin_requirements(plugin)
-            if permissions:
-                lines.append("  permissions: " + ", ".join(permissions))
-            if requirements:
-                lines.append("  requirements: " + ", ".join(requirements))
+            if view.diagnostic:
+                lines.append("  diagnostic: " + view.diagnostic)
+            if view.permissions:
+                lines.append("  permissions: " + ", ".join(view.permissions))
+            if view.requirements:
+                lines.append("  requirements: " + ", ".join(view.requirements))
             tool_items = sorted(docs.items())
             if max_tools is not None and len(tool_items) > max_tools:
                 visible = tool_items[:max_tools]
@@ -945,7 +1551,7 @@ class _OpenAgentPluginSkillMixin:
                 lines.append(" | ".join(bits))
             if hidden:
                 lines.append(
-                    f"  · ...(+{hidden} more; call utility.plugin_docs plugin={name})"
+                    f"  · ...(+{hidden} more; call utility.plugin_docs plugin={view.plugin_id})"
                 )
         return "\n".join(lines)
 
@@ -966,7 +1572,13 @@ class _OpenAgentPluginSkillMixin:
         plugins = []
         for f in files:
             fname = f.get("name", "")
-            if not fname.endswith(".py") or fname == "__init__.py":
+            if (
+                not isinstance(fname, str)
+                or not fname.endswith(".py")
+                or fname == "__init__.py"
+                or fname.startswith("_")
+                or f.get("type") not in {None, "file"}
+            ):
                 continue
             raw_url = f.get("download_url", "")
             meta = await self._parse_plugin_meta(raw_url)
@@ -998,6 +1610,10 @@ class _OpenAgentPluginSkillMixin:
                 code = await resp.text()
         except Exception:
             return meta
+
+        v2_meta = parse_v2_plugin_metadata(code, Path(raw_url).name)
+        if v2_meta is not None:
+            return v2_meta
 
         values: dict[str, object] = {}
         max_ast_chars = 200_000
@@ -1119,30 +1735,52 @@ class _OpenAgentPluginSkillMixin:
         return meta
 
     async def _install_plugin_from_repo(self, name: str) -> str:
-        """Download a plugin from repo and install it."""
+        """Transactionally install a statically admitted repository v2 plugin."""
         safe_name = self._safe_plugin_name(name)
-        raw_url = f"https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/plugins/{safe_name}.py"
+        if safe_name.startswith("_"):
+            raise ValueError("Repository helper modules are not installable plugins")
+        raw_base = "https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/OpenAgent/plugins"
         session = await self._http_client.session()
-        async with session.get(
-            raw_url, timeout=aiohttp.ClientTimeout(total=15)
-        ) as resp:
-            if resp.status != 200:
-                raise ValueError(f"Plugin {safe_name} not found in repo")
-            code = await resp.text()
+        requested = f"{safe_name}.py"
 
-        plugins_dir = self._resolve_plugins_dir()
-        fpath = plugins_dir / f"{safe_name}.py"
-        fpath.write_text(code, encoding="utf-8")
-        try:
-            await self._register_plugin_from_file(fpath)
-        except Exception:
-            with contextlib.suppress(Exception):
-                fpath.unlink()
-            raise
-        return next(
-            (pname for pname, path in self._plugin_files.items() if path == fpath),
-            safe_name,
+        async def download(filename: str) -> bytes:
+            async with session.get(
+                f"{raw_base}/{quote(filename)}", timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status != 200:
+                    raise ValueError(
+                        f"Plugin dependency {filename} was not found in repo"
+                    )
+                content = await resp.read()
+            if not content or len(content) > _MAX_REPO_PLUGIN_BYTES:
+                raise ValueError(f"Plugin dependency {filename} has an invalid size")
+            try:
+                ast.parse(content, filename=filename)
+            except SyntaxError as exc:
+                raise ValueError(
+                    f"Plugin dependency {filename} has invalid Python syntax"
+                ) from exc
+            return content
+
+        files = {requested: await download(requested)}
+        parsed = parse_v2_plugin_metadata(files[requested].decode("utf-8"), requested)
+        if parsed is None:
+            raise LegacyPluginMigrationError(
+                f"plugin {requested} is not a statically declared v2 plugin"
+            )
+        dependency_names = list(_V2_HELPERS.get(safe_name, ()))
+        tree = ast.parse(files[requested], filename=requested)
+        has_relative_import = any(
+            isinstance(node, ast.ImportFrom) and node.level > 0
+            for node in ast.walk(tree)
         )
+        if has_relative_import:
+            dependency_names.append("__init__.py")
+        for filename in dependency_names:
+            files[filename] = await download(filename)
+
+        await self._install_v2_plugin_files(files, requested)
+        return safe_name
 
     def _safe_plugin_name(self, name: str) -> str:
         name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(name or "").strip()).strip("._")
@@ -1157,18 +1795,11 @@ class _OpenAgentPluginSkillMixin:
             raise ValueError("Plugin code is empty")
         compile(code, f"<openagent-plugin:{name or 'reply'}>", "exec")
         safe_name = self._safe_plugin_name(name)
-        fpath = self._resolve_plugins_dir() / f"{safe_name}.py"
-        fpath.write_text(code + "\n", encoding="utf-8")
-        try:
-            await self._register_plugin_from_file(fpath)
-        except Exception:
-            with contextlib.suppress(Exception):
-                fpath.unlink()
-            raise
-        return next(
-            (pname for pname, path in self._plugin_files.items() if path == fpath),
-            safe_name,
+        await self._install_v2_plugin_files(
+            {f"{safe_name}.py": (code + "\n").encode("utf-8")},
+            f"{safe_name}.py",
         )
+        return safe_name
 
     async def _install_plugin_from_reply(self, event: Event) -> str:
         reply = await event.get_reply_message()
@@ -2103,6 +2734,41 @@ class _OpenAgentTelegramMediaMixin:
 class _OpenAgentStatusMixin:
     """Inline status UI, confirmations and dangerous-tool gating."""
 
+    async def _show_v2_tool_lifecycle(
+        self,
+        event: Any | None,
+        *,
+        invocation_id: str,
+        tool_name: str,
+        state: str,
+        states: dict[str, str],
+        agent_log: list[str],
+        started_at: float | None,
+        thinking_notes: list[str],
+    ) -> None:
+        """Render one valid, idempotent lifecycle transition on the event loop."""
+
+        previous = states.get(invocation_id)
+        if (state == "started" and previous is not None) or (
+            state != "started" and previous != "started"
+        ):
+            return
+        states[invocation_id] = state
+        if event is None:
+            return
+        elapsed = time.monotonic() - started_at if started_at is not None else None
+        with contextlib.suppress(Exception):
+            await self._show_agent_action(
+                event,
+                f"{state.title()} {tool_name}",
+                f"invocation={invocation_id} state={state}",
+                agent_log,
+                tool_name=tool_name,
+                elapsed=elapsed,
+                thinking_notes=thinking_notes,
+                tool_done=state != "started",
+            )
+
     async def _show_agent_action(
         self,
         event: Any,
@@ -2168,21 +2834,22 @@ class _OpenAgentStatusMixin:
     def _requires_tool_confirmation(
         self, tool_name: str, attrs_raw: str = "", body: str = ""
     ) -> bool:
-        if not bool(self.config.get("tool_confirmation_enabled", True)):
+        configured_enabled = self.config.get("tool_confirmation_enabled", True)
+        if isinstance(configured_enabled, str):
+            enabled = configured_enabled.strip().lower() not in {
+                "",
+                "0",
+                "false",
+                "no",
+                "off",
+            }
+        else:
+            enabled = bool(configured_enabled)
+        if not enabled:
             return False
         name = (tool_name or "").lower().strip()
         group = self._tool_group(name)
 
-        plugin = self._get_plugin_for_tool(name)
-        if plugin is not None:
-            plugin_dangerous = getattr(plugin, "dangerous_tools", None)
-            if isinstance(plugin_dangerous, set):
-                if name in plugin_dangerous:
-                    return True
-            elif isinstance(plugin_dangerous, dict):
-                tool_level = plugin_dangerous.get(name)
-                if tool_level is not None:
-                    return tool_level != "safe"
         system_tool = self._get_system_tool(name)
         if system_tool is not None and system_tool.dangerous:
             return True
@@ -2231,6 +2898,8 @@ class _OpenAgentStatusMixin:
             .lower()
             .strip()
         )
+        if mode in {"off", "none", "false", "0"}:
+            return False
         attrs = self._parse_xml_attrs(attrs_raw)
         command = (
             body.strip()
@@ -2337,6 +3006,22 @@ class _OpenAgentStatusMixin:
         elapsed: float | None = None,
     ) -> bool:
         token = str(uuid.uuid4())
+        registry = getattr(self, "_installed_plugin_registry", None)
+        actions = getattr(self, "_installed_plugin_actions", None)
+        if registry is not None and actions is not None:
+            try:
+                owner = registry.get_active_tool_owner(tool_name)
+            except Exception:
+                owner = None
+            if owner is not None:
+                actor_id = getattr(event, "sender_id", None)
+                token = actions.issue(
+                    registry,
+                    owner,
+                    actor_id=actor_id if isinstance(actor_id, int) else "unknown",
+                    kind="tool-confirm",
+                    payload={"tool_name": tool_name},
+                ).token
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bool] = loop.create_future()
         self._tool_confirmation_waiters[token] = future
@@ -2505,7 +3190,18 @@ class _OpenAgentAgentLoopMixin:
         *,
         max_tokens_override: int | None = None,
         before_attempt: Callable[[], None] | None = None,
-    ) -> str:
+        allow_native_tools: bool = False,
+        require_native_tools: bool = False,
+    ) -> str | ProviderResponse:
+        if self._uses_openai_responses_api(provider):
+            return await self._ask_openai_responses(
+                messages,
+                api_key,
+                max_tokens_override=max_tokens_override,
+                before_attempt=before_attempt,
+                allow_native_tools=allow_native_tools,
+                require_native_tools=require_native_tools,
+            )
         if provider in ("openai", "openrouter", "groq", "deepseek", "xai", "other"):
             return await self._ask_openai_compatible(
                 provider,
@@ -2513,6 +3209,8 @@ class _OpenAgentAgentLoopMixin:
                 api_key,
                 max_tokens_override=max_tokens_override,
                 before_attempt=before_attempt,
+                allow_native_tools=allow_native_tools,
+                require_native_tools=require_native_tools,
             )
         if provider == "google":
             return await self._ask_google(
@@ -2520,6 +3218,17 @@ class _OpenAgentAgentLoopMixin:
                 api_key,
                 max_tokens_override=max_tokens_override,
                 before_attempt=before_attempt,
+                allow_native_tools=allow_native_tools,
+                require_native_tools=require_native_tools,
+            )
+        if provider == "anthropic":
+            return await self._ask_anthropic(
+                messages,
+                api_key,
+                max_tokens_override=max_tokens_override,
+                before_attempt=before_attempt,
+                allow_native_tools=allow_native_tools,
+                require_native_tools=require_native_tools,
             )
         raise RuntimeError(
             self.strings("bad_provider", providers=", ".join(self.PROVIDERS))
@@ -2537,7 +3246,9 @@ class _OpenAgentAgentLoopMixin:
         thinking_notes: list[str] | None = None,
         max_tokens_override: int | None = None,
         before_attempt: Callable[[], None] | None = None,
-    ) -> str:
+        allow_native_tools: bool = False,
+        require_native_tools: bool = False,
+    ) -> str | ProviderResponse:
         max_reconnects = max(
             0, min(int(self.config.get("provider_reconnect_attempts", 5) or 0), 5)
         )
@@ -2550,6 +3261,8 @@ class _OpenAgentAgentLoopMixin:
                     api_key,
                     max_tokens_override=max_tokens_override,
                     before_attempt=before_attempt,
+                    allow_native_tools=allow_native_tools,
+                    require_native_tools=require_native_tools,
                 )
             except Exception as exc:
                 if (
@@ -2576,6 +3289,331 @@ class _OpenAgentAgentLoopMixin:
                         )
                 await asyncio.sleep(retry_delay(attempt))
 
+    @staticmethod
+    def _provider_response(response: str | ProviderResponse) -> ProviderResponse:
+        if isinstance(response, ProviderResponse):
+            return response
+        return ProviderResponse(content=str(response or ""))
+
+    @staticmethod
+    def _legacy_tool_calls_from_turn(
+        tool_turn: ProviderToolTurn | None,
+    ) -> list[tuple[str, str, str]]:
+        if tool_turn is None:
+            return []
+        calls: list[tuple[str, str, str]] = []
+        for call in tool_turn.calls:
+            legacy = json_tool_payload_to_legacy(
+                {"tool": call.tool_name, "args": dict(call.arguments)},
+                (call.tool_name,),
+            )
+            if legacy is None:
+                return []
+            calls.append(legacy)
+        return calls
+
+    def _render_provider_tool_results(
+        self,
+        tool_turn: ProviderToolTurn,
+        raw_outputs: list[str],
+    ) -> list[dict[str, Any]] | None:
+        """Return provider-native follow-up records, or None for legacy fallback."""
+
+        if tool_turn.native_assistant_turn is None:
+            return None
+        if tool_turn.calls and all(
+            call.provider_kind == "openai-chat" for call in tool_turn.calls
+        ):
+            return [
+                dict(tool_turn.native_assistant_turn),
+                *(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.call_id,
+                        "content": output,
+                    }
+                    for call, output in zip(tool_turn.calls, raw_outputs, strict=True)
+                ),
+            ]
+        if tool_turn.calls and all(
+            call.provider_kind == "openai-responses" for call in tool_turn.calls
+        ):
+            return [
+                *(dict(item) for item in tool_turn.native_assistant_turn),
+                *(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": output,
+                    }
+                    for call, output in zip(tool_turn.calls, raw_outputs, strict=True)
+                ),
+            ]
+        if tool_turn.calls and all(
+            call.provider_kind == "google-gemini" for call in tool_turn.calls
+        ):
+            assistant_turn = dict(tool_turn.native_assistant_turn)
+            native_calls = [
+                part["functionCall"]
+                for part in assistant_turn.get("parts", [])
+                if isinstance(part, Mapping)
+                and isinstance(part.get("functionCall"), Mapping)
+            ]
+            responses = []
+            for call, native_call, output in zip(
+                tool_turn.calls, native_calls, raw_outputs, strict=True
+            ):
+                try:
+                    response = json.loads(output)
+                except (TypeError, ValueError):
+                    response = {"result": output}
+                if not isinstance(response, Mapping):
+                    response = {"result": response}
+                responses.append(
+                    {
+                        "functionResponse": {
+                            "id": call.call_id,
+                            "name": native_call["name"],
+                            "response": dict(response),
+                        }
+                    }
+                )
+            return [assistant_turn, {"role": "user", "parts": responses}]
+        if tool_turn.calls and all(
+            call.provider_kind == "anthropic-messages" for call in tool_turn.calls
+        ):
+            results = []
+            for call, output in zip(tool_turn.calls, raw_outputs, strict=True):
+                try:
+                    value = json.loads(output)
+                except (TypeError, ValueError):
+                    value = output
+                content = (
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False, sort_keys=True)
+                )
+                result = {
+                    "type": "tool_result",
+                    "tool_use_id": call.call_id,
+                    "content": content,
+                }
+                if isinstance(value, Mapping) and (
+                    value.get("error") is not None
+                    or value.get("status") not in (None, "success")
+                ):
+                    result["is_error"] = True
+                results.append(result)
+            return [
+                dict(tool_turn.native_assistant_turn),
+                {"role": "user", "content": results},
+            ]
+        return None
+
+    @staticmethod
+    def _google_native_tool_response(
+        *, content: Mapping[str, Any], native_catalog: Any
+    ) -> ProviderResponse:
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            raise TypeError("google response parts must be an array")
+        text = "".join(
+            str(part.get("text", "")) for part in parts if isinstance(part, Mapping)
+        ).strip()
+        native_calls = [
+            part.get("functionCall")
+            for part in parts
+            if isinstance(part, Mapping) and "functionCall" in part
+        ]
+        if not native_calls:
+            return ProviderResponse(content=text)
+        if native_catalog is None:
+            return ProviderResponse(
+                content="[NATIVE_TOOL_CALL_ERROR] native tools were not advertised"
+            )
+
+        seen_ids: set[str] = set()
+        calls: list[ProviderToolCall] = []
+        for native_call in native_calls:
+            if not isinstance(native_call, Mapping):
+                return ProviderResponse(
+                    content="[NATIVE_TOOL_CALL_ERROR] functionCall is malformed"
+                )
+            call_id = native_call.get("id")
+            if not isinstance(call_id, str) or not call_id or call_id in seen_ids:
+                return ProviderResponse(
+                    content=(
+                        "[NATIVE_TOOL_CALL_ERROR] functionCall IDs must be unique "
+                        "non-empty strings"
+                    )
+                )
+            seen_ids.add(call_id)
+            native_name = native_call.get("name")
+            canonical = (
+                native_catalog.native_to_canonical.get(native_name)
+                if isinstance(native_name, str)
+                else None
+            )
+            if canonical is None:
+                return ProviderResponse(
+                    content=(
+                        "[NATIVE_TOOL_CALL_ERROR] unknown or unadvertised native function"
+                    )
+                )
+            raw_arguments = native_call.get("args")
+            if not isinstance(raw_arguments, Mapping):
+                return ProviderResponse(
+                    content="[NATIVE_TOOL_CALL_ERROR] functionCall args must be an object"
+                )
+            try:
+                validate_arguments(
+                    native_catalog.specs_by_canonical[canonical].input_schema,
+                    raw_arguments,
+                    canonical_id=canonical,
+                    requested_name=canonical,
+                )
+            except Exception as exc:
+                return ProviderResponse(
+                    content=(
+                        "[NATIVE_TOOL_CALL_ERROR] invalid functionCall args: "
+                        f"{type(exc).__name__}"
+                    )
+                )
+            calls.append(
+                ProviderToolCall(
+                    provider_kind="google-gemini",
+                    call_id=call_id,
+                    tool_name=canonical,
+                    arguments=dict(raw_arguments),
+                    raw_arguments=raw_arguments,
+                )
+            )
+        return ProviderResponse(
+            content=text,
+            tool_turn=ProviderToolTurn(
+                calls=tuple(calls), native_assistant_turn=dict(content)
+            ),
+        )
+
+    @staticmethod
+    def _anthropic_native_tool_response(
+        *, content: Any, native_catalog: Any
+    ) -> ProviderResponse:
+        if not isinstance(content, list):
+            raise TypeError("anthropic response content must be an array")
+        text = "".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, Mapping) and block.get("type") == "text"
+        ).strip()
+        native_calls = [
+            block
+            for block in content
+            if isinstance(block, Mapping) and block.get("type") == "tool_use"
+        ]
+        if not native_calls:
+            return ProviderResponse(content=text)
+        if native_catalog is None:
+            return ProviderResponse(
+                content="[NATIVE_TOOL_CALL_ERROR] native tools were not advertised"
+            )
+
+        seen_ids: set[str] = set()
+        calls: list[ProviderToolCall] = []
+        for native_call in native_calls:
+            call_id = native_call.get("id")
+            if not isinstance(call_id, str) or not call_id or call_id in seen_ids:
+                return ProviderResponse(
+                    content=(
+                        "[NATIVE_TOOL_CALL_ERROR] tool_use IDs must be unique "
+                        "non-empty strings"
+                    )
+                )
+            seen_ids.add(call_id)
+            native_name = native_call.get("name")
+            canonical = (
+                native_catalog.native_to_canonical.get(native_name)
+                if isinstance(native_name, str)
+                else None
+            )
+            if canonical is None:
+                return ProviderResponse(
+                    content=(
+                        "[NATIVE_TOOL_CALL_ERROR] unknown or unadvertised native function"
+                    )
+                )
+            raw_arguments = native_call.get("input")
+            if not isinstance(raw_arguments, Mapping):
+                return ProviderResponse(
+                    content="[NATIVE_TOOL_CALL_ERROR] tool_use input must be an object"
+                )
+            try:
+                validate_arguments(
+                    native_catalog.specs_by_canonical[canonical].input_schema,
+                    raw_arguments,
+                    canonical_id=canonical,
+                    requested_name=canonical,
+                )
+            except Exception as exc:
+                return ProviderResponse(
+                    content=(
+                        "[NATIVE_TOOL_CALL_ERROR] invalid tool_use input: "
+                        f"{type(exc).__name__}"
+                    )
+                )
+            calls.append(
+                ProviderToolCall(
+                    provider_kind="anthropic-messages",
+                    call_id=call_id,
+                    tool_name=canonical,
+                    arguments=dict(raw_arguments),
+                    raw_arguments=raw_arguments,
+                )
+            )
+        return ProviderResponse(
+            content=text,
+            tool_turn=ProviderToolTurn(
+                calls=tuple(calls),
+                native_assistant_turn={
+                    "role": "assistant",
+                    "content": [dict(block) for block in content],
+                },
+            ),
+        )
+
+    @staticmethod
+    def _openai_native_tool_response(
+        *,
+        provider_kind: str,
+        content: str,
+        native_assistant_turn: Any,
+        tool_calls: list[dict[str, Any]],
+        native_catalog: Any,
+    ) -> ProviderResponse:
+        validation = native_response_to_fences(
+            {"content": content or None, "tool_calls": tool_calls}, native_catalog
+        )
+        error = native_tool_call_error(validation)
+        if error is not None:
+            return ProviderResponse(content=validation)
+        calls = tuple(
+            ProviderToolCall(
+                provider_kind=provider_kind,
+                call_id=call["id"],
+                tool_name=native_catalog.native_to_canonical[call["function"]["name"]],
+                arguments=json.loads(call["function"]["arguments"]),
+                raw_arguments=call["function"]["arguments"],
+            )
+            for call in tool_calls
+        )
+        return ProviderResponse(
+            content=content,
+            tool_turn=ProviderToolTurn(
+                calls=calls,
+                native_assistant_turn=native_assistant_turn,
+            ),
+        )
+
     async def _v2_policy_request(
         self,
         call: ToolCall,
@@ -2588,11 +3626,27 @@ class _OpenAgentAgentLoopMixin:
         confirmation = ConfirmationState.MISSING
         grant = None
         if call.spec.confirmation.value == "required":
-            if status_event is not None:
+            serialized_arguments = json.dumps(
+                dict(call.arguments), ensure_ascii=True, sort_keys=True
+            )
+            ui_required = self._requires_tool_confirmation(
+                call.canonical_id, serialized_arguments, ""
+            )
+            if not ui_required:
+                confirmation = ConfirmationState.APPROVED
+                grant = ToolConfirmationGrant.for_call(
+                    f"config-auto-{uuid.uuid4().hex}", call
+                )
+                self.log.debug(
+                    "OA v2 tool policy auto-approved: tool=%s call_id=%s reason=config",
+                    call.canonical_id,
+                    call.call_id,
+                )
+            elif status_event is not None:
                 approved = await self._confirm_dangerous_tool(
                     status_event,
                     call.canonical_id,
-                    json.dumps(dict(call.arguments), ensure_ascii=True, sort_keys=True),
+                    serialized_arguments,
                     elapsed=(time.monotonic() - started_at) if started_at else None,
                 )
                 confirmation = (
@@ -2628,13 +3682,16 @@ class _OpenAgentAgentLoopMixin:
 
     @staticmethod
     def _v2_result_text(result: Any) -> str:
+        envelope = {
+            "call_id": result.call_id,
+            "status": result.status.value,
+            "output": _OpenAgentAgentLoopMixin._v2_json_value(result.output),
+            "error": None,
+        }
+        if result.error is not None:
+            envelope.update(ToolModelBoundary.error_envelope(result))
         return json.dumps(
-            {
-                "call_id": result.call_id,
-                "status": result.status.value,
-                "output": _OpenAgentAgentLoopMixin._v2_json_value(result.output),
-                "error": result.error.code.value if result.error else None,
-            },
+            envelope,
             ensure_ascii=True,
             sort_keys=True,
         )
@@ -2668,7 +3725,19 @@ class _OpenAgentAgentLoopMixin:
         )
         calls: list[ToolCall] = []
         errors: dict[int, str] = {}
+        lifecycle_states: dict[str, str] = {}
         for index, (tool_name, attrs_raw, body) in enumerate(tool_calls):
+            invocation_id = uuid.uuid4().hex
+            await self._show_v2_tool_lifecycle(
+                status_event,
+                invocation_id=invocation_id,
+                tool_name=tool_name,
+                state="started",
+                states=lifecycle_states,
+                agent_log=agent_log,
+                started_at=started_at,
+                thinking_notes=thinking_notes,
+            )
             try:
                 attrs = self._parse_xml_attrs(attrs_raw)
                 attrs.pop("reason", None)
@@ -2679,7 +3748,7 @@ class _OpenAgentAgentLoopMixin:
                     arguments[required[0]] = body.strip()
                 calls.append(
                     runtime.registry.create_call(
-                        call_id=uuid.uuid4().hex,
+                        call_id=invocation_id,
                         requested_name=tool_name,
                         arguments=arguments,
                         context=context,
@@ -2687,9 +3756,23 @@ class _OpenAgentAgentLoopMixin:
                 )
             except Exception as exc:
                 errors[index] = json.dumps(
-                    {"status": "error", "error": type(exc).__name__},
+                    {
+                        "call_id": invocation_id,
+                        "status": "error",
+                        "error": type(exc).__name__,
+                    },
                     ensure_ascii=True,
                     sort_keys=True,
+                )
+                await self._show_v2_tool_lifecycle(
+                    status_event,
+                    invocation_id=invocation_id,
+                    tool_name=tool_name,
+                    state="failed",
+                    states=lifecycle_states,
+                    agent_log=agent_log,
+                    started_at=started_at,
+                    thinking_notes=thinking_notes,
                 )
 
         previous_source_event = self._v2_source_event
@@ -2703,8 +3786,53 @@ class _OpenAgentAgentLoopMixin:
                     )
                 )
             results, _traces = await runtime.executor.execute_batch(calls, requests)
+        except Exception:
+            for call in calls:
+                await self._show_v2_tool_lifecycle(
+                    status_event,
+                    invocation_id=call.call_id,
+                    tool_name=call.canonical_id,
+                    state="failed",
+                    states=lifecycle_states,
+                    agent_log=agent_log,
+                    started_at=started_at,
+                    thinking_notes=thinking_notes,
+                )
+            raise
         finally:
             self._v2_source_event = previous_source_event
+
+        if len(results) != len(calls):
+            for call in calls:
+                await self._show_v2_tool_lifecycle(
+                    status_event,
+                    invocation_id=call.call_id,
+                    tool_name=call.canonical_id,
+                    state="failed",
+                    states=lifecycle_states,
+                    agent_log=agent_log,
+                    started_at=started_at,
+                    thinking_notes=thinking_notes,
+                )
+            raise RuntimeError("tool executor returned a mismatched result count")
+
+        for call, result in zip(calls, results, strict=True):
+            if result.status is ToolResultStatus.SUCCESS:
+                state = "succeeded"
+            elif result.status is ToolResultStatus.CANCELLED:
+                state = "cancelled"
+            else:
+                state = "failed"
+            await self._show_v2_tool_lifecycle(
+                status_event,
+                invocation_id=call.call_id,
+                tool_name=call.canonical_id,
+                state=state,
+                states=lifecycle_states,
+                agent_log=agent_log,
+                started_at=started_at,
+                thinking_notes=thinking_notes,
+            )
 
         rendered = iter(self._v2_result_text(result) for result in results)
         outputs: list[str] = []
@@ -2831,7 +3959,9 @@ class _OpenAgentAgentLoopMixin:
             call_messages: list[dict[str, Any]],
             *,
             max_tokens_override: int | None = None,
-        ) -> str:
+            allow_native_tools: bool = False,
+            require_native_tools: bool = False,
+        ) -> ProviderResponse:
             remaining = deadline_at - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError(f"Agent deadline exceeded after {deadline_seconds}s")
@@ -2866,6 +3996,8 @@ class _OpenAgentAgentLoopMixin:
                     thinking_notes=thinking_notes,
                     max_tokens_override=max_tokens_override,
                     before_attempt=call_budget.reserve,
+                    allow_native_tools=allow_native_tools,
+                    require_native_tools=require_native_tools,
                 ),
                 timeout=remaining,
             )
@@ -2879,7 +4011,7 @@ class _OpenAgentAgentLoopMixin:
                     budget_used=call_budget.used,
                     budget_remaining=call_budget.remaining,
                 )
-            return response
+            return self._provider_response(response)
 
         async def verify_final(candidate: str) -> bool:
             if not call_budget.remaining:
@@ -2891,6 +4023,14 @@ class _OpenAgentAgentLoopMixin:
                         accepted=False,
                     )
                 return False
+            runtime = getattr(self, "_v2_runtime", None)
+            relevant_tools = (
+                build_native_tool_catalog(
+                    runtime.registry.specs(), prompt
+                ).canonical_to_native
+                if runtime is not None
+                else {}
+            )
             gate_messages: list[dict[str, str]] = [
                 {
                     "role": "system",
@@ -2899,6 +4039,8 @@ class _OpenAgentAgentLoopMixin:
                         "genuinely completed answer to the user's request. Reject promises, plans, "
                         "acknowledgements, statements about what will be done next, and claims that "
                         "lack results. Accept direct informational answers and completed work reports. "
+                        "Reject claims that filesystem or tool access is unavailable when relevant "
+                        f"registered tools can satisfy the request: {', '.join(sorted(relevant_tools)[:16]) or 'none'}. "
                         "Reply with exactly ACCEPT or CONTINUE."
                     ),
                 },
@@ -2912,7 +4054,11 @@ class _OpenAgentAgentLoopMixin:
                 },
             ]
             try:
-                verdict = await ask_provider(gate_messages, max_tokens_override=64)
+                verdict = (
+                    await ask_provider(
+                        gate_messages, max_tokens_override=64, allow_native_tools=False
+                    )
+                ).content
             except RuntimeError as exc:
                 if "model-call budget exhausted" not in str(exc):
                     raise
@@ -2971,6 +4117,7 @@ class _OpenAgentAgentLoopMixin:
             tool_round_budget,
         )
         invalid_tool_retries = 0
+        force_native_tools = False
         answer = ""
 
         if cancel_token and cancel_token in self._cancelled_generations:
@@ -2996,7 +4143,7 @@ class _OpenAgentAgentLoopMixin:
             while call_budget.remaining:
                 if cancel_token and cancel_token in self._cancelled_generations:
                     raise RuntimeError("Generation cancelled")
-                answer = await ask_provider(messages)
+                answer = (await ask_provider(messages, allow_native_tools=True)).content
                 if cancel_token and cancel_token in self._cancelled_generations:
                     raise RuntimeError("Generation cancelled")
                 runtime_comment = self._runtime_comment_message(cancel_token)
@@ -3016,7 +4163,12 @@ class _OpenAgentAgentLoopMixin:
                 agent_log.append("user.comment")
 
             try:
-                answer = await ask_provider(messages)
+                provider_response = await ask_provider(
+                    messages,
+                    allow_native_tools=True,
+                    require_native_tools=force_native_tools,
+                )
+                answer = provider_response.content
             except RuntimeError as exc:
                 if "model-call budget exhausted" not in str(exc):
                     raise
@@ -3030,7 +4182,12 @@ class _OpenAgentAgentLoopMixin:
                 agent_log.append("user.comment")
                 continue
 
-            tool_calls = self._extract_tool_calls(strip_explicit_final_regions(answer))
+            tool_turn = provider_response.tool_turn
+            tool_calls = self._legacy_tool_calls_from_turn(tool_turn)
+            if not tool_calls:
+                tool_calls = self._extract_tool_calls(
+                    strip_explicit_final_regions(answer)
+                )
             output_kind, output_text = classify_agent_output(
                 answer,
                 has_tool_calls=bool(tool_calls),
@@ -3045,7 +4202,9 @@ class _OpenAgentAgentLoopMixin:
                     executed_tool_names=sorted(executed_tool_names),
                 )
             if not tool_calls:
-                tool_error = self._invalid_tool_call_error(answer or "")
+                tool_error = native_tool_call_error(
+                    answer or ""
+                ) or self._invalid_tool_call_error(answer or "")
                 if tool_error:
                     invalid_tool_retries += 1
                     agent_log.append(f"tool_error: {tool_error[:220]}")
@@ -3067,6 +4226,7 @@ class _OpenAgentAgentLoopMixin:
                 if candidate and await verify_final(candidate):
                     agent_log.append("answer.accepted")
                     return await finish_agent(candidate)
+                force_native_tools = True
                 messages.append({"role": "assistant", "content": answer or ""})
                 messages.append(
                     {
@@ -3104,6 +4264,7 @@ class _OpenAgentAgentLoopMixin:
                 thinking_notes=thinking_notes,
                 cancel_token=cancel_token,
             )
+            force_native_tools = False
             executed_tool_names.update(
                 str(name).strip().lower()
                 for name, _attrs, _body in tool_calls
@@ -3134,16 +4295,34 @@ class _OpenAgentAgentLoopMixin:
                     )
                 )
 
-            assistant_tool_msg = {"role": "assistant", "content": answer}
-            messages.append(assistant_tool_msg)
-            followup = "\n\n".join(outputs)
-            if any(name != "thinking.note" for name, _attrs, _body in tool_calls):
-                followup += (
-                    "\n\nProgress reminder: if you need more tools, include a fresh thinking.note "
-                    "with the next tool_call batch unless the task is ready for the final answer."
-                )
-            tool_output_msg = {"role": "user", "content": followup}
-            messages.append(tool_output_msg)
+            native_followup = (
+                self._render_provider_tool_results(tool_turn, raw_outputs)
+                if tool_turn is not None and tool_turn.native_assistant_turn is not None
+                else None
+            )
+            if native_followup is not None:
+                messages.extend(native_followup)
+            else:
+                assistant_tool_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": answer,
+                }
+                if (
+                    tool_turn is not None
+                    and tool_turn.native_assistant_turn is not None
+                ):
+                    assistant_tool_msg["native_tool_turn"] = (
+                        tool_turn.to_session_metadata()
+                    )
+                messages.append(assistant_tool_msg)
+                followup = "\n\n".join(outputs)
+                if any(name != "thinking.note" for name, _attrs, _body in tool_calls):
+                    followup += (
+                        "\n\nProgress reminder: if you need more tools, include a fresh thinking.note "
+                        "with the next tool_call batch unless the task is ready for the final answer."
+                    )
+                tool_output_msg = {"role": "user", "content": followup}
+                messages.append(tool_output_msg)
             if outputs:
                 tool_trace.append(
                     {
@@ -3167,14 +4346,17 @@ class _OpenAgentAgentLoopMixin:
             if cancel_token and cancel_token in self._cancelled_generations:
                 raise RuntimeError("Generation cancelled")
             try:
-                answer = await ask_provider(
-                    messages,
-                    max_tokens_override=(
-                        max(4096, int(self.config["max_tokens"]) * 2)
-                        if expanded_completion
-                        else None
-                    ),
-                )
+                answer = (
+                    await ask_provider(
+                        messages,
+                        max_tokens_override=(
+                            max(4096, int(self.config["max_tokens"]) * 2)
+                            if expanded_completion
+                            else None
+                        ),
+                        allow_native_tools=False,
+                    )
+                ).content
             except RuntimeError as exc:
                 if "model-call budget exhausted" not in str(exc):
                     raise
@@ -3507,6 +4689,10 @@ class _OpenAgentAgentLoopMixin:
             or model.startswith("o4")
         )
 
+    def _uses_openai_responses_api(self, provider: str) -> bool:
+        mode = str(self.config.get("openai_api_mode", "chat") or "chat").lower()
+        return provider == "openai" and mode.strip() == "responses"
+
     def _reasoning_effort(self) -> str:
         effort = (
             str(self.config.get("reasoning_effort", "off") or "off").lower().strip()
@@ -3540,12 +4726,15 @@ class _OpenAgentAgentLoopMixin:
     async def _ask_openai_compatible(
         self,
         provider: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         api_key: str,
         *,
         max_tokens_override: int | None = None,
         before_attempt: Callable[[], None] | None = None,
-    ) -> str:
+        allow_native_tools: bool = False,
+        require_native_tools: bool = False,
+    ) -> str | ProviderResponse:
+        require_native_tools = bool(require_native_tools and allow_native_tools)
         base_url = self._base_url(provider)
         if not base_url:
             raise RuntimeError("custom_base_url is not configured")
@@ -3564,6 +4753,33 @@ class _OpenAgentAgentLoopMixin:
         else:
             payload["max_tokens"] = max_tokens
 
+        native_catalog = None
+        native_support_key = (provider, base_url.rstrip("/"), self._model(provider))
+        runtime = getattr(self, "_v2_runtime", None)
+        if runtime is not None:
+            registry_token = id(runtime.registry)
+            if getattr(self, "_native_tool_registry_token", None) != registry_token:
+                self._native_tool_registry_token = registry_token
+                self._native_tool_support = {}
+        support = getattr(self, "_native_tool_support", {})
+        if (
+            allow_native_tools
+            and runtime is not None
+            and support.get(native_support_key) is not False
+        ):
+            prompt = next(
+                (
+                    str(message.get("content") or "")
+                    for message in reversed(messages)
+                    if message.get("role") == "user"
+                ),
+                "",
+            )
+            native_catalog = build_native_tool_catalog(runtime.registry.specs(), prompt)
+            if native_catalog.tools:
+                payload["tools"] = list(native_catalog.tools)
+                payload["tool_choice"] = "required" if require_native_tools else "auto"
+
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -3578,7 +4794,26 @@ class _OpenAgentAgentLoopMixin:
             data = await post_payload()
         except RuntimeError as exc:
             error_text = str(exc).lower()
-            if "max_completion_tokens" in error_text and "unsupported" in error_text:
+            native_fields_unsupported = (
+                native_catalog is not None
+                and any(field in error_text for field in ("tools", "tool_choice"))
+                and any(
+                    marker in error_text
+                    for marker in (
+                        "unsupported",
+                        "not supported",
+                        "unknown field",
+                        "unexpected field",
+                    )
+                )
+            )
+            if native_fields_unsupported:
+                payload.pop("tools", None)
+                payload.pop("tool_choice", None)
+                support[native_support_key] = False
+                self._native_tool_support = support
+                data = await post_payload()
+            elif "max_completion_tokens" in error_text and "unsupported" in error_text:
                 value = payload.pop("max_completion_tokens", None)
                 if value is not None:
                     payload["max_tokens"] = value
@@ -3602,29 +4837,294 @@ class _OpenAgentAgentLoopMixin:
                 raise
         try:
             self._set_token_usage(data.get("usage"), provider)
-            return str(data["choices"][0]["message"]["content"]).strip()
+            message = data["choices"][0]["message"]
+            if native_catalog is not None and "tools" in payload:
+                support[native_support_key] = True
+                self._native_tool_support = support
+            if native_catalog is not None and "tool_calls" in message:
+                content = message.get("content")
+                if content is not None and not isinstance(content, str):
+                    raise TypeError("response message content must be text or null")
+                return self._openai_native_tool_response(
+                    provider_kind="openai-chat",
+                    content=content or "",
+                    native_assistant_turn=dict(message),
+                    tool_calls=message["tool_calls"],
+                    native_catalog=native_catalog,
+                )
+            content = message.get("content")
+            if content is None:
+                return ""
+            if not isinstance(content, str):
+                raise TypeError("response message content must be text or null")
+            return content.strip()
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(f"Unexpected {provider} response: {data}") from exc
 
-    async def _ask_google(
+    async def _ask_openai_responses(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         api_key: str,
         *,
         max_tokens_override: int | None = None,
         before_attempt: Callable[[], None] | None = None,
-    ) -> str:
+        allow_native_tools: bool = False,
+        require_native_tools: bool = False,
+    ) -> str | ProviderResponse:
+        base_url = self._base_url("openai")
+        if not base_url:
+            raise RuntimeError("custom_base_url is not configured")
+        payload: dict[str, Any] = {
+            "model": self._model("openai"),
+            "input": messages,
+            "temperature": float(self.config["temperature"]),
+            "max_output_tokens": int(max_tokens_override or self.config["max_tokens"]),
+        }
+        reasoning_effort = self._reasoning_effort()
+        if reasoning_effort != "off":
+            payload["reasoning"] = {"effort": reasoning_effort}
+
+        native_catalog = None
+        runtime = getattr(self, "_v2_runtime", None)
+        if allow_native_tools and runtime is not None:
+            prompt = next(
+                (
+                    str(message.get("content") or "")
+                    for message in reversed(messages)
+                    if message.get("role") == "user"
+                ),
+                "",
+            )
+            native_catalog = build_native_tool_catalog(runtime.registry.specs(), prompt)
+            if native_catalog.tools:
+                payload["tools"] = [
+                    {
+                        "type": "function",
+                        "name": tool["function"]["name"],
+                        "description": tool["function"]["description"],
+                        "parameters": tool["function"]["parameters"],
+                    }
+                    for tool in native_catalog.tools
+                ]
+                payload["tool_choice"] = "required" if require_native_tools else "auto"
+
+        if before_attempt is not None:
+            before_attempt()
+        data = await self._post_json(
+            f"{base_url}/responses",
+            payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            self._set_token_usage(data.get("usage"), "openai")
+            output = data["output"]
+            if not isinstance(output, list):
+                raise TypeError("response output must be an array")
+            function_items = [
+                item
+                for item in output
+                if isinstance(item, Mapping) and item.get("type") == "function_call"
+            ]
+            if function_items and native_catalog is not None:
+                tool_calls = [
+                    {
+                        "id": item.get("call_id"),
+                        "function": {
+                            "name": item.get("name"),
+                            "arguments": item.get("arguments"),
+                        },
+                    }
+                    for item in function_items
+                ]
+                return self._openai_native_tool_response(
+                    provider_kind="openai-responses",
+                    content="",
+                    native_assistant_turn=output,
+                    tool_calls=tool_calls,
+                    native_catalog=native_catalog,
+                )
+            output_text = data.get("output_text")
+            if output_text is not None:
+                if not isinstance(output_text, str):
+                    raise TypeError("response output_text must be text")
+                return output_text.strip()
+            text_parts = [
+                content.get("text")
+                for item in output
+                if isinstance(item, Mapping) and item.get("type") == "message"
+                for content in item.get("content", [])
+                if isinstance(content, Mapping)
+                and content.get("type") == "output_text"
+                and isinstance(content.get("text"), str)
+            ]
+            return "".join(text_parts).strip()
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"Unexpected openai Responses response: {data}") from exc
+
+    @staticmethod
+    def _anthropic_content_blocks(content: Any) -> list[dict[str, Any]]:
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        if not isinstance(content, list):
+            return [{"type": "text", "text": str(content or "")}]
+
+        blocks: list[dict[str, Any]] = []
+        for item in content:
+            if not isinstance(item, Mapping):
+                blocks.append({"type": "text", "text": str(item)})
+                continue
+            if item.get("type") == "image_url":
+                image_url = item.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, Mapping) else None
+                match = (
+                    re.fullmatch(r"data:([^;]+);base64,(.+)", url, re.DOTALL)
+                    if isinstance(url, str)
+                    else None
+                )
+                if match is not None:
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": match.group(1),
+                                "data": match.group(2),
+                            },
+                        }
+                    )
+                    continue
+            if item.get("type") in {
+                "text",
+                "image",
+                "document",
+                "tool_use",
+                "tool_result",
+            }:
+                blocks.append(dict(item))
+            else:
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            dict(item), ensure_ascii=False, sort_keys=True
+                        ),
+                    }
+                )
+        return blocks or [{"type": "text", "text": ""}]
+
+    async def _ask_anthropic(
+        self,
+        messages: list[dict[str, Any]],
+        api_key: str,
+        *,
+        max_tokens_override: int | None = None,
+        before_attempt: Callable[[], None] | None = None,
+        allow_native_tools: bool = False,
+        require_native_tools: bool = False,
+    ) -> str | ProviderResponse:
+        require_native_tools = bool(require_native_tools and allow_native_tools)
+        system_text = "\n\n".join(
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "system"
+        )
+        anthropic_messages = [
+            {
+                "role": "assistant" if message.get("role") == "assistant" else "user",
+                "content": self._anthropic_content_blocks(message.get("content", "")),
+            }
+            for message in messages
+            if message.get("role") != "system"
+        ]
+        payload: dict[str, Any] = {
+            "model": self._model("anthropic"),
+            "messages": anthropic_messages,
+            "max_tokens": int(max_tokens_override or self.config["max_tokens"]),
+            "temperature": min(1.0, max(0.0, float(self.config["temperature"]))),
+            "stream": False,
+        }
+        if system_text:
+            payload["system"] = system_text
+
+        native_catalog = None
+        runtime = getattr(self, "_v2_runtime", None)
+        if allow_native_tools and runtime is not None:
+            prompt = next(
+                (
+                    "\n".join(
+                        str(block.get("text") or "")
+                        for block in self._anthropic_content_blocks(
+                            message.get("content", "")
+                        )
+                        if block.get("type") == "text"
+                    )
+                    for message in reversed(messages)
+                    if message.get("role") == "user"
+                ),
+                "",
+            )
+            native_catalog = build_native_tool_catalog(runtime.registry.specs(), prompt)
+            if native_catalog.tools:
+                payload["tools"] = [
+                    {
+                        "name": tool["function"]["name"],
+                        "description": tool["function"]["description"],
+                        "input_schema": tool["function"]["parameters"],
+                    }
+                    for tool in native_catalog.tools
+                ]
+                payload["tool_choice"] = {
+                    "type": "any" if require_native_tools else "auto"
+                }
+
+        if before_attempt is not None:
+            before_attempt()
+        data = await self._post_json(
+            f"{self._base_url('anthropic')}/v1/messages",
+            payload,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        )
+        try:
+            self._set_token_usage(data.get("usage"), "anthropic")
+            response = self._anthropic_native_tool_response(
+                content=data["content"], native_catalog=native_catalog
+            )
+            return response if response.tool_turn is not None else response.content
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError(f"Unexpected anthropic response: {data}") from exc
+
+    async def _ask_google(
+        self,
+        messages: list[dict[str, Any]],
+        api_key: str,
+        *,
+        max_tokens_override: int | None = None,
+        before_attempt: Callable[[], None] | None = None,
+        allow_native_tools: bool = False,
+        require_native_tools: bool = False,
+    ) -> str | ProviderResponse:
+        require_native_tools = bool(require_native_tools and allow_native_tools)
         model = self._model("google")
         url = f"{self._base_url('google')}/models/{model}:generateContent?key={api_key}"
         system_text = "\n\n".join(
-            m["content"] for m in messages if m["role"] == "system"
+            str(m.get("content") or "") for m in messages if m.get("role") == "system"
         )
         contents = []
         for msg in messages:
-            if msg["role"] == "system":
+            if msg.get("role") == "system":
+                continue
+            if isinstance(msg.get("parts"), list):
+                contents.append(dict(msg))
                 continue
             role = "model" if msg["role"] == "assistant" else "user"
-            content = msg["content"]
+            content = msg.get("content", "")
             parts = self._build_google_parts(content)
             contents.append({"role": role, "parts": parts})
         payload: dict[str, Any] = {
@@ -3636,6 +5136,28 @@ class _OpenAgentAgentLoopMixin:
                 ),
             },
         }
+        native_catalog = None
+        runtime = getattr(self, "_v2_runtime", None)
+        if allow_native_tools and runtime is not None:
+            prompt = next(
+                (
+                    str(message.get("content") or "")
+                    for message in reversed(messages)
+                    if message.get("role") == "user" and "content" in message
+                ),
+                "",
+            )
+            native_catalog = build_native_tool_catalog(runtime.registry.specs(), prompt)
+            if native_catalog.tools:
+                payload["tools"] = [
+                    {
+                        "functionDeclarations": [
+                            dict(tool["function"]) for tool in native_catalog.tools
+                        ]
+                    }
+                ]
+                if require_native_tools:
+                    payload["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
         if system_text:
             payload["systemInstruction"] = {"parts": [{"text": system_text}]}
         if before_attempt is not None:
@@ -3643,8 +5165,11 @@ class _OpenAgentAgentLoopMixin:
         data = await self._post_json(url, payload)
         try:
             self._set_token_usage(data.get("usageMetadata"), "google")
-            parts = data["candidates"][0]["content"]["parts"]
-            return "".join(str(part.get("text", "")) for part in parts).strip()
+            content = data["candidates"][0]["content"]
+            response = self._google_native_tool_response(
+                content=content, native_catalog=native_catalog
+            )
+            return response if response.tool_turn is not None else response.content
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(f"Unexpected google response: {data}") from exc
 
@@ -3664,7 +5189,6 @@ class _OpenAgentAgentLoopMixin:
 
 
 __all__ = [
-    "OpenAgentPlugin",
     "_OpenAgentPluginSkillMixin",
     "_OpenAgentTelegramMediaMixin",
     "_OpenAgentAgentLoopMixin",

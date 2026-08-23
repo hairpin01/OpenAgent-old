@@ -187,7 +187,7 @@ def test_result_rendering_redacts_errors_and_spills(
     tool_registry_builder, tool_spec_builder
 ) -> None:
     boundary = _boundary(
-        tool_registry_builder, tool_spec_builder, max_rendered_chars=150
+        tool_registry_builder, tool_spec_builder, max_rendered_chars=220
     )
     result = ToolResult(
         "call-1",
@@ -212,19 +212,39 @@ def test_result_rendering_redacts_errors_and_spills(
         "status": "success",
     }
 
+    none_output = ToolResult("call-none", ToolResultStatus.SUCCESS, output=None)
+    assert json.loads(boundary.render_result(none_output)) == {
+        "call_id": "call-none",
+        "output": None,
+        "status": "success",
+    }
+
     error = ToolResult(
         "call-3",
         ToolResultStatus.ERROR,
-        error=ToolError(ToolErrorCode.HANDLER_FAILED, "stack/path/secret"),
+        error=ToolError(
+            ToolErrorCode.HANDLER_FAILED,
+            "Traceback from /private/path command=secret API_TOKEN=hidden",
+            correlation_id="diagnostic-handler-1",
+        ),
         retryable=True,
     )
     envelope = json.loads(boundary.render_result(error))
     assert envelope == {
         "call_id": "call-3",
-        "error_code": "handler_failed",
+        "error": {
+            "code": "handler_failed",
+            "correlation_id": "diagnostic-handler-1",
+            "message": "tool handler failed",
+        },
         "retryable": True,
         "status": "error",
     }
+    rendered_error = boundary.render_result(error)
+    assert "Traceback" not in rendered_error
+    assert "/private/path" not in rendered_error
+    assert "command=secret" not in rendered_error
+    assert "API_TOKEN=hidden" not in rendered_error
 
 
 def test_parsed_calls_and_boundary_collections_are_deeply_immutable(

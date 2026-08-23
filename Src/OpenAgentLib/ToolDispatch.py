@@ -15,10 +15,10 @@ import json
 
 from .Manager.OASession import OASession
 from .AgentRuntime import relevant_tool_names, search_tool_docs
-from .Plugin.PluginBase import HOOK_NO_RESULT, OpenAgentPlugin, ToolHookContext
+from .InstalledPluginRegistry import InstalledPluginRegistry, InstalledPluginStatus
+from .Plugin.PluginBase import HOOK_NO_RESULT, ToolHookContext
 from .SystemPlugins import (
     SystemTool,
-    UserPluginRegistry,
 )
 
 _TOOL_GROUP_ALIASES = {
@@ -527,9 +527,9 @@ class _OpenAgentToolRegistryMixin:
         return text
 
     def _retired_legacy_names(self) -> dict[str, Any]:
-        """Unified mapping of tool tags to internal methods. Merges core + plugin maps.
+        """Return retired legacy system-tool names only.
 
-        Cached after first build; invalidated by _register_plugin / _unregister_plugin.
+        External plugins are available only through the v2 tool runtime.
         """
         if getattr(self, "_tool_map_cache", None) is not None:
             return self._tool_map_cache  # type: ignore[return-value]
@@ -538,7 +538,6 @@ class _OpenAgentToolRegistryMixin:
             if isinstance(tool, SystemTool):
                 core[str(tool_name).strip().lower()] = tool
 
-        core.update(UserPluginRegistry(self._plugins).tool_map())
         self._tool_map_cache = core
         return core
 
@@ -584,26 +583,10 @@ class _OpenAgentToolRegistryMixin:
         agent_log = tool_context.agent_log
         thinking_notes = tool_context.thinking_notes
         tmap = self._retired_legacy_names()
-        # Plugin dispatch handles aliases via tool_map.
-
         # 1. Direct match or alias
         method_ref = tmap.get(name)
         method_name = method_ref if isinstance(method_ref, str) else ""
         handler_method = None
-        plugin_owner: OpenAgentPlugin | None = None
-
-        # Check plugin handlers first. Exact tool_map ownership supports
-        # legacy aliases like web_search/send_message/dialogs too.
-        plugin_owner = self._get_plugin_for_tool(name)
-        tool_context.plugin_owner = plugin_owner
-        if plugin_owner:
-            if method_name and hasattr(plugin_owner, method_name):
-                handler_method = getattr(plugin_owner, method_name)
-            else:
-                pmap = getattr(plugin_owner, "tool_map", {})
-                p_handler = pmap.get(name)
-                if p_handler:
-                    handler_method = getattr(plugin_owner, p_handler, None)
         if not handler_method and callable(method_ref):
             handler_method = method_ref
         if not handler_method and isinstance(method_ref, SystemTool):
@@ -1164,10 +1147,15 @@ class _OpenAgentRuntimeToolsMixin:
         )
 
     def _active_plugins_prompt(self) -> str:
-        plugins = getattr(self, "_plugins", {}) or {}
-        if not plugins:
+        registry = getattr(self, "_installed_plugin_registry", None)
+        if not isinstance(registry, InstalledPluginRegistry):
             return ""
-        names = ", ".join(sorted(str(name) for name in plugins))
+        names = ", ".join(
+            record.plugin_id
+            for record in registry.snapshot(status=InstalledPluginStatus.ACTIVE)
+        )
+        if not names:
+            return ""
         return (
             "\n\nActivated plugins: "
             f"{names}. Use utility.plugin_docs or utility.tool_help on demand."

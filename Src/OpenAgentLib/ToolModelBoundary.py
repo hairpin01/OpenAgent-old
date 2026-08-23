@@ -19,11 +19,28 @@ from typing import Any, Callable, Mapping, Sequence
 from .ToolKernel import (
     ToolCall,
     ToolContext,
+    ToolErrorCode,
     ToolKernelError,
     ToolRegistry,
     ToolResult,
     ToolResultStatus,
 )
+
+_SAFE_TOOL_ERROR_MESSAGES = {
+    ToolErrorCode.POLICY_DENIED: "tool execution was denied by policy",
+    ToolErrorCode.CONFIRMATION_REQUIRED: "tool confirmation is required",
+    ToolErrorCode.CONFIRMATION_REPLAYED: "tool confirmation is no longer valid",
+    ToolErrorCode.HOOK_CANCELLED: "tool execution was cancelled",
+    ToolErrorCode.HOOK_FAILED: "tool lifecycle processing failed",
+    ToolErrorCode.HANDLER_FAILED: "tool handler failed",
+    ToolErrorCode.HOST_FAILED: "isolated host execution failed",
+    ToolErrorCode.OUTPUT_SCHEMA_INVALID: "tool output could not be serialized",
+    ToolErrorCode.SPILL_FAILED: "tool result storage failed",
+    ToolErrorCode.EXECUTOR_FAILED: "tool executor failed",
+    ToolErrorCode.CANCELLED: "tool execution was cancelled",
+    ToolErrorCode.TIMED_OUT: "tool execution timed out",
+}
+_SAFE_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class ModelToolFormat(str, Enum):
@@ -307,11 +324,7 @@ class ToolModelBoundary:
         if result.status is ToolResultStatus.SUCCESS:
             envelope["output"] = self._redact(self._json_value(result.output))
         else:
-            error = result.error
-            envelope["error_code"] = (
-                getattr(getattr(error, "code", None), "value", None) or "tool_error"
-            )
-            envelope["retryable"] = result.retryable
+            envelope.update(self.error_envelope(result))
         rendered = json.dumps(
             envelope, ensure_ascii=True, sort_keys=True, separators=(",", ":")
         )
@@ -332,6 +345,34 @@ class ToolModelBoundary:
             sort_keys=True,
             separators=(",", ":"),
         )
+
+    @staticmethod
+    def error_envelope(result: ToolResult) -> dict[str, Any]:
+        """Return a stable error shape without retaining internal diagnostics."""
+
+        error = result.error
+        if error is None:
+            raise ValueError("model error envelope requires a failed tool result")
+        correlation_id = getattr(error, "correlation_id", None)
+        if not (
+            isinstance(correlation_id, str)
+            and _SAFE_CORRELATION_ID_RE.fullmatch(correlation_id)
+        ):
+            correlation_id = (
+                result.call_id
+                if _SAFE_CORRELATION_ID_RE.fullmatch(result.call_id)
+                else "tool-error"
+            )
+        return {
+            "error": {
+                "code": error.code.value,
+                "message": _SAFE_TOOL_ERROR_MESSAGES.get(
+                    error.code, "tool execution failed"
+                ),
+                "correlation_id": correlation_id,
+            },
+            "retryable": result.retryable,
+        }
 
     def _blocks(
         self, text: str

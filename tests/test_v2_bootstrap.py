@@ -5,8 +5,18 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+from OpenAgentLib.InstalledPluginRegistry import (
+    InstalledPluginManifest,
+    InstalledPluginRecord,
+    InstalledPluginSource,
+    InstalledPluginStatus,
+    InstalledPluginTool,
+)
+from OpenAgentLib.NativeToolCalls import build_native_tool_catalog, json_materialize
 from OpenAgentLib.ToolCompatibility import TOOL_COMPATIBILITY_MATRIX
 from OpenAgentLib.ToolKernel import ToolContext, ToolResultStatus
+from OpenAgentLib.ToolModelBoundary import ModelToolErrorCode, ModelTurnKind
+from OpenAgentLib.Plugin.PluginsEngine import _OpenAgentPluginSkillMixin
 from OpenAgentLib.ToolPolicy import (
     ConfirmationState,
     ToolConfirmationGrant,
@@ -14,6 +24,41 @@ from OpenAgentLib.ToolPolicy import (
 )
 from OpenAgentLib.TodoService import OpenAgentTodoService
 from OpenAgentLib.V2Bootstrap import build_v2_tool_runtime
+
+_TERMINAL_RUN_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "cwd": {"type": "string"},
+    },
+    "required": ["argv", "cwd"],
+    "additionalProperties": False,
+}
+_TERMINAL_RUN_OUTPUT_SCHEMA = {"type": "object", "additionalProperties": True}
+
+
+def _installed_terminal_record() -> InstalledPluginRecord:
+    return InstalledPluginRecord(
+        plugin_id="openagent.terminal",
+        source=InstalledPluginSource("/tmp/openagent_plugins/terminal.py", "a" * 64),
+        status=InstalledPluginStatus.ACTIVE,
+        manifest=InstalledPluginManifest(
+            manifest_version="2",
+            api_version="2",
+            version="2.0.0",
+            entrypoint="openagent_plugins.terminal.HANDLERS",
+            capabilities=frozenset({"process"}),
+            metadata={"source_module": "openagent_plugins.terminal"},
+            tools=(
+                InstalledPluginTool(
+                    canonical_id="terminal.run",
+                    capabilities=frozenset({"process"}),
+                    input_schema=_TERMINAL_RUN_INPUT_SCHEMA,
+                    output_schema=_TERMINAL_RUN_OUTPUT_SCHEMA,
+                ),
+            ),
+        ),
+    )
 
 
 @dataclass
@@ -131,3 +176,81 @@ def test_bootstrap_builds_native_and_sibling_registry_and_executes_model_call() 
         }
 
     asyncio.run(scenario())
+
+
+def test_installed_terminal_schema_reaches_model_boundary_before_host_dispatch() -> (
+    None
+):
+    record = _installed_terminal_record()
+    runtime = build_v2_tool_runtime(
+        _RuntimeApp(),
+        installed_records=(record,),
+        include_sibling_fallback=False,
+    )
+    boundary = runtime.boundary(ToolContext("installed-terminal"))
+    spec = runtime.registry.resolve("terminal.run")
+    expected = _TERMINAL_RUN_INPUT_SCHEMA
+
+    assert spec.input_schema == record.manifest.tools[0].input_schema
+    assert spec.output_schema == record.manifest.tools[0].output_schema
+    assert json_materialize(spec.input_schema) == expected
+    docs = next(doc for doc in boundary.tool_docs() if doc["id"] == "terminal.run")
+    assert docs["input_schema"] == expected
+    catalog = build_native_tool_catalog((spec,), "run a terminal command")
+    assert catalog.tools[0]["function"]["parameters"] == expected
+
+    valid = boundary.parse(
+        '{"tool":"terminal.run","args":{"argv":["git","status"],"cwd":"."}}'
+    )
+    assert valid.kind is ModelTurnKind.TOOLS
+    assert dict(valid.calls[0].arguments) == {
+        "argv": ("git", "status"),
+        "cwd": ".",
+    }
+
+    for arguments in (
+        {"command": "git status"},
+        {"cmd": "git status"},
+        {"argv": ["git", "status"]},
+    ):
+        output, results, traces = asyncio.run(
+            runtime.execute_model_output(
+                f"```tool_call\n{json.dumps({'tool': 'terminal.run', 'args': arguments})}\n```",
+                context=ToolContext("installed-terminal"),
+                request_for=lambda call: ToolPolicyRequest(
+                    enabled_tool_ids=frozenset({call.canonical_id}),
+                    granted_capabilities=call.spec.capabilities,
+                    confirmation=ConfirmationState.APPROVED,
+                    confirmation_grant=ToolConfirmationGrant.for_call(
+                        "installed-terminal", call
+                    ),
+                    remaining_calls=1,
+                ),
+            )
+        )
+        assert output.kind is ModelTurnKind.INVALID
+        assert output.errors[0].code is ModelToolErrorCode.INVALID_ARGUMENT
+        assert results == ()
+        assert traces == ()
+
+
+def test_runtime_bootstrap_rebuilds_prebootstrap_empty_tool_caches() -> None:
+    class _CacheHarness(_OpenAgentPluginSkillMixin):
+        def __init__(self) -> None:
+            self._tool_map_cache = {}
+            self._tool_registry_cache = None
+
+    app = _CacheHarness()
+    assert app._effective_tool_registry() == ()
+    assert app._tool_registry_cache == ()
+
+    runtime = build_v2_tool_runtime(_RuntimeApp())
+    app._v2_runtime = runtime
+    app._invalidate_tool_caches()
+    registry = app._effective_tool_registry()
+
+    assert "utility.search_tool" in registry
+    assert "file.read_text" in registry
+    assert "utility.list_tools" in registry
+    assert "file.patch" in registry
+    assert app._tool_map_cache is None

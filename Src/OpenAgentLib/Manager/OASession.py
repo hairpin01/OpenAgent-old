@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -12,7 +13,7 @@ class OASession:
     chat_id: int
     created_at: float
     updated_at: float
-    messages: list[dict[str, str]] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
     model: str | None = None
     thinking_notes: list[str] = field(default_factory=list)
 

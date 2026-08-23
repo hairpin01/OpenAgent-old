@@ -231,38 +231,54 @@ def test_resource_modules_have_no_ambient_or_direct_resource_apis() -> None:
         assert not [token for token in forbidden if token in source], name
 
 
-def test_terminal_argv_is_allowlisted_and_shell_metacharacters_remain_data() -> None:
+def test_terminal_run_transports_arbitrary_non_shell_argv_literally() -> None:
     terminal = importlib.import_module("plugins.terminal")
-    call = _call(
-        terminal, "terminal.run", {"argv": ["echo", "; touch /tmp/pwned"], "cwd": "."}
+    invocations = (
+        (["docker", "compose", "ps", "--all"], "command with options"),
+        (["git", "status"], "git status"),
+        (["whoami"], "no arguments"),
+        (["printf", ";", "|", "$(id)", ">"], "literal metacharacters"),
     )
     transport = RecordingTransport(
-        {
-            "ok": True,
-            "data": {"exit_code": 0, "stdout": "; touch /tmp/pwned", "stderr": ""},
-        }
+        *(
+            {
+                "ok": True,
+                "data": {"exit_code": 0, "stdout": stdout, "stderr": ""},
+            }
+            for _argv, stdout in invocations
+        )
     )
 
-    result = terminal.HANDLERS["terminal.run"](call, _capability(call, transport))
+    for argv, expected_stdout in invocations:
+        call = _call(terminal, "terminal.run", {"argv": argv, "cwd": "."})
+        result = terminal.HANDLERS["terminal.run"](
+            call, _capability(call, transport)
+        )
+        assert result["stdout"] == expected_stdout
 
-    assert result["stdout"] == "; touch /tmp/pwned"
-    assert transport.frames[0]["payload"]["argv"] == ["echo", "; touch /tmp/pwned"]
+    assert [frame["payload"]["argv"] for frame in transport.frames] == [
+        argv for argv, _stdout in invocations
+    ]
+    assert transport.frames[1]["payload"]["argv"] == ["git", "status"]
     with pytest.raises(Exception):
         _call(terminal, "terminal.run", {"command": "echo injected"})
-    blocked = _call(terminal, "terminal.run", {"argv": ["sh", "-c", "id"], "cwd": "."})
-    with pytest.raises(ValueError, match="allowlisted"):
+
+
+@pytest.mark.parametrize("executable", ("sh", "bash", "zsh", "fish", "cmd", "powershell"))
+def test_terminal_run_rejects_shell_interpreters(executable: str) -> None:
+    terminal = importlib.import_module("plugins.terminal")
+    blocked = _call(
+        terminal, "terminal.run", {"argv": [executable, "-c", "id"], "cwd": "."}
+    )
+
+    with pytest.raises(ValueError, match="shell executables"):
         terminal.HANDLERS["terminal.run"](
             blocked, _capability(blocked, RecordingTransport())
         )
-    find_escape = _call(
-        terminal,
-        "terminal.run",
-        {"argv": ["find", ".", "-exec", "/bin/sh", "-c", "id", ";"], "cwd": "."},
-    )
-    with pytest.raises(ValueError, match="allowlisted"):
-        terminal.HANDLERS["terminal.run"](
-            find_escape, _capability(find_escape, RecordingTransport())
-        )
+
+
+def test_terminal_run_retains_grant_relative_file_command_paths() -> None:
+    terminal = importlib.import_module("plugins.terminal")
     path_escape = _call(
         terminal, "terminal.run", {"argv": ["cat", "/etc/passwd"], "cwd": "."}
     )

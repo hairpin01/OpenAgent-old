@@ -18,9 +18,12 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 import inspect
+import logging
+import re
 import threading
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from uuid import uuid4
 
 from .PluginHost import (
     PluginHostCallError,
@@ -51,6 +54,12 @@ from .ToolPolicy import (
     ToolPolicyEngine,
     ToolPolicyRequest,
 )
+
+_LOG = logging.getLogger(__name__)
+_FAILURE_STAGES = frozenset(
+    {"admission", "host", "handler", "capability", "serialization"}
+)
+_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class ToolHookAction(str, Enum):
@@ -166,11 +175,16 @@ class ToolExecutor:
         context_spill: ContextSpillAdapter | None = None,
         gate: ToolConcurrencyGate | None = None,
         clock: Callable[[], datetime] | None = None,
+        failure_correlation_id_factory: Callable[[], str] | None = None,
     ) -> None:
         if not isinstance(registry, ToolRegistry):
             raise TypeError("registry must be a ToolRegistry")
         if not isinstance(policy, ToolPolicyEngine):
             raise TypeError("policy must be a ToolPolicyEngine")
+        if failure_correlation_id_factory is not None and not callable(
+            failure_correlation_id_factory
+        ):
+            raise TypeError("failure_correlation_id_factory must be callable")
         self.registry = registry
         self.policy = policy
         self.gate = gate or ToolConcurrencyGate(policy)
@@ -179,6 +193,9 @@ class ToolExecutor:
         self.trace_sink = trace_sink
         self.context_spill = context_spill
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self._failure_correlation_id_factory = failure_correlation_id_factory or (
+            lambda: uuid4().hex
+        )
         self._native_handlers = self._validate_native_handlers(native_handlers or {})
         self._live_tasks: set[asyncio.Task[Any]] = set()
         self._confirmation_lock = threading.Lock()
@@ -447,15 +464,35 @@ class ToolExecutor:
         except asyncio.CancelledError:
             raise
         except PluginHostCallError as error:
-            return self._host_failure(call, error.code, error.retryable)
+            correlation_id = self._log_failure(call, "host")
+            return self._host_failure(
+                call, error.code, error.retryable, correlation_id=correlation_id
+            )
         except _HostFailure as failure:
-            return self._host_failure(call, failure.code, failure.retryable)
-        except Exception:
+            correlation_id = self._log_failure(call, "host")
+            return self._host_failure(
+                call,
+                failure.code,
+                failure.retryable,
+                correlation_id=correlation_id,
+            )
+        except Exception as error:
+            stage = self._failure_stage(error)
+            correlation_id = self._log_failure(call, stage)
             return self._result(
                 call,
                 ToolResultStatus.ERROR,
-                ToolErrorCode.HANDLER_FAILED,
-                "tool handler failed",
+                (
+                    ToolErrorCode.HANDLER_FAILED
+                    if stage == "handler"
+                    else ToolErrorCode.HOST_FAILED
+                ),
+                (
+                    "tool handler failed"
+                    if stage == "handler"
+                    else "isolated host execution failed"
+                ),
+                correlation_id=correlation_id,
             )
 
         try:
@@ -466,12 +503,14 @@ class ToolExecutor:
                 requested_name=call.requested_name,
             )
         except ToolArgumentError as error:
+            correlation_id = self._log_failure(call, "serialization")
             return self._result(
                 call,
                 ToolResultStatus.ERROR,
                 ToolErrorCode.OUTPUT_SCHEMA_INVALID,
                 "tool output violates the declared schema",
                 field_path=error.field_path,
+                correlation_id=correlation_id,
             )
         return ToolResult(call.call_id, ToolResultStatus.SUCCESS, output=frozen_output)
 
@@ -489,16 +528,28 @@ class ToolExecutor:
             retryable=call.spec.idempotency is IdempotencyClass.IDEMPOTENT,
         )
         if not isinstance(outcome, PluginHostOutcome):
-            raise _HostFailure(PluginHostErrorCode.WORKER_ERROR, False)
+            raise _HostFailure(
+                PluginHostErrorCode.WORKER_ERROR,
+                False,
+                "isolated host returned an invalid result",
+            )
         if (
             outcome.request.call_id != call.call_id
             or outcome.response.call_id != call.call_id
         ):
-            raise _HostFailure(PluginHostErrorCode.RESPONSE_MISMATCH, False)
+            raise _HostFailure(
+                PluginHostErrorCode.RESPONSE_MISMATCH,
+                False,
+                "isolated host response did not match the active call",
+            )
         if outcome.response.status is PluginHostStatus.SUCCESS:
             return outcome.response.result
         assert outcome.response.error is not None
-        raise _HostFailure(outcome.response.error.code, outcome.retryable)
+        raise _HostFailure(
+            outcome.response.error.code,
+            outcome.retryable,
+            outcome.response.error.message,
+        )
 
     async def _invoke_native(
         self,
@@ -588,6 +639,8 @@ class ToolExecutor:
         call: ToolCall,
         code: PluginHostErrorCode,
         retryable: bool,
+        *,
+        correlation_id: str | None = None,
     ) -> ToolResult:
         if code is PluginHostErrorCode.CANCELLED:
             return self._result(
@@ -595,6 +648,7 @@ class ToolExecutor:
                 ToolResultStatus.CANCELLED,
                 ToolErrorCode.CANCELLED,
                 "isolated host execution was cancelled",
+                correlation_id=correlation_id,
             )
         if code is PluginHostErrorCode.TIMED_OUT:
             return self._result(
@@ -602,6 +656,7 @@ class ToolExecutor:
                 ToolResultStatus.TIMED_OUT,
                 ToolErrorCode.TIMED_OUT,
                 "isolated host execution timed out",
+                correlation_id=correlation_id,
             )
         return self._result(
             call,
@@ -609,10 +664,11 @@ class ToolExecutor:
             ToolErrorCode.HOST_FAILED,
             "isolated host execution failed",
             retryable=retryable,
+            correlation_id=correlation_id,
         )
 
-    @staticmethod
     def _result(
+        self,
         call: ToolCall,
         status: ToolResultStatus,
         code: ToolErrorCode,
@@ -620,6 +676,7 @@ class ToolExecutor:
         *,
         retryable: bool = False,
         field_path: tuple[str | int, ...] = (),
+        correlation_id: str | None = None,
     ) -> ToolResult:
         return ToolResult(
             call.call_id,
@@ -630,9 +687,41 @@ class ToolExecutor:
                 canonical_id=call.canonical_id,
                 requested_name=call.requested_name,
                 field_path=field_path,
+                correlation_id=correlation_id or self._new_failure_correlation_id(),
             ),
             retryable=retryable,
         )
+
+    def _failure_stage(self, error: Exception) -> str:
+        stage = getattr(error, "tool_failure_stage", None)
+        return stage if stage in _FAILURE_STAGES else "handler"
+
+    def _log_failure(self, call: ToolCall, stage: str) -> str:
+        correlation_id = self._new_failure_correlation_id()
+        _LOG.error(
+            "tool execution failed: stage=%s correlation_id=%s call_id=%s tool=%s",
+            stage,
+            correlation_id,
+            call.call_id,
+            call.canonical_id,
+            exc_info=True,
+            extra={
+                "tool_failure_stage": stage,
+                "tool_failure_correlation_id": correlation_id,
+            },
+        )
+        return correlation_id
+
+    def _new_failure_correlation_id(self) -> str:
+        try:
+            correlation_id = self._failure_correlation_id_factory()
+        except Exception:
+            return uuid4().hex
+        if isinstance(correlation_id, str) and _CORRELATION_ID_RE.fullmatch(
+            correlation_id
+        ):
+            return correlation_id
+        return uuid4().hex
 
     async def _record(
         self,
@@ -718,3 +807,7 @@ class ToolExecutor:
 class _HostFailure(Exception):
     code: PluginHostErrorCode
     retryable: bool
+    message: str = ""
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, self.message or self.code.value)

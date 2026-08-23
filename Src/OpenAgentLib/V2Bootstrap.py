@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from .PluginSDK import PluginManifest
+from .InstalledPluginRegistry import InstalledPluginRecord, InstalledPluginStatus
 from .RuntimeNativeSystemServices import RuntimeNativeSystemServices
 from .SystemPlugins.native import build_native_system_tools
 from .ToolCompatibility import TOOL_COMPATIBILITY_MATRIX
@@ -99,6 +100,8 @@ def build_v2_tool_runtime(
     manifests: Iterable[PluginManifest] = (),
     *,
     host_invoker: ToolHostInvoker | None = None,
+    installed_records: Iterable[InstalledPluginRecord] | None = None,
+    include_sibling_fallback: bool = True,
 ) -> V2ToolRuntime:
     """Build one deterministic registry without legacy discovery or dispatch."""
 
@@ -113,7 +116,36 @@ def build_v2_tool_runtime(
             for tool in manifest.tools
         )
     )
-    specs = (*native.registry.specs(), *(declared_specs or _sibling_specs()))
+    installed = tuple(installed_records or ())
+    installed_specs = tuple(
+        ToolSpec(
+            canonical_id=tool.canonical_id,
+            aliases=tool.aliases,
+            input_schema=tool.input_schema,
+            output_schema=tool.output_schema,
+            api_version=TOOL_API_VERSION,
+            schema_version=TOOL_SCHEMA_VERSION,
+            capabilities=tool.capabilities,
+            confirmation=ConfirmationRequirement(tool.confirmation),
+            concurrency=ConcurrencyClass(tool.concurrency),
+            idempotency=IdempotencyClass(tool.idempotency),
+            migration_disposition=MigrationDisposition(tool.migration_disposition),
+            description=tool.description,
+            source_family="plugin-v2",
+            source_module=str(record.manifest.metadata["source_module"]),
+        )
+        for record in installed
+        if record.status is InstalledPluginStatus.ACTIVE and record.enabled
+        for tool in record.manifest.tools
+    )
+    specs = (
+        *native.registry.specs(),
+        *(
+            installed_specs
+            or declared_specs
+            or (_sibling_specs() if include_sibling_fallback else ())
+        ),
+    )
     registry = ToolRegistry(specs)
     policy = ToolPolicyEngine(DEFAULT_TOOL_POLICY_CATALOG)
     runtime = V2ToolRuntime(

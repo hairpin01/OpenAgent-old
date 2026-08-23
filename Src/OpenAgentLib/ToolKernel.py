@@ -21,6 +21,7 @@ TOOL_SCHEMA_VERSION = "2"
 _CANONICAL_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
 _TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$")
 _CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_CORRELATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class ToolErrorCode(str, Enum):
@@ -106,12 +107,18 @@ class ToolError:
     canonical_id: str | None = None
     requested_name: str | None = None
     field_path: tuple[str | int, ...] = ()
+    correlation_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.code, ToolErrorCode):
             object.__setattr__(self, "code", ToolErrorCode(self.code))
         if not isinstance(self.message, str) or not self.message.strip():
             raise ValueError("tool error message is required")
+        if self.correlation_id is not None:
+            if not isinstance(
+                self.correlation_id, str
+            ) or not _CORRELATION_ID_RE.fullmatch(self.correlation_id):
+                raise ValueError("tool error correlation ID is invalid")
         object.__setattr__(
             self, "canonical_id", _normalise_error_name(self.canonical_id)
         )

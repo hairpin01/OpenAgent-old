@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,10 +14,14 @@ from tool_testkit import (
     build_confirmation_grant,
     build_policy_request,
     build_policy_rule,
+    build_tool_spec,
 )
 
 sys.path.insert(0, str(ROOT / "Src"))
 
+from OpenAgentLib.RuntimeNativeSystemServices import (  # noqa: E402
+    RuntimeNativeSystemServices,
+)
 from OpenAgentLib.SystemPlugins.native import build_native_system_tools  # noqa: E402
 from OpenAgentLib.ToolCompatibility import TOOL_COMPATIBILITY_MATRIX  # noqa: E402
 from OpenAgentLib.ToolExecutor import ToolExecutor  # noqa: E402
@@ -25,6 +30,7 @@ from OpenAgentLib.ToolKernel import (  # noqa: E402
     ToolArgumentError,
     ToolContext,
     ToolErrorCode,
+    ToolRegistry,
     ToolResultStatus,
 )
 from OpenAgentLib.ToolPolicy import (  # noqa: E402
@@ -32,6 +38,30 @@ from OpenAgentLib.ToolPolicy import (  # noqa: E402
     ToolPolicyCatalog,
     ToolPolicyEngine,
 )
+
+
+def test_native_tool_help_exposes_exact_terminal_run_schema() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "argv": {"type": "array", "items": {"type": "string"}},
+            "cwd": {"type": "string"},
+        },
+        "required": ["argv", "cwd"],
+        "additionalProperties": False,
+    }
+    services = RuntimeNativeSystemServices(SimpleNamespace())
+    services.bind_registry(
+        ToolRegistry(
+            (build_tool_spec("terminal.run", aliases=(), input_schema=schema),)
+        )
+    )
+
+    result = asyncio.run(services.utility_tool_help({"tool": "terminal.run"}))
+
+    assert '"required":["argv","cwd"]' in result["result"]
+    assert '"argv":{"items":{"type":"string"},"type":"array"}' in result["result"]
+    assert '"cwd":{"type":"string"}' in result["result"]
 
 
 class RecordingServices:

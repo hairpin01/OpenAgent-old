@@ -3,15 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+from types import MappingProxyType
 from typing import Any
 
-from .Plugin.PluginBase import OpenAgentPlugin
 from .Manager.Session import SessionManager
 from .HttpClient import OpenAgentHttpClient
 from .ToolTracePersistence import ToolTracePersistence
 from .V2Bootstrap import build_v2_tool_runtime
-from .ToolCompatibility import SIBLING_PLUGINS_ROOT
-from .PluginDiscovery import discover_v2_plugin_sources
+from .InstalledPluginRegistry import InstalledPluginRegistry, InstalledPluginStatus
+from .InstalledPluginActions import InstalledPluginActionStore
 from .PluginHost import PluginHost
 from .IsolatedPluginInvoker import IsolatedPluginInvoker
 from .PluginCapabilities import (
@@ -163,34 +163,40 @@ class _OpenAgentLifecycleMixin:
         self._todo_status_map_cache: dict[str, str] | None = None
         self._tool_status_emojis_raw: str | None = None
         self._tool_status_emojis_cache: dict[str, str] | None = None
-        self._plugins: dict[str, OpenAgentPlugin] = {}
-        self._plugin_files: dict[str, Path] = {}
         self._plugins_cache: list[dict] = []
         self._system_tool_registry: Any | None = None
         self._system_tools: dict[str, Any] = {}
         self._tool_map_cache: dict[str, Any] | None = None
         self._tool_registry_cache: tuple[str, ...] | None = None
-        self._disabled_plugins: set[str] = self._load_disabled_plugins()
+        disabled_plugin_ids = self._load_disabled_plugins()
+        self._installed_plugin_registry = InstalledPluginRegistry()
+        self._installed_plugin_actions = InstalledPluginActionStore()
+        self._installed_plugin_diagnostics = MappingProxyType({})
+        self._v2_plugin_invoker = IsolatedPluginInvoker(
+            PluginHost(),
+            {},
+            plugin_root=self._resolve_plugins_dir().parent,
+            openagent_source=Path(__file__).resolve().parents[1],
+            capability_handler=self._dispatch_plugin_capability,
+            registry=self._installed_plugin_registry,
+        )
         await self._load_sessions()
         await self._load_todo_items_storage()
         # Legacy descriptor loading executes source files and is intentionally
         # excluded from the v2 startup path.
         self._system_tools = {}
-        await self._load_installed_plugins()
-        sibling_sources = discover_v2_plugin_sources(SIBLING_PLUGINS_ROOT)
-        self._v2_plugin_sources.update(sibling_sources)
-        self._v2_plugin_invoker = IsolatedPluginInvoker(
-            PluginHost(),
-            self._v2_plugin_sources,
-            plugin_root=SIBLING_PLUGINS_ROOT.parent,
-            openagent_source=Path(__file__).resolve().parents[1],
-            capability_handler=self._dispatch_plugin_capability,
-        )
-        # V2 owns executable tool metadata. Legacy descriptors remain only for
-        # compatibility inventory until the old mixins are retired.
+        await self._load_installed_plugins(disabled_plugin_ids)
+        # V2 owns executable tool metadata and installed source identity.
         self._v2_runtime = build_v2_tool_runtime(
-            self, host_invoker=self._v2_plugin_invoker
+            self,
+            host_invoker=self._v2_plugin_invoker,
+            installed_records=self._installed_plugin_registry.snapshot(
+                status=InstalledPluginStatus.ACTIVE
+            ),
+            include_sibling_fallback=False,
         )
+        self._invalidate_tool_caches()
+        self._effective_tool_registry()
         self._v2_capability_broker = CapabilityBroker(
             self._v2_runtime.policy,
             {
@@ -206,6 +212,11 @@ class _OpenAgentLifecycleMixin:
 
     async def on_unload(self) -> None:
         await self._cancel_plugin_unload_tasks()
+        for record in self._installed_plugin_registry.snapshot(
+            state=InstalledPluginStatus.ACTIVE
+        ):
+            await self._v2_plugin_invoker.quiesce(record.plugin_id, record.generation)
+        self._installed_plugin_actions.revoke_all(self._installed_plugin_registry)
         runtime = getattr(self, "_v2_runtime", None)
         if runtime is not None:
             await runtime.on_unload()
@@ -233,6 +244,8 @@ class _OpenAgentLifecycleMixin:
                 "max_arg_length": 4096,
                 "env_allowlist": (),
             }
+            if call.spec.canonical_id == "terminal.run":
+                constraints["allow_any_executable"] = True
         elif request.capability is CapabilityFamily.HTTPS_FETCH:
             constraints = {"max_timeout_seconds": 30, "max_bytes": 1_000_000}
         elif request.capability is CapabilityFamily.CONFIGURATION:

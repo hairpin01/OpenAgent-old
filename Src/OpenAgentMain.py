@@ -11,20 +11,57 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import importlib
 import io
 import re
+import sys
+import json
 import time
 import uuid
-import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from cubkit import load_strings
-import Settings as OpenAgentSettings
-from .Settings import debug_log
 
-from core.lib.loader.module_base import ModuleBase, bot_command, callback, command
-from core.lib.loader.module_config import (
+def _evict_stale_openagent_bundle_modules() -> None:
+    """Remove dependency modules left behind by MCUB's entrypoint-only reload."""
+    # MCUB reload removes the top-level module but CubKit dependencies use global names.
+    exact_roots = {
+        "OpenAgentLib",
+        "Settings",
+        "MCUBEvent",
+        "openagent_system_tool_api",
+    }
+    for name in tuple(sys.modules):
+        if name in exact_roots or name.startswith("OpenAgentLib."):
+            sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+
+
+def _runs_from_cubkit_artifact(filename: str | Path | None = None) -> bool:
+    """Keep source imports from replacing already-loaded test/runtime modules."""
+
+    if globals().get("__cubkit_module_id__") or globals().get(
+        "__cubkit_bundle_sha256__"
+    ):
+        return True
+    resolved = Path(filename if filename is not None else __file__).resolve()
+    return resolved.name != "OpenAgentMain.py"
+
+
+if _runs_from_cubkit_artifact():
+    _evict_stale_openagent_bundle_modules()
+
+from cubkit import load_strings  # noqa: E402
+import Settings as OpenAgentSettings  # noqa: E402
+from .Settings import debug_log  # noqa: E402
+
+from core.lib.loader.module_base import (  # noqa: E402
+    ModuleBase,
+    bot_command,
+    callback,
+    command,
+)
+from core.lib.loader.module_config import (  # noqa: E402
     Boolean,
     Choice,
     ConfigValue,
@@ -42,9 +79,8 @@ from core.lib.loader.module_config import (
 if TYPE_CHECKING:
     from core.lib.types import InlineMessage, Event
 
-OpenAgentSettings.configure_debug(OpenAgentSettings.debug_for_artifact(__file__))
-
 try:
+    from OpenAgentLib.AgentRuntime import json_tool_payload_to_legacy
     from OpenAgentLib.OpenAgentMixins import (
         _OpenAgentLifecycleMixin,
         _OpenAgentProviderMixin,
@@ -82,7 +118,7 @@ class OpenAgent(
 ):
     DEBUG = OpenAgentSettings.DEBUG
     name = "OpenAgent"
-    version = "0.8.1-main.build:1054"
+    version = "0.8.2-main.build:1057"
     author = "@dev_dolbaeb && @Hairpin00"
     description = {
         "ru": "ИИ агент в юзерботе с новой архитектурой инструментов",
@@ -104,6 +140,7 @@ class OpenAgent(
 
     PROVIDERS = (
         "openai",
+        "anthropic",
         "google",
         "openrouter",
         "groq",
@@ -113,6 +150,7 @@ class OpenAgent(
     )
     PROVIDER_LABELS = {
         "openai": "OpenAI",
+        "anthropic": "Anthropic",
         "google": "Google",
         "openrouter": "OpenRouter",
         "groq": "Groq",
@@ -148,6 +186,7 @@ class OpenAgent(
 
     DEFAULT_MODELS = {
         "openai": "gpt-5.5",
+        "anthropic": "claude-sonnet-4-5",
         "google": "gemini-1.5-flash",
         "openrouter": "openai/gpt-4o-mini",
         "groq": "llama-3.3-70b-versatile",
@@ -157,6 +196,7 @@ class OpenAgent(
     }
     BASE_URLS = {
         "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com",
         "google": "https://generativelanguage.googleapis.com/v1beta",
         "openrouter": "https://openrouter.ai/api/v1",
         "groq": "https://api.groq.com/openai/v1",
@@ -266,8 +306,14 @@ class OpenAgent(
                 ConfigValue(
                     "provider",
                     "openai",
-                    description="Provider: openai, google, openrouter, groq, deepseek, xai, other",
+                    description="Provider: openai, anthropic, google, openrouter, groq, deepseek, xai, other",
                     validator=Choice(choices=list(PROVIDERS)),
+                ),
+                ConfigValue(
+                    "openai_api_mode",
+                    "chat",
+                    description="OpenAI API mode when provider=openai: chat or responses",
+                    validator=Choice(choices=["chat", "responses"]),
                 ),
                 ConfigValue(
                     "api_key",
@@ -878,6 +924,20 @@ class OpenAgent(
         approved: bool = False,
     ) -> None:
         if token:
+            actions = getattr(self, "_installed_plugin_actions", None)
+            registry = getattr(self, "_installed_plugin_registry", None)
+            if actions is not None and registry is not None and actions.tracks(token):
+                try:
+                    actions.consume(
+                        registry,
+                        token,
+                        actor_id=OpenAgent._installed_plugin_action_actor(call),
+                        kind="tool-confirm",
+                    )
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        await call.answer("Plugin confirmation rejected", alert=True)
+                    return
             future = self._tool_confirmation_waiters.get(token)
             if future is not None and not future.done():
                 future.set_result(bool(approved))
@@ -917,6 +977,72 @@ class OpenAgent(
         )
         raw = re.sub(r"(?<!\S)(?:--flash|-f)(?=\s|$)", "", raw)
         return re.sub(r"\s+", " ", raw).strip()
+
+    @staticmethod
+    def _oa_debug_tool_arg(parser: Any | None, fallback: str = "") -> str | None:
+        raw = (
+            str(getattr(parser, "raw_args", "") or "")
+            if parser is not None
+            else str(fallback or "")
+        )
+        match = re.search(r"(?<!\S)--debug=tool(?=\s|$)", raw)
+        if match is None:
+            return None
+        return f"{raw[:match.start()]} {raw[match.end():]}".strip()
+
+    @staticmethod
+    def _parse_oa_debug_tool_request(value: str) -> tuple[str, dict[str, Any]]:
+        tool_name, separator, raw_arguments = str(value or "").strip().partition(" ")
+        if not tool_name or not separator or not raw_arguments.strip():
+            raise ValueError("Usage: .oa --debug=tool <tool.name> <JSON object>")
+        try:
+            arguments = json.loads(raw_arguments)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid tool arguments JSON: {exc.msg}") from exc
+        if not isinstance(arguments, dict):
+            raise ValueError("Tool arguments must be a JSON object")
+        return tool_name.strip().lower(), arguments
+
+    async def _run_oa_debug_tool(self, event: Event, value: str) -> None:
+        if not self.DEBUG:
+            await self.edit(event, "Debug tool mode is unavailable in release builds")
+            return
+        try:
+            tool_name, arguments = self._parse_oa_debug_tool_request(value)
+            legacy_call = json_tool_payload_to_legacy(
+                {"tool": tool_name, "args": arguments},
+                (tool_name,),
+            )
+            if legacy_call is None:
+                raise ValueError(f"Invalid tool name: {tool_name}")
+            outputs = await self._dispatch_agent_tool_batch(
+                [legacy_call],
+                source_event=event,
+                status_event=event,
+                agent_log=[],
+                started_at=time.monotonic(),
+                thinking_notes=[],
+                cancel_token=f"debug-tool-{uuid.uuid4().hex}",
+            )
+            rendered = "\n".join(outputs) or '{"status":"error","error":"empty result"}'
+            with contextlib.suppress(Exception):
+                rendered = json.dumps(
+                    json.loads(rendered),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            await self.edit(
+                event,
+                f"<pre><code>{html.escape(rendered)}</code></pre>",
+                as_html=True,
+            )
+        except Exception as exc:
+            await self.edit(
+                event,
+                f"<pre><code>{html.escape(type(exc).__name__ + ': ' + str(exc))}</code></pre>",
+                as_html=True,
+            )
 
     def _oa_flash_arg(self, parser: Any | None) -> bool:
         if parser is None:
@@ -1274,6 +1400,12 @@ class OpenAgent(
         new_chat, new_chat_name = self._oa_new_chat_arg(parser)
         test_name = self._oa_test_name(parser)
         flash_mode = self._oa_flash_arg(parser)
+        debug_tool = self._oa_debug_tool_arg(
+            parser, self._args_raw(event) if parser is None else ""
+        )
+        if debug_tool is not None:
+            await self._run_oa_debug_tool(event, debug_tool)
+            return
         if test_name:
             await self._run_oa_test(event, test_name)
             return
@@ -1406,6 +1538,7 @@ class OpenAgent(
                     full_prompt,
                     attachments,
                     source_event=event,
+                    agent_log=agent_log,
                 ),
                 edit_current=True,
             )
@@ -1659,41 +1792,37 @@ class OpenAgent(
         )
 
     def _format_oaplugin_overview(self) -> str:
-        installed = self._plugins
+        installed = self._registry_catalog_snapshot()
         text = self.strings("plugins_enabled_title")
         if not installed:
             text += self.strings("plugins_none_installed")
         else:
-            for pname, plugin in sorted(installed.items()):
-                display_name = self._plugin_meta_text(plugin, "name", default=pname)
-                version = self._plugin_meta_text(plugin, "version", default="?")
-                desc = self._plugin_meta_text(
-                    plugin,
-                    "description",
-                    default=self.strings("plugin_no_description"),
-                )
-                author = self._plugin_meta_text(plugin, "author")
-                tools = self._plugin_tool_names(plugin)[:5]
+            for plugin in installed:
+                tools = plugin.tools[:5]
                 item_lines = [
-                    f"<b>{html.escape(display_name)}</b> <code>v{html.escape(version)}</code>"
+                    f"<b>{html.escape(plugin.display_name)}</b> "
+                    f"<code>v{html.escape(plugin.version)}</code>",
+                    f"{html.escape(self.strings('plugin_id_label'))}: "
+                    f"<code>{html.escape(plugin.plugin_id)}</code>",
+                    f"State: <code>{html.escape(plugin.status)}</code> · "
+                    f"Enabled: <code>{'yes' if plugin.enabled else 'no'}</code> · "
+                    f"Generation: <code>{plugin.generation}</code>",
                 ]
-                if display_name.lower() != str(pname).lower():
-                    item_lines.append(
-                        f"{html.escape(self.strings('plugin_id_label'))}: "
-                        f"<code>{html.escape(str(pname))}</code>"
-                    )
-                if desc:
-                    item_lines.append(html.escape(desc))
-                if author:
-                    item_lines.append(
-                        f"{html.escape(self.strings('plugin_author_label'))}: {html.escape(author)}"
-                    )
+                item_lines.append(html.escape(plugin.description))
+                item_lines.append(
+                    f"{html.escape(self.strings('plugin_author_label'))}: "
+                    f"{html.escape(plugin.author)}"
+                )
                 if tools:
                     tools_text = ", ".join(
                         f"<code>{html.escape(tool)}</code>" for tool in tools
                     )
                     item_lines.append(
                         f"{html.escape(self.strings('plugin_tools_label'))}: {tools_text}"
+                    )
+                if plugin.diagnostic:
+                    item_lines.append(
+                        f"Diagnostic: <code>{html.escape(plugin.diagnostic)}</code>"
                     )
                 text += "<blockquote>" + "\n".join(item_lines) + "</blockquote>\n"
         text += self.strings("plugins_total", count=len(installed))
@@ -1795,10 +1924,11 @@ class OpenAgent(
         permissions = self._string_list(m.get("permissions", []))
         requirements = self._string_list(m.get("requirements", []))
         fname = m.get("file_name", "")
-        plugin_key = self._safe_plugin_name(
-            m.get("plugin_name") or fname.replace(".py", "") or name
+        installed_record = self._find_installed_plugin_presentation(
+            plugin_id=m.get("plugin_id", ""),
+            source_stem=m.get("plugin_name") or fname.replace(".py", ""),
         )
-        installed = plugin_key in self._plugins
+        installed = installed_record is not None
 
         text = (
             f"📦 <b>{html.escape(name)}</b> "
@@ -1924,76 +2054,100 @@ class OpenAgent(
         await call.answer(self.strings("plugin_installing"), alert=False)
         try:
             saved_name = await self._install_plugin_from_repo(name)
+            plugins = await self._fetch_repo_plugins()
+            installed = self._find_installed_plugin_presentation(source_stem=saved_name)
+            if installed is None:
+                raise ValueError("installed plugin record is unavailable")
             await call.answer(
-                self.strings("plugin_installed_alert", name=saved_name), alert=True
+                self.strings("plugin_installed_alert", name=installed.display_name),
+                alert=True,
             )
         except Exception as exc:
             await call.answer(self.strings("generic_error", error=str(exc)), alert=True)
             return
-        plugins = self._plugins_cache
-        if plugins and page < len(plugins):
-            await self._oaplugin_catalog(call, page)
-        else:
-            await self._oaplugin_catalog(call, 0)
+        bounded_page = min(max(page, 0), len(plugins) - 1) if plugins else 0
+        await self._oaplugin_catalog(call, bounded_page)
 
     @callback(ttl=900)
     async def _oaplugin_manager(self, call: InlineMessage, page: int = 0) -> None:
         """Show installed plugins with delete option."""
-        installed = list(self._plugins.items())
+        installed = self._registry_catalog_snapshot()
         if not installed:
             await call.answer(self.strings("plugin_manager_no_installed"), alert=True)
             return
-        if page < 0 or page >= len(installed):
-            await call.answer()
-            return
-        plugin_id, plugin = installed[page]
-        plugin_id = str(plugin_id or getattr(plugin, "name", "") or "?")
-        display_name = self._plugin_meta_text(plugin, "name", default=plugin_id)
-        version = self._plugin_meta_text(plugin, "version", default="?")
-        desc = self._plugin_meta_text(
-            plugin, "description", default=self.strings("plugin_no_description")
-        )
-        author = self._plugin_meta_text(plugin, "author")
-        tools = self._plugin_tool_names(plugin)
-        permissions = self._plugin_permissions(plugin)
-        requirements = self._plugin_requirements(plugin)
+        page = min(max(page, 0), len(installed) - 1)
+        plugin = installed[page]
 
-        text = f"<b>⚙️ {html.escape(display_name)}</b>\n"
-        if display_name.lower() != plugin_id.lower():
-            text += f"{html.escape(self.strings('plugin_id_label'))}: <code>{html.escape(plugin_id)}</code>\n"
-        text += f"{html.escape(self.strings('plugin_version_label'))}: <code>{html.escape(version)}</code>\n"
-        if author:
-            text += f"{html.escape(self.strings('plugin_author_label'))}: {html.escape(author)}\n"
-        if desc:
-            text += f"\n{html.escape(desc)}\n"
-        if tools:
+        text = f"<b>⚙️ {html.escape(plugin.display_name)}</b>\n"
+        text += f"{html.escape(self.strings('plugin_id_label'))}: <code>{html.escape(plugin.plugin_id)}</code>\n"
+        text += f"{html.escape(self.strings('plugin_version_label'))}: <code>{html.escape(plugin.version)}</code>\n"
+        text += f"{html.escape(self.strings('plugin_author_label'))}: {html.escape(plugin.author)}\n"
+        text += f"State: <code>{html.escape(plugin.status)}</code>\n"
+        text += f"Enabled: <code>{'yes' if plugin.enabled else 'no'}</code>\n"
+        text += f"Generation: <code>{plugin.generation}</code>\n"
+        text += f"\n{html.escape(plugin.description)}\n"
+        if plugin.diagnostic:
+            text += f"Diagnostic: <code>{html.escape(plugin.diagnostic)}</code>\n"
+        if plugin.tools:
             tools_str = ", ".join(
-                f"<code>{html.escape(tool)}</code>" for tool in tools[:8]
+                f"<code>{html.escape(tool)}</code>" for tool in plugin.tools[:8]
             )
-            if len(tools) > 8:
-                tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
+            if len(plugin.tools) > 8:
+                tools_str += self.strings(
+                    "plugin_more_tools", count=len(plugin.tools) - 8
+                )
             text += (
                 f"\n{html.escape(self.strings('plugin_tools_label'))}: {tools_str}\n"
             )
-        if permissions:
+        if plugin.permissions:
             perms_str = ", ".join(
-                f"<code>{html.escape(item)}</code>" for item in permissions
+                f"<code>{html.escape(item)}</code>" for item in plugin.permissions
             )
             text += f"{html.escape(self.strings('plugin_permissions_label'))}: {perms_str}\n"
-        if requirements:
+        if plugin.requirements:
             reqs_str = ", ".join(
-                f"<code>{html.escape(item)}</code>" for item in requirements
+                f"<code>{html.escape(item)}</code>" for item in plugin.requirements
             )
             text += f"{html.escape(self.strings('plugin_requirements_label'))}: {reqs_str}\n"
         text += "\n"
         text += self.strings("plugin_actions_title")
+        registry = self._installed_plugin_registry
+        record = registry.get(plugin.plugin_id)
+        actor_id = OpenAgent._installed_plugin_action_actor(call)
+        actions = getattr(self, "_installed_plugin_actions", None)
+        if actions is None:
+            from OpenAgentLib.InstalledPluginActions import InstalledPluginActionStore
+
+            actions = self._installed_plugin_actions = InstalledPluginActionStore()
+        delete_action = actions.issue(
+            registry,
+            record,
+            actor_id=actor_id,
+            kind="delete",
+            payload={"page": page},
+            statuses=frozenset({record.status}),
+        )
+        toggle_action = actions.issue(
+            registry,
+            record,
+            actor_id=actor_id,
+            kind="enable" if record.enabled is False else "disable",
+            payload={"page": page},
+            statuses=frozenset({record.status}),
+        )
         row1 = [
             self.Button.inline(
                 self.strings("plugin_delete_btn"),
-                self._oaplugin_uninstall,
-                args=(plugin_id, page),
+                OpenAgent._oaplugin_uninstall,
+                args=(delete_action.token,),
                 style="danger",
-            )
+            ),
+            self.Button.inline(
+                "Enable" if record.enabled is False else "Disable",
+                OpenAgent._oaplugin_set_enabled,
+                args=(toggle_action.token,),
+                style="primary",
+            ),
         ]
         buttons = [row1]
         if len(installed) > 1:
@@ -2029,38 +2183,84 @@ class OpenAgent(
             pass
 
     @callback(ttl=900)
-    async def _oaplugin_uninstall(
-        self, call: InlineMessage, name: str, page: int = 0
-    ) -> None:
+    async def _oaplugin_uninstall(self, call: InlineMessage, token: str) -> None:
         """Delete a plugin."""
         try:
-            name = self._safe_plugin_name(name)
-            fpath = self._plugin_files.get(name)
-            is_builtin = bool(fpath and self._is_builtin_plugin_file(fpath))
-            if is_builtin:
-                self._disabled_plugins.add(name)
-                self._save_disabled_plugins()
-            self._unregister_plugin(name)
-            plugins_dir = self._resolve_plugins_dir()
-            if fpath and fpath.exists() and not is_builtin:
-                try:
-                    fpath.resolve().relative_to(plugins_dir.resolve())
-                    fpath.unlink()
-                except ValueError:
-                    pass
-            if not is_builtin:
-                for extra in (
-                    plugins_dir / f"{name}.py",
-                    plugins_dir / f"{name}_plugin.py",
-                ):
-                    if extra.exists():
-                        extra.unlink()
+            actions = getattr(self, "_installed_plugin_actions", None)
+            if actions is None:
+                from OpenAgentLib.InstalledPluginActions import (
+                    InstalledPluginActionStore,
+                )
+
+                actions = self._installed_plugin_actions = InstalledPluginActionStore()
+            action, record = actions.consume(
+                self._installed_plugin_registry,
+                token,
+                actor_id=OpenAgent._installed_plugin_action_actor(call),
+                kind="delete",
+            )
+            invoker = getattr(self, "_v2_plugin_invoker", None)
+            if record.status.value == "active" and callable(
+                getattr(invoker, "quiesce", None)
+            ):
+                await invoker.quiesce(record.plugin_id, record.generation)
+            self._unregister_plugin(record.plugin_id)
             await call.answer(
-                self.strings("plugin_deleted_alert", name=name), alert=True
+                self.strings("plugin_deleted_alert", name=record.manifest.display_name),
+                alert=True,
             )
         except Exception as exc:
-            await call.answer(self.strings("generic_error", error=str(exc)), alert=True)
+            await call.answer(f"Plugin action rejected: {exc}", alert=True)
             return
+        installed = self._registry_catalog_snapshot()
         await self._oaplugin_manager(
-            call, min(page, len(self._plugins) - 1) if self._plugins else 0
+            call,
+            (
+                min(int(action.payload.get("page", 0)), len(installed) - 1)
+                if installed
+                else 0
+            ),
         )
+
+    @callback(ttl=900)
+    async def _oaplugin_set_enabled(self, call: InlineMessage, token: str) -> None:
+        try:
+            actions = getattr(self, "_installed_plugin_actions", None)
+            if actions is None:
+                from OpenAgentLib.InstalledPluginActions import (
+                    InstalledPluginActionStore,
+                )
+
+                actions = self._installed_plugin_actions = InstalledPluginActionStore()
+            action, record = actions.consume(
+                self._installed_plugin_registry,
+                token,
+                actor_id=OpenAgent._installed_plugin_action_actor(call),
+            )
+            if action.kind not in {"enable", "disable"}:
+                raise ValueError("unexpected installed plugin action")
+            enabled = action.kind == "enable"
+            await self._set_installed_plugin_enabled(
+                record.plugin_id,
+                expected_generation=record.generation,
+                enabled=enabled,
+            )
+        except Exception as exc:
+            await call.answer(f"Plugin action rejected: {exc}", alert=True)
+            return
+        await call.answer(
+            "Plugin enabled" if enabled else "Plugin disabled", alert=True
+        )
+        await self._oaplugin_manager(call, int(action.payload.get("page", 0)))
+
+    @staticmethod
+    def _installed_plugin_action_actor(call: InlineMessage) -> int | str:
+        for owner in (
+            call,
+            getattr(call, "message", None),
+            getattr(call, "event", None),
+        ):
+            value = getattr(owner, "sender_id", None)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return "unknown"

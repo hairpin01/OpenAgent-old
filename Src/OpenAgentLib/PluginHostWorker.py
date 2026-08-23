@@ -191,12 +191,13 @@ def _plugin_call(request: Mapping[str, Any], max_frame_bytes: int) -> Mapping[st
     if set(payload) != expected or not isinstance(payload["arguments"], dict):
         raise WorkerOperationError("plugin invocation payload is malformed")
     module_name = payload["module"]
-    if not isinstance(module_name, str) or not module_name.startswith("plugins."):
+    module_parts = module_name.split(".") if isinstance(module_name, str) else ()
+    if len(module_parts) < 2 or any(not part.isidentifier() for part in module_parts):
         raise WorkerOperationError("plugin module is not approved")
-    module_leaf = module_name.removeprefix("plugins.")
-    if not module_leaf.isidentifier() or "." in module_leaf:
-        raise WorkerOperationError("plugin module is not approved")
-    source = Path("/mnt/pluginroot/plugins") / f"{module_leaf}.py"
+    source = Path("/mnt/pluginroot").joinpath(*module_parts).with_suffix(".py")
+    expected_entrypoint = f"{module_name}.HANDLERS"
+    if payload["entrypoint"] != expected_entrypoint:
+        raise WorkerOperationError("plugin entrypoint is not approved")
     expected_hash = payload["source_sha256"]
     if (
         not isinstance(expected_hash, str)
@@ -213,7 +214,8 @@ def _plugin_call(request: Mapping[str, Any], max_frame_bytes: int) -> Mapping[st
         manifest is None
         or manifest.plugin_id != payload["plugin_id"]
         or manifest.version != payload["plugin_version"]
-        or manifest.entrypoint != payload["entrypoint"]
+        or not isinstance(manifest.entrypoint, str)
+        or manifest.entrypoint.rsplit(".", 2)[-2:] != [module_parts[-1], "HANDLERS"]
     ):
         raise WorkerOperationError(
             "plugin manifest identity does not match parent admission"
@@ -233,6 +235,7 @@ def _plugin_call(request: Mapping[str, Any], max_frame_bytes: int) -> Mapping[st
         raise WorkerOperationError("plugin handler is not declared")
     from OpenAgentLib.PluginSDK import CapabilityCallContext, CapabilityClient
     from OpenAgentLib.ToolKernel import ToolCall, ToolContext
+    from OpenAgentLib.ToolPolicy import tool_scope_for
 
     context_data = payload["context"]
     if not isinstance(context_data, dict):
@@ -250,7 +253,7 @@ def _plugin_call(request: Mapping[str, Any], max_frame_bytes: int) -> Mapping[st
             request["request_id"],
             request["call_id"],
             spec.canonical_id,
-            context.actor_id or f"session:{context.correlation_id}",
+            tool_scope_for(call),
             payload["grant_id"],
         ),
         _CapabilityTransport(max_frame_bytes),

@@ -296,12 +296,12 @@ def test_every_entry_is_explicitly_classified(matrix_case) -> None:
     }, matrix_case.canonical_id
     assert matrix_case.legacy_arguments["attrs"] is not None, matrix_case.canonical_id
     assert matrix_case.legacy_arguments["body"] is not None, matrix_case.canonical_id
-    assert (
-        matrix_case.v2_input_schema["status"] == "placeholder"
-    ), matrix_case.canonical_id
-    assert (
-        matrix_case.v2_output_schema["status"] == "placeholder"
-    ), matrix_case.canonical_id
+    assert dict(matrix_case.v2_input_schema) == {
+        "type": "object"
+    }, matrix_case.canonical_id
+    assert dict(matrix_case.v2_output_schema) == {
+        "type": "object"
+    }, matrix_case.canonical_id
 
 
 def test_matrix_and_schemas_are_read_only(matrix) -> None:

@@ -824,7 +824,10 @@ def _normalize_payload(
         }
         if not required_constraints.issubset(grant.constraints):
             raise CapabilityProtocolError("process grant lacks mandatory constraints")
-        if argv[0] not in grant.constraints["executables"]:
+        if (
+            grant.constraints.get("allow_any_executable") is not True
+            and argv[0] not in grant.constraints["executables"]
+        ):
             raise CapabilityProtocolError("process executable is not granted")
         _positive_bound(len(argv), "argv count", grant.constraints["max_args"])
         if any(len(arg) > grant.constraints["max_arg_length"] for arg in argv):

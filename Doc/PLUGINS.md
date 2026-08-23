@@ -8,6 +8,20 @@ plugin. A statically admitted handler runs only in a Linux Bubblewrap host.
 Linux with `/usr/bin/bwrap` is required for external plugins. There is no
 unsandboxed fallback.
 
+## Installed State
+
+`InstalledPluginRegistry` is the sole installed-plugin authority. Its immutable
+records retain the admitted source path and digest, manifest, lifecycle status,
+and monotonic generation. Disabled plugins remain visible in catalog and
+manager views but are not executable; only ACTIVE records are bound to the
+isolated invoker. Install, replace, enable, disable, and delete are atomic
+registry/invoker transitions. The repository response cache (`_plugins_cache`)
+is remote catalog data only and never determines installed status.
+
+Legacy in-process plugin objects, hooks, dynamic config schemas, and
+`tool_map` dispatch are removed. Existing MCUB `@command` decorators and loader
+registration remain unchanged.
+
 ## Manifest
 
 Import declarations from `OpenAgentLib.PluginSDK`. `PluginManifest` is immutable

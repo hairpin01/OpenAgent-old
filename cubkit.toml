@@ -18,15 +18,40 @@ sign = true
 fail_on_secrets = true
 
 [hooks.debug]
-post_build = ['python', 'scripts/notify_build.py']
+pre_build = ['python', 'scripts/configure_build_profile.py', 'debug']
+post_build = [
+    ['python', 'scripts/configure_build_profile.py', 'release'],
+    ['python', 'scripts/notify_build.py'],
+]
 
 [hooks.release]
+pre_build = ['python', 'scripts/configure_build_profile.py', 'release']
+# The two atomic copies can briefly differ if the second replacement fails, but
+# copy_release never leaves a partially written destination.
 post_build = [
+    [
+        'python',
+        'scripts/validate_release_api.py',
+        '{output}',
+        '../MCUB-fork',
+    ],
     [
         'python',
         'scripts/copy_release.py',
         '{output}',
         '../repo-MCUB-fork/OpenAgent-MCUB-repo.py',
+    ],
+    [
+        'python',
+        'scripts/copy_release.py',
+        '{output}',
+        '../MCUB-fork/modules_loaded/OpenAgent.py',
+    ],
+    [
+        'python',
+        'scripts/sync_v2_plugins.py',
+        '../repo-MCUB-fork/OpenAgent/plugins',
+        '../MCUB-fork/openagent_plugins',
     ],
     ['bash', 'scripts/release_github.sh', '{output}'],
     ['python', 'scripts/notify_build.py'],

@@ -32,6 +32,15 @@ importing it inside Bubblewrap. Capability requests are correlated JSON frames
 and must be authorized by a call-bound parent grant; manifests cannot expand
 capabilities, confirmations, retries, or parallelism.
 
+Installed plugins are represented only by `InstalledPluginRegistry` records.
+Each record has canonical source path and digest, immutable manifest metadata,
+generation, and lifecycle status. Catalog and manager views retain disabled
+records, while execution receives only ACTIVE records. Install, replacement,
+enable, disable, and deletion update the registry and isolated invoker as one
+transaction; legacy in-process plugin objects, hooks, and config schemas are
+not supported. The remote `_plugins_cache` remains a repository catalog cache,
+not installed state.
+
 Linux with `/usr/bin/bwrap` is required for external plugins. There is no
 unsandboxed fallback. To verify a release without live Telegram or network
 services, run:

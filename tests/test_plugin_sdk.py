@@ -486,6 +486,121 @@ def test_broker_normalizes_paths_and_rejects_boundary_escapes(tmp_path) -> None:
     )
 
 
+def test_allow_any_executable_bypasses_only_the_process_executable_tuple(
+    tmp_path,
+) -> None:
+    call, policy, policy_request = _call()
+    constraints = {
+        "executables": ["git"],
+        "cwd_root": str(tmp_path),
+        "max_timeout_seconds": 1,
+        "max_output_bytes": 10,
+        "max_args": 4,
+        "max_arg_length": 32,
+        "env_allowlist": [],
+    }
+    terminal_grant = CapabilityGrant.for_call(
+        "terminal-proc",
+        "host-1",
+        call,
+        CapabilityFamily.PROCESS,
+        frozenset({"run"}),
+        {**constraints, "allow_any_executable": True},
+    )
+    terminal_request = _request(
+        CapabilityFamily.PROCESS,
+        "run",
+        {
+            "argv": ["formerly-disallowed", "subcommand", "--option"],
+            "cwd": ".",
+            "timeout_seconds": 1,
+            "max_output_bytes": 10,
+        },
+        terminal_grant,
+    )
+    backend = FakeBackend()
+
+    allowed = CapabilityBroker(
+        policy, {CapabilityFamily.PROCESS: backend}
+    ).dispatch(call, policy_request, terminal_grant, terminal_request)
+
+    assert allowed.ok is True
+    assert backend.calls[0][1]["argv"] == (
+        "formerly-disallowed",
+        "subcommand",
+        "--option",
+    )
+
+    generic_grant = CapabilityGrant.for_call(
+        "generic-proc",
+        "host-1",
+        call,
+        CapabilityFamily.PROCESS,
+        frozenset({"run"}),
+        constraints,
+    )
+    generic_request = _request(
+        CapabilityFamily.PROCESS,
+        "run",
+        {
+            "argv": ["formerly-disallowed"],
+            "cwd": ".",
+            "timeout_seconds": 1,
+            "max_output_bytes": 10,
+        },
+        generic_grant,
+    )
+
+    denied = CapabilityBroker(
+        policy, {CapabilityFamily.PROCESS: FakeBackend()}
+    ).dispatch(call, policy_request, generic_grant, generic_request)
+
+    assert denied.error is CapabilityErrorCode.INVALID_REQUEST
+
+
+def test_missing_process_executable_is_a_structured_backend_error(tmp_path) -> None:
+    class MissingExecutableBackend:
+        def invoke(self, operation, payload, grant):
+            raise FileNotFoundError(payload["argv"][0])
+
+    call, policy, policy_request = _call()
+    grant = CapabilityGrant.for_call(
+        "terminal-proc",
+        "host-1",
+        call,
+        CapabilityFamily.PROCESS,
+        frozenset({"run"}),
+        {
+            "executables": [],
+            "allow_any_executable": True,
+            "cwd_root": str(tmp_path),
+            "max_timeout_seconds": 1,
+            "max_output_bytes": 10,
+            "max_args": 1,
+            "max_arg_length": 64,
+            "env_allowlist": [],
+        },
+    )
+    request = _request(
+        CapabilityFamily.PROCESS,
+        "run",
+        {
+            "argv": ["definitely-missing"],
+            "cwd": ".",
+            "timeout_seconds": 1,
+            "max_output_bytes": 10,
+        },
+        grant,
+    )
+
+    response = CapabilityBroker(
+        policy, {CapabilityFamily.PROCESS: MissingExecutableBackend()}
+    ).dispatch(call, policy_request, grant, request)
+
+    assert response.ok is False
+    assert response.error is CapabilityErrorCode.BACKEND_ERROR
+
+
 def test_nested_ambient_and_child_or_config_scope_escape_are_denied() -> None:
     call, policy, policy_request = _call()
     telegram_grant = CapabilityGrant.for_call(

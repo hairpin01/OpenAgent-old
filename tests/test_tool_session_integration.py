@@ -79,6 +79,72 @@ def test_terminal_trace_persists_reloads_and_never_replays(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_legacy_and_native_tool_turn_messages_round_trip(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        path = tmp_path / "sessions.json"
+        legacy_message = {"role": "user", "content": "Read the configuration."}
+        path.write_text(
+            json.dumps(
+                {
+                    "sessions": [
+                        {
+                            "id": "legacy-session",
+                            "name": "Legacy",
+                            "chat_id": 1,
+                            "created_at": 1.0,
+                            "updated_at": 1.0,
+                            "messages": [legacy_message],
+                        }
+                    ],
+                    "active": {"1": "legacy-session"},
+                    "prefs": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        manager = _manager(path)
+        await manager.load()
+        session = manager.get_active_session(1)
+        assert session.messages == [legacy_message]
+        native_message = {
+            "role": "assistant",
+            "content": "",
+            "native_tool_turn": {
+                "calls": [
+                    {
+                        "provider_kind": "openai-responses",
+                        "call_id": "call:opaque/1",
+                        "tool_name": "file.read_text",
+                        "arguments": {"path": "/tmp/config.json"},
+                        "raw_arguments": '{"path":"/tmp/config.json"}',
+                    }
+                ],
+                "native_assistant_turn": {
+                    "id": "assistant-turn-1",
+                    "output": [{"type": "function_call"}],
+                },
+            },
+        }
+        session.messages.append(native_message)
+        manager.touch_session(session)
+        await manager.close()
+
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        assert persisted["sessions"][0]["messages"] == [legacy_message, native_message]
+
+        reloaded = _manager(path)
+        await reloaded.load()
+        restored = reloaded.get_active_session(1)
+        assert restored.messages == [legacy_message, native_message]
+        assert (
+            restored.messages[1]["native_tool_turn"]["calls"][0]["call_id"]
+            == "call:opaque/1"
+        )
+        await reloaded.close()
+
+    asyncio.run(scenario())
+
+
 def test_trace_redaction_spill_context_and_response_summary(tmp_path: Path) -> None:
     async def scenario() -> None:
         manager = _manager(tmp_path / "sessions.json")

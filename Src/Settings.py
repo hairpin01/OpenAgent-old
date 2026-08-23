@@ -7,8 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-# One switch for verbose OpenAgent runtime tracing. Keep enabled while debugging
-# agent-loop/provider behavior; production builds can disable it here.
+# Build-time marker. The checked-in source must remain release-safe; CubKit's
+# debug pre-build hook embeds True and the post-build hook restores False.
 DEBUG = False
 DEBUG_MAX_STRING_CHARS = 8_000
 DEBUG_MAX_EVENT_CHARS = 32_000
@@ -149,7 +149,9 @@ def debug_log(logger: Any, event: str, **fields: Any) -> None:
         )
         if len(text) > DEBUG_MAX_EVENT_CHARS:
             text = text[:DEBUG_MAX_EVENT_CHARS] + f"…<event-truncated:{len(text)}>"
-        log_method = getattr(logger, "info", None) or getattr(logger, "warning", None)
+        log_method = getattr(logger, "debug", None)
+        if not callable(log_method):
+            log_method = getattr(logger, "info", None)
         if callable(log_method):
             log_method(text)
     except Exception:

@@ -4,7 +4,7 @@
 # repo: https://github.com/hairpin01/repo-MCUB-fork/
 # source: https://github.com/hairpin01/OpenAgent-old/
 # -- end --
-# scop: kernel min v1.4.6
+# scop: kernel min v1.4.7
 
 from __future__ import annotations
 
@@ -255,7 +255,8 @@ class OpenAgent(
     TOOL_CALL_RE = re.compile(
         r"<([a-z0-9._]+)([^>]*)>(.*?)</\1>|<([a-z0-9._]+)([^>]*)/?>", re.DOTALL | re.I
     )
-    TOOL_CALL_JSON_RE = re.compile(r"```tool_call\s*(.*?)```", re.DOTALL | re.I)
+    TOOL_CALL_JSON_RE = re.compile(
+        r"```tool_call\s*(.*?)```", re.DOTALL | re.I)
     TOOL_REGISTRY = ()
     # Built-in tools are now discovered dynamically from
     # OpenAgentLib/SystemPlugins/<group>/<tool>.py.
@@ -355,7 +356,8 @@ class OpenAgent(
                     "reasoning_effort",
                     "off",
                     description="Reasoning effort for models/providers that support it: off, low, medium, high, xhigh",
-                    validator=Choice(choices=["off", "low", "medium", "high", "xhigh"]),
+                    validator=Choice(
+                        choices=["off", "low", "medium", "high", "xhigh"]),
                 ),
                 ConfigValue(
                     "timeout",
@@ -931,7 +933,8 @@ class OpenAgent(
                     actions.consume(
                         registry,
                         token,
-                        actor_id=OpenAgent._installed_plugin_action_actor(call),
+                        actor_id=OpenAgent._installed_plugin_action_actor(
+                            call),
                         kind="tool-confirm",
                     )
                 except Exception:
@@ -992,13 +995,16 @@ class OpenAgent(
 
     @staticmethod
     def _parse_oa_debug_tool_request(value: str) -> tuple[str, dict[str, Any]]:
-        tool_name, separator, raw_arguments = str(value or "").strip().partition(" ")
+        tool_name, separator, raw_arguments = str(
+            value or "").strip().partition(" ")
         if not tool_name or not separator or not raw_arguments.strip():
-            raise ValueError("Usage: .oa --debug=tool <tool.name> <JSON object>")
+            raise ValueError(
+                "Usage: .oa --debug=tool <tool.name> <JSON object>")
         try:
             arguments = json.loads(raw_arguments)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid tool arguments JSON: {exc.msg}") from exc
+            raise ValueError(f"Invalid tool arguments JSON: {
+                             exc.msg}") from exc
         if not isinstance(arguments, dict):
             raise ValueError("Tool arguments must be a JSON object")
         return tool_name.strip().lower(), arguments
@@ -1024,7 +1030,8 @@ class OpenAgent(
                 thinking_notes=[],
                 cancel_token=f"debug-tool-{uuid.uuid4().hex}",
             )
-            rendered = "\n".join(outputs) or '{"status":"error","error":"empty result"}'
+            rendered = "\n".join(
+                outputs) or '{"status":"error","error":"empty result"}'
             with contextlib.suppress(Exception):
                 rendered = json.dumps(
                     json.loads(rendered),
@@ -1040,7 +1047,8 @@ class OpenAgent(
         except Exception as exc:
             await self.edit(
                 event,
-                f"<pre><code>{html.escape(type(exc).__name__ + ': ' + str(exc))}</code></pre>",
+                f"<pre><code>{html.escape(
+                    type(exc).__name__ + ': ' + str(exc))}</code></pre>",
                 as_html=True,
             )
 
@@ -1115,10 +1123,12 @@ class OpenAgent(
                 ) -> str:
                     calls.append(1)
                     if len(calls) <= 5:
-                        raise RuntimeError("Provider request timed out after 1s")
+                        raise RuntimeError(
+                            "Provider request timed out after 1s")
                     return "ok"
 
-                self._ask_provider_once = fake_once  # type: ignore[method-assign]
+                # type: ignore[method-assign]
+                self._ask_provider_once = fake_once
                 result = await self._ask_provider_with_reconnect(
                     "openai",
                     [],
@@ -1151,7 +1161,8 @@ class OpenAgent(
                     calls.append(1)
                     raise RuntimeError("Provider request timed out after 1s")
 
-                self._ask_provider_once = fake_once_timeout  # type: ignore[method-assign]
+                # type: ignore[method-assign]
+                self._ask_provider_once = fake_once_timeout
                 try:
                     await self._ask_provider_with_reconnect(
                         "openai",
@@ -1212,8 +1223,10 @@ class OpenAgent(
                 payload = data.decode("utf-8", errors="replace").strip()
                 if payload.startswith("{"):
                     return payload
-                raise ValueError("Replied .json file does not contain a JSON object")
-        text = getattr(reply, "raw_text", None) or getattr(reply, "text", None) or ""
+                raise ValueError(
+                    "Replied .json file does not contain a JSON object")
+        text = getattr(reply, "raw_text", None) or getattr(
+            reply, "text", None) or ""
         if text.strip():
             payload = text.strip()
             if payload.startswith("{"):
@@ -1233,7 +1246,8 @@ class OpenAgent(
         try:
             data = json.loads(payload)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid OpenAgent settings JSON: {exc.msg}") from exc
+            raise ValueError(f"Invalid OpenAgent settings JSON: {
+                             exc.msg}") from exc
         if not isinstance(data, dict):
             raise ValueError("JSON object expected")
         settings = data.get("settings", data)
@@ -1280,7 +1294,8 @@ class OpenAgent(
 
     def _rich_bot_system_prompt(self, prompt: str) -> str:
         return (
-            self._system_prompt(prompt) + "\n\n## Bot command final answer format\n"
+            self._system_prompt(prompt) +
+            "\n\n## Bot command final answer format\n"
             "For this bot command, the final answer is sent as Telegram Rich Message HTML. "
             "Use BlockRich/Rich HTML block formatting directly in the final answer: "
             '<p>, <blockquote>, <pre><code class="language-python">, <details><summary>, '
@@ -1309,7 +1324,8 @@ class OpenAgent(
             await event.reply("Rich draft bot client is unavailable")
             return
 
-        target = getattr(event, "chat_id", None) or getattr(event, "sender_id", None)
+        target = getattr(event, "chat_id", None) or getattr(
+            event, "sender_id", None)
         if target is None:
             await event.reply("Can't resolve target chat for rich draft")
             return
@@ -1370,7 +1386,8 @@ class OpenAgent(
             await push_draft("OpenAgent словил ошибку")
             error_html = (
                 "<p><b>OpenAgent error</b></p>"
-                f"<blockquote><code>{html.escape(str(exc))}</code></blockquote>"
+                f"<blockquote><code>{html.escape(
+                    str(exc))}</code></blockquote>"
             )
             with contextlib.suppress(Exception):
                 if bot is not None and hasattr(bot, "send_rich_message"):
@@ -1443,7 +1460,8 @@ class OpenAgent(
                     session = self._new_session(
                         int(chat_id), name=new_chat_name or None
                     )
-                    self.session_manager.set_preference(int(chat_id), "continue")
+                    self.session_manager.set_preference(
+                        int(chat_id), "continue")
                     await self._show_sessions_panel(
                         event,
                         int(chat_id),
@@ -1716,7 +1734,8 @@ class OpenAgent(
         await self.client.send_file(
             event.chat_id,
             str(path),
-            caption=f"<b>Skill:</b> <code>{html.escape(self._skill_name_from_path(path))}</code>",
+            caption=f"<b>Skill:</b> <code>{html.escape(
+                self._skill_name_from_path(path))}</code>",
             parse_mode="html",
         )
         try:
@@ -1747,7 +1766,8 @@ class OpenAgent(
 
         if not content:
             content = (
-                getattr(reply, "raw_text", None) or getattr(reply, "text", "") or ""
+                getattr(reply, "raw_text", None) or getattr(
+                    reply, "text", "") or ""
             )
         if not content.strip():
             await self.edit(event, self.strings("skill_empty"))
@@ -1805,7 +1825,8 @@ class OpenAgent(
                     f"{html.escape(self.strings('plugin_id_label'))}: "
                     f"<code>{html.escape(plugin.plugin_id)}</code>",
                     f"State: <code>{html.escape(plugin.status)}</code> · "
-                    f"Enabled: <code>{'yes' if plugin.enabled else 'no'}</code> · "
+                    f"Enabled: <code>{
+                        'yes' if plugin.enabled else 'no'}</code> · "
                     f"Generation: <code>{plugin.generation}</code>",
                 ]
                 item_lines.append(html.escape(plugin.description))
@@ -1818,13 +1839,16 @@ class OpenAgent(
                         f"<code>{html.escape(tool)}</code>" for tool in tools
                     )
                     item_lines.append(
-                        f"{html.escape(self.strings('plugin_tools_label'))}: {tools_text}"
+                        f"{html.escape(self.strings('plugin_tools_label'))}: {
+                            tools_text}"
                     )
                 if plugin.diagnostic:
                     item_lines.append(
-                        f"Diagnostic: <code>{html.escape(plugin.diagnostic)}</code>"
+                        f"Diagnostic: <code>{
+                            html.escape(plugin.diagnostic)}</code>"
                     )
-                text += "<blockquote>" + "\n".join(item_lines) + "</blockquote>\n"
+                text += "<blockquote>" + \
+                    "\n".join(item_lines) + "</blockquote>\n"
         text += self.strings("plugins_total", count=len(installed))
         return text
 
@@ -1841,7 +1865,8 @@ class OpenAgent(
             except Exception as exc:
                 await self.edit(
                     event,
-                    self.strings("plugin_install_failed", error=html.escape(str(exc))),
+                    self.strings("plugin_install_failed",
+                                 error=html.escape(str(exc))),
                     as_html=True,
                 )
                 return
@@ -1937,20 +1962,25 @@ class OpenAgent(
         )
         text += f"📝 {html.escape(desc)}\n"
         if tools:
-            tools_str = ", ".join(f"<code>{html.escape(t)}</code>" for t in tools[:8])
+            tools_str = ", ".join(
+                f"<code>{html.escape(t)}</code>" for t in tools[:8])
             if len(tools) > 8:
-                tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
-            text += f"\n🔧 <b>{html.escape(self.strings('plugin_tools_label'))}:</b> {tools_str}"
+                tools_str += self.strings("plugin_more_tools",
+                                          count=len(tools) - 8)
+            text += f"\n🔧 <b>{html.escape(self.strings('plugin_tools_label'))}:</b> {
+                tools_str}"
         if permissions:
             perms_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in permissions
             )
-            text += f"\n🔐 <b>{html.escape(self.strings('plugin_permissions_label'))}:</b> {perms_str}"
+            text += f"\n🔐 <b>{html.escape(self.strings('plugin_permissions_label'))}:</b> {
+                perms_str}"
         if requirements:
             reqs_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in requirements
             )
-            text += f"\n📦 <b>{html.escape(self.strings('plugin_requirements_label'))}:</b> {reqs_str}"
+            text += f"\n📦 <b>{html.escape(self.strings('plugin_requirements_label'))}:</b> {
+                reqs_str}"
         text += f"\n\n🔢 {page + 1}/{len(plugins)}"
 
         buttons = []
@@ -1977,7 +2007,8 @@ class OpenAgent(
                 ]
             )
         if raw_url:
-            buttons[0].append(self.Button.url(self.strings("plugin_code_btn"), raw_url))
+            buttons[0].append(self.Button.url(
+                self.strings("plugin_code_btn"), raw_url))
 
         nav = []
         if page > 0:
@@ -2055,11 +2086,13 @@ class OpenAgent(
         try:
             saved_name = await self._install_plugin_from_repo(name)
             plugins = await self._fetch_repo_plugins()
-            installed = self._find_installed_plugin_presentation(source_stem=saved_name)
+            installed = self._find_installed_plugin_presentation(
+                source_stem=saved_name)
             if installed is None:
                 raise ValueError("installed plugin record is unavailable")
             await call.answer(
-                self.strings("plugin_installed_alert", name=installed.display_name),
+                self.strings("plugin_installed_alert",
+                             name=installed.display_name),
                 alert=True,
             )
         except Exception as exc:
@@ -2079,15 +2112,19 @@ class OpenAgent(
         plugin = installed[page]
 
         text = f"<b>⚙️ {html.escape(plugin.display_name)}</b>\n"
-        text += f"{html.escape(self.strings('plugin_id_label'))}: <code>{html.escape(plugin.plugin_id)}</code>\n"
-        text += f"{html.escape(self.strings('plugin_version_label'))}: <code>{html.escape(plugin.version)}</code>\n"
-        text += f"{html.escape(self.strings('plugin_author_label'))}: {html.escape(plugin.author)}\n"
+        text += f"{html.escape(self.strings('plugin_id_label'))
+                   }: <code>{html.escape(plugin.plugin_id)}</code>\n"
+        text += f"{html.escape(self.strings('plugin_version_label'))
+                   }: <code>{html.escape(plugin.version)}</code>\n"
+        text += f"{html.escape(self.strings('plugin_author_label'))
+                   }: {html.escape(plugin.author)}\n"
         text += f"State: <code>{html.escape(plugin.status)}</code>\n"
         text += f"Enabled: <code>{'yes' if plugin.enabled else 'no'}</code>\n"
         text += f"Generation: <code>{plugin.generation}</code>\n"
         text += f"\n{html.escape(plugin.description)}\n"
         if plugin.diagnostic:
-            text += f"Diagnostic: <code>{html.escape(plugin.diagnostic)}</code>\n"
+            text += f"Diagnostic: <code>{
+                html.escape(plugin.diagnostic)}</code>\n"
         if plugin.tools:
             tools_str = ", ".join(
                 f"<code>{html.escape(tool)}</code>" for tool in plugin.tools[:8]
@@ -2097,18 +2134,21 @@ class OpenAgent(
                     "plugin_more_tools", count=len(plugin.tools) - 8
                 )
             text += (
-                f"\n{html.escape(self.strings('plugin_tools_label'))}: {tools_str}\n"
+                f"\n{html.escape(self.strings('plugin_tools_label'))}: {
+                    tools_str}\n"
             )
         if plugin.permissions:
             perms_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in plugin.permissions
             )
-            text += f"{html.escape(self.strings('plugin_permissions_label'))}: {perms_str}\n"
+            text += f"{html.escape(self.strings('plugin_permissions_label'))
+                       }: {perms_str}\n"
         if plugin.requirements:
             reqs_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in plugin.requirements
             )
-            text += f"{html.escape(self.strings('plugin_requirements_label'))}: {reqs_str}\n"
+            text += f"{html.escape(self.strings('plugin_requirements_label'))
+                       }: {reqs_str}\n"
         text += "\n"
         text += self.strings("plugin_actions_title")
         registry = self._installed_plugin_registry
@@ -2206,7 +2246,8 @@ class OpenAgent(
                 await invoker.quiesce(record.plugin_id, record.generation)
             self._unregister_plugin(record.plugin_id)
             await call.answer(
-                self.strings("plugin_deleted_alert", name=record.manifest.display_name),
+                self.strings("plugin_deleted_alert",
+                             name=record.manifest.display_name),
                 alert=True,
             )
         except Exception as exc:

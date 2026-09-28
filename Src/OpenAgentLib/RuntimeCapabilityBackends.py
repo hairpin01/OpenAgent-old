@@ -9,9 +9,9 @@ import os
 import secrets
 import socket
 import subprocess
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from collections.abc import Mapping
-from typing import Any, Callable, Iterator
+from typing import Any
 from urllib.parse import urlsplit
 
 from .PluginCapabilities import CapabilityGrant, CapabilityProtocolError

@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
+import ast
+import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
-import inspect
-import ast
+from typing import Any
 
 SystemToolHandler = str | Callable[..., Any]
 

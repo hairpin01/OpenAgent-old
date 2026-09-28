@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Mapping
 
 from .InstalledPluginRegistry import (
     InstalledPluginManifest,
@@ -407,7 +407,7 @@ def inspect_installed_v2_plugin_source(
 
 
 def rebuild_installed_plugin_record(
-    registry: "InstalledPluginRegistry", admission: InstalledPluginAdmission
+    registry: InstalledPluginRegistry, admission: InstalledPluginAdmission
 ) -> InstalledPluginRecord:
     """Replace a changed static declaration with a fresh registry generation.
 

@@ -11,14 +11,15 @@ import argparse
 import hashlib
 import importlib
 import json
-from math import isfinite
 import os
-from pathlib import Path
 import resource
 import socket
 import sys
 import time
-from typing import Any, Mapping
+from collections.abc import Mapping
+from math import isfinite
+from pathlib import Path
+from typing import Any
 
 PLUGIN_HOST_PROTOCOL_VERSION = "1"
 _MESSAGE_ID_CHARS = frozenset(

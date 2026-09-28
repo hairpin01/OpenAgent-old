@@ -1,44 +1,42 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Callable
-from pathlib import Path
-from types import MappingProxyType
 import ast
-import contextlib
 import asyncio
-import json
-from urllib.parse import quote
-import re
-import html
-import io
 import base64
+import contextlib
+import difflib
+import html
+import inspect
+import io
+import json
+import mimetypes
+import os
+import re
 import tempfile
 import time
-import difflib
-import mimetypes
 import uuid
-import inspect
-import os
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+from urllib.parse import quote
 
-from telethon.tl.functions.users import GetFullUserRequest
-from telethon.tl.functions.channels import EditPhotoRequest
 import aiohttp
-
-from core.lib.types import Event
 from core.lib.loader.module_config import (
-    ConfigValue,
     Boolean,
-    String,
+    ConfigValue,
     Float,
-    List,
     Integer,
+    List,
+    String,
 )
+from core.lib.types import Event
+from telethon.tl.functions.channels import EditPhotoRequest
+from telethon.tl.functions.users import GetFullUserRequest
 
-from ..TodoService import _WHITESPACE_RE
 from ..AgentRuntime import (
     ModelCallBudget,
     accepts_completion_verdict,
@@ -51,13 +49,18 @@ from ..AgentRuntime import (
     strip_explicit_final_regions,
     trim_messages_to_budget,
 )
-from ..SystemPlugins import SystemTool, SystemToolRegistry
+from ..InstalledPluginActions import InstalledPluginActionStore
 from ..InstalledPluginRegistry import (
     InstalledPluginRecord,
     InstalledPluginRegistry,
     InstalledPluginStatus,
 )
-from ..InstalledPluginActions import InstalledPluginActionStore
+from ..NativeToolCalls import (
+    build_native_tool_catalog,
+    json_schema_text,
+    native_response_to_fences,
+    native_tool_call_error,
+)
 from ..PluginDiscovery import (
     InstalledPluginAdmission,
     inspect_installed_v2_plugin_source,
@@ -66,14 +69,10 @@ from ..PluginDiscovery import (
     rebuild_installed_plugin_record,
 )
 from ..PluginSDK import LegacyPluginMigrationError
+from ..SystemPlugins import SystemTool, SystemToolRegistry
+from ..TodoService import _WHITESPACE_RE
 from ..ToolKernel import ToolCall, ToolContext, ToolResultStatus, validate_arguments
 from ..ToolModelBoundary import ToolModelBoundary
-from ..NativeToolCalls import (
-    build_native_tool_catalog,
-    json_schema_text,
-    native_response_to_fences,
-    native_tool_call_error,
-)
 from ..ToolPolicy import (
     ConfirmationState,
     ToolConfirmationGrant,
@@ -1053,7 +1052,7 @@ class _OpenAgentPluginSkillMixin:
     def _get_plugin_for_tool(self, _tool_name: str) -> None:
         """Legacy plugin instances have no v2 dispatch representation."""
 
-        return None
+        return
 
     def _get_system_tool(self, tool_name: str) -> SystemTool | None:
         tool_name = (tool_name or "").lower().strip()
@@ -1688,11 +1687,7 @@ class _OpenAgentPluginSkillMixin:
                     tools.add(clean)
         for attr_name in ("tool_registry", "tool_docs", "tool_schemas"):
             raw_items = values.get(attr_name)
-            if isinstance(raw_items, dict):
-                tools.update(
-                    str(tool).strip().lower() for tool in raw_items if str(tool).strip()
-                )
-            elif isinstance(raw_items, (list, tuple, set)):
+            if isinstance(raw_items, dict) or isinstance(raw_items, (list, tuple, set)):
                 tools.update(
                     str(tool).strip().lower() for tool in raw_items if str(tool).strip()
                 )
@@ -1784,8 +1779,7 @@ class _OpenAgentPluginSkillMixin:
 
     def _safe_plugin_name(self, name: str) -> str:
         name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(name or "").strip()).strip("._")
-        if name.endswith("_plugin"):
-            name = name[:-7]
+        name = name.removesuffix("_plugin")
         return (name[:64] or "plugin").lower()
 
     async def _install_plugin_from_code(self, name: str, code: str) -> str:
@@ -3101,13 +3095,9 @@ class _OpenAgentStatusMixin:
                     result = await self.edit(target_event, text, as_html=True)
             for candidate in (target_event, result):
                 with contextlib.suppress(Exception):
-                    setattr(candidate, "_openagent_status_buttons", buttons)
+                    candidate._openagent_status_buttons = buttons
                 with contextlib.suppress(Exception):
-                    setattr(
-                        candidate,
-                        "_openagent_source_chat_id",
-                        getattr(event, "chat_id", None),
-                    )
+                    candidate._openagent_source_chat_id = getattr(event, "chat_id", None)
             return result or target_event
 
         chat_id = getattr(event, "chat_id", None) or getattr(
@@ -4447,8 +4437,7 @@ class _OpenAgentAgentLoopMixin:
         }
         if recipient in aliases:
             return aliases[recipient]
-        if recipient.startswith("tool."):
-            recipient = recipient[5:]
+        recipient = recipient.removeprefix("tool.")
         return recipient if recipient in self._tool_names() else ""
 
     def _extract_codex_tool_calls(self, text: str) -> list[tuple[str, str, str]]:
@@ -5189,8 +5178,8 @@ class _OpenAgentAgentLoopMixin:
 
 
 __all__ = [
-    "_OpenAgentPluginSkillMixin",
-    "_OpenAgentTelegramMediaMixin",
     "_OpenAgentAgentLoopMixin",
+    "_OpenAgentPluginSkillMixin",
     "_OpenAgentStatusMixin",
+    "_OpenAgentTelegramMediaMixin",
 ]

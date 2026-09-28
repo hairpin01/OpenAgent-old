@@ -8,13 +8,14 @@ and returns data for a caller to execute later.
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-import json
 from math import isfinite
-import re
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .ToolKernel import (
     ToolCall,
@@ -155,21 +156,21 @@ class ModelBoundaryLimits:
                 )
 
 
-_FENCE_OPENER_RE = re.compile(r"```(?P<label>tool_call|json)\b[^\r\n]*\r?\n", re.I)
+_FENCE_OPENER_RE = re.compile(r"```(?P<label>tool_call|json)\b[^\r\n]*\r?\n", re.IGNORECASE)
 _XML_RE = re.compile(
     r"<(?P<name>[a-z][a-z0-9_.-]*)(?P<attrs>[^<>]*?)(?:(?P<self>/)>|>(?P<body>.*?)</(?P=name)\s*>)",
-    re.I | re.S,
+    re.IGNORECASE | re.DOTALL,
 )
-_HARMONY_RE = re.compile(r"(?P<header>.*?)<\|message\|>(?P<body>.*?)<\|call\|>", re.S)
-_XML_MARKER_RE = re.compile(r"<(?P<close>/)?(?P<name>[a-z][a-z0-9_.-]*)\b", re.I)
+_HARMONY_RE = re.compile(r"(?P<header>.*?)<\|message\|>(?P<body>.*?)<\|call\|>", re.DOTALL)
+_XML_MARKER_RE = re.compile(r"<(?P<close>/)?(?P<name>[a-z][a-z0-9_.-]*)\b", re.IGNORECASE)
 _RAW_CALL_SHAPE_RE = re.compile(
-    r"\{\s*\"(?:tool|name)\"\s*:\s*.*?\"(?:args|arguments)\"\s*:", re.S
+    r"\{\s*\"(?:tool|name)\"\s*:\s*.*?\"(?:args|arguments)\"\s*:", re.DOTALL
 )
-_FINAL_FENCE_RE = re.compile(r"```final(?:_answer)?[ \t]*\r?\n(.*?)```", re.I | re.S)
-_FINAL_TAG_RE = re.compile(r"<final(?:_answer)?>(.*?)</final(?:_answer)?>", re.I | re.S)
-_ATTR_RE = re.compile(r"\s*([a-zA-Z_][\w.-]*)\s*=\s*(['\"])(.*?)\2", re.S)
+_FINAL_FENCE_RE = re.compile(r"```final(?:_answer)?[ \t]*\r?\n(.*?)```", re.IGNORECASE | re.DOTALL)
+_FINAL_TAG_RE = re.compile(r"<final(?:_answer)?>(.*?)</final(?:_answer)?>", re.IGNORECASE | re.DOTALL)
+_ATTR_RE = re.compile(r"\s*([a-zA-Z_][\w.-]*)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
 _SECRET_KEY_RE = re.compile(
-    r"(?:pass(?:word)?|secret|token|api[_-]?key|authorization|cookie|credential)", re.I
+    r"(?:pass(?:word)?|secret|token|api[_-]?key|authorization|cookie|credential)", re.IGNORECASE
 )
 _BODY_FIELDS = (
     "body",
@@ -394,14 +395,14 @@ class ToolModelBoundary:
                 fence_spans.append((opener.start(), close + 3))
                 blocks.append((ModelToolFormat.FENCED_JSON, opener.start(), body, None))
         valid_fence_starts = {start for start, _end in fence_spans}
-        for marker in re.finditer(r"```tool_call\b", text, re.I):
+        for marker in re.finditer(r"```tool_call\b", text, re.IGNORECASE):
             if marker.start() not in valid_fence_starts:
                 return self._error(
                     ModelToolErrorCode.MALFORMED_BLOCK,
                     marker.start(),
                     ModelToolFormat.FENCED_JSON,
                 )
-        for marker in re.finditer(r"```json\b", text, re.I):
+        for marker in re.finditer(r"```json\b", text, re.IGNORECASE):
             close = text.find("```", marker.end())
             segment = text[marker.end() :] if close < 0 else text[marker.end() : close]
             if (
@@ -418,7 +419,7 @@ class ToolModelBoundary:
         harmony_intent = (
             "<|message|>" in text
             or "<|call|>" in text
-            or bool(re.search(r"\bto=tool\.", text, re.I))
+            or bool(re.search(r"\bto=tool\.", text, re.IGNORECASE))
         )
         for match in _HARMONY_RE.finditer(text):
             if "to=" not in match.group("header"):
@@ -573,8 +574,7 @@ class ToolModelBoundary:
                 ModelToolErrorCode.BODY_TOO_LARGE, offset, ModelToolFormat.XML
             )
         raw_attrs = raw_attrs.rstrip()
-        if raw_attrs.endswith("/"):
-            raw_attrs = raw_attrs[:-1]
+        raw_attrs = raw_attrs.removesuffix("/")
         attrs: dict[str, str] = {}
         cursor = 0
         while cursor < len(raw_attrs):
@@ -734,7 +734,7 @@ class ToolModelBoundary:
         if match is None:
             return None
         recipient = match.group(1).strip(" '\"").lower()
-        return recipient[5:] if recipient.startswith("tool.") else recipient
+        return recipient.removeprefix("tool.")
 
     @staticmethod
     def _optional_text(value: Any) -> str | None:

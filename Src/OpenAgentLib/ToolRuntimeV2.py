@@ -8,8 +8,9 @@ describes the execution environment for each model turn.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .SystemPlugins.native import NativeSystemToolServices, build_native_system_tools
 from .ToolExecutor import ToolExecutor
@@ -76,7 +77,7 @@ class ToolRuntimeV2:
         policy_catalog: ToolPolicyCatalog = DEFAULT_TOOL_POLICY_CATALOG,
         boundary_limits: ModelBoundaryLimits = ModelBoundaryLimits(),
         **executor_options: Any,
-    ) -> "ToolRuntimeV2":
+    ) -> ToolRuntimeV2:
         """Build a complete runtime over the bundled native system tools."""
         native = build_native_system_tools(services)
         policy = ToolPolicyEngine(policy_catalog)

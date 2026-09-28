@@ -10,12 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass, field
-from enum import Enum
 import json
-from math import isfinite
 import os
-from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
@@ -23,8 +19,13 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import Enum
+from math import isfinite
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Any, Awaitable, BinaryIO, Callable, Mapping, Sequence
+from typing import Any, BinaryIO
 
 from .PluginCapabilities import (
     CapabilityProtocolError,

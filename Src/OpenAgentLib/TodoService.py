@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-import json
-import html
 import asyncio
+import html
+import json
 import re
-
 from typing import Any
 
 _TODO_STATUS_ALIASES = {
@@ -206,9 +205,9 @@ class _OpenAgentTodoMixin:
 
 
 __all__ = [
+    "_DEFAULT_TODO_STATUS_MAP",
+    "_TODO_STATUS_ALIASES",
+    "_WHITESPACE_RE",
     "OpenAgentTodoService",
     "_OpenAgentTodoMixin",
-    "_TODO_STATUS_ALIASES",
-    "_DEFAULT_TODO_STATUS_MAP",
-    "_WHITESPACE_RE",
 ]

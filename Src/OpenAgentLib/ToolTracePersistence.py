@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
 
 TOOL_TRACE_SCHEMA_VERSION = 1
 _TERMINAL_STATUSES = frozenset({"success", "error", "cancelled", "timed_out"})

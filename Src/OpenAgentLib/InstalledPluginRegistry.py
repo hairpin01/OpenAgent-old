@@ -8,12 +8,13 @@ or task objects.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace as dataclass_replace
+from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from enum import Enum
 from math import isfinite
 from pathlib import Path
-import re
 from threading import RLock
 from types import MappingProxyType
 from typing import Any

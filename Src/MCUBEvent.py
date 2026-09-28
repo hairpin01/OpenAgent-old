@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from typing import Any
 import asyncio
+from typing import Any
 
 
 class _MCUBEvent:
@@ -43,7 +43,6 @@ class _MCUBEvent:
 
     async def delete(self, *args: Any, **kwargs: Any) -> None:
         await asyncio.sleep(0)
-        return None
 
     async def get_reply_message(self) -> Any:
         if hasattr(self._source_event, "get_reply_message"):

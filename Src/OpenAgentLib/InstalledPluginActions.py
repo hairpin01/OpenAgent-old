@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from threading import RLock
-from typing import Callable, Mapping, TypeVar
+from typing import TypeVar
 from uuid import uuid4
 
 from .InstalledPluginRegistry import (

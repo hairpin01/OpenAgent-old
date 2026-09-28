@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any
 from uuid import uuid4
 
-from .PluginSDK import PluginManifest
 from .InstalledPluginRegistry import InstalledPluginRecord, InstalledPluginStatus
+from .PluginSDK import PluginManifest
 from .RuntimeNativeSystemServices import RuntimeNativeSystemServices
 from .SystemPlugins.native import build_native_system_tools
 from .ToolCompatibility import TOOL_COMPATIBILITY_MATRIX

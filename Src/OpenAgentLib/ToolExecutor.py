@@ -14,15 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
-from enum import Enum
 import inspect
 import logging
 import re
 import threading
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from enum import Enum
 from types import MappingProxyType
-from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
+from typing import Any, Protocol
 from uuid import uuid4
 
 from .PluginHost import (
@@ -79,7 +80,7 @@ class ToolHookResult:
         object.__setattr__(self, "action", ToolHookAction(self.action))
 
     @classmethod
-    def cancelled(cls) -> "ToolHookResult":
+    def cancelled(cls) -> ToolHookResult:
         return cls(ToolHookAction.CANCEL)
 
 

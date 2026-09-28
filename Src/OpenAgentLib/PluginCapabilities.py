@@ -3,18 +3,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
 import ipaddress
-from math import isfinite
-from pathlib import Path, PurePosixPath
 import socket
 import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from enum import Enum
+from math import isfinite
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
 from urllib.parse import urljoin, urlparse
 
-from .PluginSDK import CapabilityFamily, PLUGIN_SDK_API_VERSION, thaw_json
+from .PluginSDK import PLUGIN_SDK_API_VERSION, CapabilityFamily, thaw_json
 from .ToolKernel import ToolCall, normalize_tool_name
 from .ToolPolicy import (
     PolicyDecisionKind,
@@ -120,7 +121,7 @@ class CapabilityGrant:
         capability: CapabilityFamily,
         operations: frozenset[str],
         constraints: Mapping[str, Any] | None = None,
-    ) -> "CapabilityGrant":
+    ) -> CapabilityGrant:
         return cls(
             grant_id,
             host_request_id,
@@ -191,7 +192,7 @@ class CapabilityRequest:
         }
 
     @classmethod
-    def from_envelope(cls, value: Any) -> "CapabilityRequest":
+    def from_envelope(cls, value: Any) -> CapabilityRequest:
         expected = {
             "version",
             "kind",
@@ -246,7 +247,7 @@ class CapabilityResponse:
     @classmethod
     def denied(
         cls, request: CapabilityRequest, error: CapabilityErrorCode
-    ) -> "CapabilityResponse":
+    ) -> CapabilityResponse:
         return cls(
             request.host_request_id,
             request.call_id,

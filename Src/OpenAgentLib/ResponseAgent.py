@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from typing import Any
-import html
-import re
-import io
+import asyncio
 import contextlib
+import html
+import io
+import re
 import time
 import uuid
-import asyncio
+from typing import Any
 
 from .ToolTracePersistence import ToolTracePersistence
 
@@ -47,7 +47,7 @@ class _OpenAgentResponseMixin:
             r"</(?:terminal|web|mcub|message|file|dialog|chat|moderation|profile|contacts|creation|skills|context|utility|code)\.[^>]+>",
         ]
         for pattern in patterns:
-            text = re.sub(pattern, " ", text, flags=re.I)
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
         return text.strip()
 
     def _tool_terminal_status_summary(
@@ -575,9 +575,9 @@ class _OpenAgentResponseMixin:
                 )
                 loading = prev_form
                 with contextlib.suppress(Exception):
-                    setattr(loading, "_openagent_status_buttons", buttons)
+                    loading._openagent_status_buttons = buttons
                 with contextlib.suppress(Exception):
-                    setattr(loading, "_openagent_source_chat_id", chat_id)
+                    loading._openagent_source_chat_id = chat_id
             except Exception:
                 loading = await self._start_inline_status(
                     source_event,
@@ -709,9 +709,9 @@ class _OpenAgentResponseMixin:
                     type(loading).__name__,
                 )
                 with contextlib.suppress(Exception):
-                    setattr(loading, "_openagent_status_buttons", buttons)
+                    loading._openagent_status_buttons = buttons
                 with contextlib.suppress(Exception):
-                    setattr(loading, "_openagent_source_chat_id", chat_id)
+                    loading._openagent_source_chat_id = chat_id
             except Exception as exc:
                 self.log.debug(
                     "OA regen_prompt: status edit failed token=%s error=%s", token, exc
@@ -816,9 +816,9 @@ class _OpenAgentResponseMixin:
             )
             loading = edited if edited and not isinstance(edited, bool) else event
             with contextlib.suppress(Exception):
-                setattr(loading, "_openagent_status_buttons", buttons)
+                loading._openagent_status_buttons = buttons
             with contextlib.suppress(Exception):
-                setattr(loading, "_openagent_source_chat_id", payload.get("chat_id"))
+                loading._openagent_source_chat_id = payload.get("chat_id")
         except Exception:
             loading = event
 

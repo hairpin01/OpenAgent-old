@@ -1,7 +1,6 @@
-from . import Session
-from . import OASession
+from . import OASession, Session
 
 __all__ = [
-    "Session",
     "OASession",
+    "Session",
 ]

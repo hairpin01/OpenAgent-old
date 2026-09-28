@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -32,7 +33,7 @@ class OASession:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "OASession":
+    def from_dict(cls, d: dict) -> OASession:
         return cls(
             id=str(d.get("id", "")),
             name=str(d.get("name", "New chat")),

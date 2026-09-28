@@ -9,10 +9,11 @@ comparisons without importing plugins with runtime-only dependencies.
 from __future__ import annotations
 
 from ast import Assign, Call, ClassDef, Name, literal_eval, parse
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SYSTEM_TOOLS_ROOT = PROJECT_ROOT / "Src" / "OpenAgentLib" / "SystemPlugins"
@@ -280,9 +281,7 @@ def _classification(
         capability = "state-write"
     elif (
         group == "skills" and action in {"install", "save_from_ai", "import_md"}
-    ) or canonical_id == "skill.save":
-        capability = "filesystem-write"
-    elif group == "code" and action in {
+    ) or canonical_id == "skill.save" or group == "code" and action in {
         "generate_file",
         "generate_mcub_module",
         "attach_result",
@@ -2480,10 +2479,10 @@ def compatibility_matrix() -> tuple[ToolCompatibility, ...]:
 
 
 __all__ = [
-    "CompatibilityInventoryError",
     "SIBLING_PLUGINS_ROOT",
     "SYSTEM_TOOLS_ROOT",
     "TOOL_COMPATIBILITY_MATRIX",
+    "CompatibilityInventoryError",
     "ToolCompatibility",
     "compatibility_matrix",
     "discover_compatibility_matrix",

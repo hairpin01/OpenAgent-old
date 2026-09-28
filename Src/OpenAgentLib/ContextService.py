@@ -622,6 +622,6 @@ class _OpenAgentContextMixin:
 
 
 __all__ = [
-    "_OpenAgentContextMixin",
     "OpenAgentContextService",
+    "_OpenAgentContextMixin",
 ]

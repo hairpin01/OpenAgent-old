@@ -9,26 +9,27 @@ capability requests; authority remains in the parent broker.
 from __future__ import annotations
 
 import ast
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
 from pathlib import Path
-import re
 from types import MappingProxyType
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Protocol
 
+from .ToolCompatibility import _REJECTED_LEGACY_ALIASES, TOOL_COMPATIBILITY_MATRIX
 from .ToolKernel import (
-    ConfirmationRequirement,
-    ConcurrencyClass,
-    IdempotencyClass,
-    MigrationDisposition,
     TOOL_API_VERSION,
     TOOL_SCHEMA_VERSION,
+    ConcurrencyClass,
+    ConfirmationRequirement,
+    IdempotencyClass,
+    MigrationDisposition,
     ToolSpec,
     normalize_tool_name,
     validate_schema,
 )
-from .ToolCompatibility import TOOL_COMPATIBILITY_MATRIX, _REJECTED_LEGACY_ALIASES
 
 PLUGIN_MANIFEST_VERSION = "2"
 PLUGIN_SDK_API_VERSION = "2"

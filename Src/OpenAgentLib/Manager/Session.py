@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-import re
+import asyncio
+import contextlib
+import datetime
+import html
 import json
+import re
+import tempfile
 import time
 import uuid
-import html
-import asyncio
-import tempfile
-import datetime
-import contextlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
 )
 
 from .OASession import OASession
@@ -374,7 +374,7 @@ class _OpenAgentSessionsMixin:
                 if hasattr(panel_event, "edit"):
                     await panel_event.edit(text, buttons=buttons, parse_mode="html")
                 with contextlib.suppress(Exception):
-                    setattr(panel_event, "_openagent_source_chat_id", chat_id)
+                    panel_event._openagent_source_chat_id = chat_id
                 with contextlib.suppress(Exception):
                     await event.delete()
                 return
@@ -1002,7 +1002,7 @@ class SessionManager:
 
 
 __all__ = [
+    "_SESSION_PREFERENCES",
     "SessionManager",
     "_OpenAgentSessionsMixin",
-    "_SESSION_PREFERENCES",
 ]

@@ -7,13 +7,14 @@ boundary where tool declarations become immutable, validated v2 metadata.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
-import re
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 TOOL_API_VERSION = "2"
 TOOL_SCHEMA_VERSION = "2"
@@ -1313,15 +1314,15 @@ adapt_system_tool = system_tool_to_spec
 
 
 __all__ = [
-    "ConfirmationRequirement",
+    "TOOL_API_VERSION",
+    "TOOL_SCHEMA_VERSION",
     "ConcurrencyClass",
+    "ConfirmationRequirement",
     "DeterministicToolRegistry",
     "IdempotencyClass",
     "MigrationDisposition",
     "SystemToolAdapter",
     "SystemToolAdapterError",
-    "TOOL_API_VERSION",
-    "TOOL_SCHEMA_VERSION",
     "ToolArgumentError",
     "ToolCall",
     "ToolContext",

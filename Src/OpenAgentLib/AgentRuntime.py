@@ -6,7 +6,8 @@ import html
 import json
 import math
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 _TRANSIENT_HTTP_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _STATUS_RE = re.compile(r"\bHTTP\s+(\d{3})\b", re.IGNORECASE)
@@ -393,11 +394,11 @@ __all__ = [
     "accepts_completion_verdict",
     "build_action_router_messages",
     "classify_agent_output",
-    "extract_explicit_final",
     "estimate_messages_tokens",
     "estimate_text_tokens",
-    "is_transient_provider_error",
+    "extract_explicit_final",
     "intermediate_note",
+    "is_transient_provider_error",
     "json_tool_payload_to_legacy",
     "model_tool_reason",
     "relevant_tool_names",

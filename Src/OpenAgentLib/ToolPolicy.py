@@ -8,13 +8,13 @@ not invoke handlers, hooks, confirmations, or any other runtime integration.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from math import isfinite
 from types import MappingProxyType
-from typing import AsyncIterator, Iterable, Mapping
 
 from .ToolCompatibility import ToolCompatibility, compatibility_matrix
 from .ToolKernel import (
@@ -112,7 +112,7 @@ class ToolConfirmationGrant:
     @classmethod
     def for_call(
         cls, token: str, call: ToolCall, *, expires_at: datetime | None = None
-    ) -> "ToolConfirmationGrant":
+    ) -> ToolConfirmationGrant:
         return cls(
             token,
             call.call_id,
@@ -160,7 +160,7 @@ class ToolPolicyRule:
         )
 
     @classmethod
-    def from_compatibility(cls, entry: ToolCompatibility) -> "ToolPolicyRule":
+    def from_compatibility(cls, entry: ToolCompatibility) -> ToolPolicyRule:
         return cls(
             canonical_id=entry.canonical_id,
             capabilities=frozenset({entry.capability_class}),
@@ -219,7 +219,7 @@ class ToolPolicyCatalog:
     @classmethod
     def from_compatibility_matrix(
         cls, matrix: Iterable[ToolCompatibility] | None = None
-    ) -> "ToolPolicyCatalog":
+    ) -> ToolPolicyCatalog:
         entries = tuple(compatibility_matrix() if matrix is None else matrix)
         return cls(
             (ToolPolicyRule.from_compatibility(entry) for entry in entries),
@@ -498,8 +498,8 @@ DEFAULT_TOOL_POLICY_CATALOG = ToolPolicyCatalog.from_compatibility_matrix()
 
 
 __all__ = [
-    "ConfirmationState",
     "DEFAULT_TOOL_POLICY_CATALOG",
+    "ConfirmationState",
     "PolicyDecisionKind",
     "PolicyReasonCode",
     "ToolConcurrencyGate",

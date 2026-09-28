@@ -1,21 +1,22 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from typing import Any, Callable
-import html
 import asyncio
-import time
+import contextlib
+import difflib
+import html
 import inspect
 import io
-import difflib
-import re
-from pathlib import Path
-import contextlib
 import json
+import re
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
-from .Manager.OASession import OASession
 from .AgentRuntime import relevant_tool_names, search_tool_docs
 from .InstalledPluginRegistry import InstalledPluginRegistry, InstalledPluginStatus
+from .Manager.OASession import OASession
 from .Plugin.PluginBase import HOOK_NO_RESULT, ToolHookContext
 from .SystemPlugins import (
     SystemTool,
@@ -491,13 +492,13 @@ class _OpenAgentToolRegistryMixin:
         text = (body or attrs.get("text") or attrs.get("note") or "").strip()
         text = html.unescape(text).strip()
         text = re.sub(r"^❔\s*", "", text).strip()
-        text = re.sub(r"</?tool_call>", "", text, flags=re.I).strip()
+        text = re.sub(r"</?tool_call>", "", text, flags=re.IGNORECASE).strip()
         fenced = self.TOOL_CALL_JSON_RE.search(text)
         if fenced:
             text = fenced.group(1).strip()
         else:
             text = re.sub(
-                r"^```(?:tool_call|json)?\s*|\s*```$", "", text, flags=re.I | re.S
+                r"^```(?:tool_call|json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL
             ).strip()
 
         json_text = text
@@ -1284,7 +1285,7 @@ __all__ = [
     "_DEFAULT_TOOL_STATUS_EMOJIS",
     "_TOOL_GROUP_ALIASES",
     "OpenAgentToolDisplayService",
-    "_OpenAgentToolDisplayMixin",
     "_OpenAgentRuntimeToolsMixin",
+    "_OpenAgentToolDisplayMixin",
     "_OpenAgentToolRegistryMixin",
 ]

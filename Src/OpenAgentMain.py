@@ -13,13 +13,13 @@ import contextlib
 import html
 import importlib
 import io
+import json
 import re
 import sys
-import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 
 def _evict_stale_openagent_bundle_modules() -> None:
@@ -51,49 +51,49 @@ def _runs_from_cubkit_artifact(filename: str | Path | None = None) -> bool:
 if _runs_from_cubkit_artifact():
     _evict_stale_openagent_bundle_modules()
 
-from cubkit import load_strings  # noqa: E402
-import Settings as OpenAgentSettings  # noqa: E402
-from .Settings import debug_log  # noqa: E402
-
-from core.lib.loader.module_base import (  # noqa: E402
+import Settings as OpenAgentSettings
+from core.lib.loader.module_base import (
     ModuleBase,
     bot_command,
     callback,
     command,
 )
-from core.lib.loader.module_config import (  # noqa: E402
+from core.lib.loader.module_config import (
+    Answer,
     Boolean,
     Choice,
     ConfigValue,
     Float,
     Group,
-    Row,
-    Answer,
     Integer,
     List,
     ModuleConfig,
+    Row,
     Secret,
     String,
 )
+from cubkit import load_strings
+
+from .Settings import debug_log
 
 if TYPE_CHECKING:
-    from core.lib.types import InlineMessage, Event
+    from core.lib.types import Event, InlineMessage
 
 try:
     from OpenAgentLib.AgentRuntime import json_tool_payload_to_legacy
     from OpenAgentLib.OpenAgentMixins import (
+        _OpenAgentAgentLoopMixin,
+        _OpenAgentContextMixin,
         _OpenAgentLifecycleMixin,
+        _OpenAgentPluginSkillMixin,
         _OpenAgentProviderMixin,
+        _OpenAgentResponseMixin,
+        _OpenAgentRuntimeToolsMixin,
+        _OpenAgentSessionsMixin,
+        _OpenAgentStatusMixin,
+        _OpenAgentTelegramMediaMixin,
         _OpenAgentTodoMixin,
         _OpenAgentToolDisplayMixin,
-        _OpenAgentContextMixin,
-        _OpenAgentSessionsMixin,
-        _OpenAgentPluginSkillMixin,
-        _OpenAgentRuntimeToolsMixin,
-        _OpenAgentTelegramMediaMixin,
-        _OpenAgentStatusMixin,
-        _OpenAgentAgentLoopMixin,
-        _OpenAgentResponseMixin,
         _OpenAgentToolRegistryMixin,
     )
 except Exception as e:
@@ -211,52 +211,51 @@ class OpenAgent(
         "{todo}, {random}, {prefix}, {time}, {date}"
     )
     WEB_SEARCH_RE = re.compile(
-        r"<web_search>\s*(.*?)\s*</web_search>", re.DOTALL | re.I
+        r"<web_search>\s*(.*?)\s*</web_search>", re.DOTALL | re.IGNORECASE
     )
     SEND_RE = re.compile(
         r'<send_message(?:\s+chat=["\']([^"\']+)["\'])?\s*>(.*?)</send_message>',
-        re.DOTALL | re.I,
+        re.DOTALL | re.IGNORECASE,
     )
     SKILL_RE = re.compile(
-        r'<skill\s+name=["\']([^"\']+)["\']\s*>(.*?)</skill>', re.DOTALL | re.I
+        r'<skill\s+name=["\']([^"\']+)["\']\s*>(.*?)</skill>', re.DOTALL | re.IGNORECASE
     )
     CREATE_CHANNEL_RE = re.compile(
-        r"<create_channel([^>]*)>(.*?)</create_channel>", re.DOTALL | re.I
+        r"<create_channel([^>]*)>(.*?)</create_channel>", re.DOTALL | re.IGNORECASE
     )
     CREATE_GROUP_RE = re.compile(
-        r"<create_group([^>]*)>(.*?)</create_group>", re.DOTALL | re.I
+        r"<create_group([^>]*)>(.*?)</create_group>", re.DOTALL | re.IGNORECASE
     )
     CREATE_BOT_RE = re.compile(
-        r"<create_bot([^>]*)>(.*?)</create_bot>", re.DOTALL | re.I
+        r"<create_bot([^>]*)>(.*?)</create_bot>", re.DOTALL | re.IGNORECASE
     )
     SEARCH_MESSAGES_RE = re.compile(
-        r"<search_messages([^>]*)>(.*?)</search_messages>", re.DOTALL | re.I
+        r"<search_messages([^>]*)>(.*?)</search_messages>", re.DOTALL | re.IGNORECASE
     )
     UPDATE_PROFILE_RE = re.compile(
-        r"<update_profile([^>]*)>(.*?)</update_profile>", re.DOTALL | re.I
+        r"<update_profile([^>]*)>(.*?)</update_profile>", re.DOTALL | re.IGNORECASE
     )
     SET_PROFILE_PHOTO_RE = re.compile(
-        r"<set_profile_photo([^>]*)>(.*?)</set_profile_photo>", re.DOTALL | re.I
+        r"<set_profile_photo([^>]*)>(.*?)</set_profile_photo>", re.DOTALL | re.IGNORECASE
     )
     DELETE_MESSAGES_RE = re.compile(
-        r"<delete_messages([^>]*)>(.*?)</delete_messages>", re.DOTALL | re.I
+        r"<delete_messages([^>]*)>(.*?)</delete_messages>", re.DOTALL | re.IGNORECASE
     )
     FORWARD_MESSAGE_RE = re.compile(
-        r"<forward_message([^>]*)>(.*?)</forward_message>", re.DOTALL | re.I
+        r"<forward_message([^>]*)>(.*?)</forward_message>", re.DOTALL | re.IGNORECASE
     )
     DOWNLOAD_MEDIA_RE = re.compile(
-        r"<download_media([^>]*)>(.*?)</download_media>", re.DOTALL | re.I
+        r"<download_media([^>]*)>(.*?)</download_media>", re.DOTALL | re.IGNORECASE
     )
     GENERATED_FILE_RE = re.compile(
         r'<file\s+name=["\']([^"\']+)["\']\s*>(.*?)</file>',
-        re.DOTALL | re.I,
+        re.DOTALL | re.IGNORECASE,
     )
     MCUB_DOCS_URL = "https://x0.at/y2rb.md"
     TOOL_CALL_RE = re.compile(
-        r"<([a-z0-9._]+)([^>]*)>(.*?)</\1>|<([a-z0-9._]+)([^>]*)/?>", re.DOTALL | re.I
+        r"<([a-z0-9._]+)([^>]*)>(.*?)</\1>|<([a-z0-9._]+)([^>]*)/?>", re.DOTALL | re.IGNORECASE
     )
-    TOOL_CALL_JSON_RE = re.compile(
-        r"```tool_call\s*(.*?)```", re.DOTALL | re.I)
+    TOOL_CALL_JSON_RE = re.compile(r"```tool_call\s*(.*?)```", re.DOTALL | re.IGNORECASE)
     TOOL_REGISTRY = ()
     # Built-in tools are now discovered dynamically from
     # OpenAgentLib/SystemPlugins/<group>/<tool>.py.
@@ -356,8 +355,7 @@ class OpenAgent(
                     "reasoning_effort",
                     "off",
                     description="Reasoning effort for models/providers that support it: off, low, medium, high, xhigh",
-                    validator=Choice(
-                        choices=["off", "low", "medium", "high", "xhigh"]),
+                    validator=Choice(choices=["off", "low", "medium", "high", "xhigh"]),
                 ),
                 ConfigValue(
                     "timeout",
@@ -810,7 +808,7 @@ class OpenAgent(
             return
         prompt, answer, thinking_notes = saved_turn
         with contextlib.suppress(Exception):
-            setattr(call, "_openagent_source_chat_id", cid)
+            call._openagent_source_chat_id = cid
         self._set_placeholder_context(call)
         await self._reply_text(
             call,
@@ -933,8 +931,7 @@ class OpenAgent(
                     actions.consume(
                         registry,
                         token,
-                        actor_id=OpenAgent._installed_plugin_action_actor(
-                            call),
+                        actor_id=OpenAgent._installed_plugin_action_actor(call),
                         kind="tool-confirm",
                     )
                 except Exception:
@@ -995,11 +992,9 @@ class OpenAgent(
 
     @staticmethod
     def _parse_oa_debug_tool_request(value: str) -> tuple[str, dict[str, Any]]:
-        tool_name, separator, raw_arguments = str(
-            value or "").strip().partition(" ")
+        tool_name, separator, raw_arguments = str(value or "").strip().partition(" ")
         if not tool_name or not separator or not raw_arguments.strip():
-            raise ValueError(
-                "Usage: .oa --debug=tool <tool.name> <JSON object>")
+            raise ValueError("Usage: .oa --debug=tool <tool.name> <JSON object>")
         try:
             arguments = json.loads(raw_arguments)
         except json.JSONDecodeError as exc:
@@ -1030,8 +1025,7 @@ class OpenAgent(
                 thinking_notes=[],
                 cancel_token=f"debug-tool-{uuid.uuid4().hex}",
             )
-            rendered = "\n".join(
-                outputs) or '{"status":"error","error":"empty result"}'
+            rendered = "\n".join(outputs) or '{"status":"error","error":"empty result"}'
             with contextlib.suppress(Exception):
                 rendered = json.dumps(
                     json.loads(rendered),
@@ -1123,8 +1117,7 @@ class OpenAgent(
                 ) -> str:
                     calls.append(1)
                     if len(calls) <= 5:
-                        raise RuntimeError(
-                            "Provider request timed out after 1s")
+                        raise RuntimeError("Provider request timed out after 1s")
                     return "ok"
 
                 # type: ignore[method-assign]
@@ -1223,10 +1216,8 @@ class OpenAgent(
                 payload = data.decode("utf-8", errors="replace").strip()
                 if payload.startswith("{"):
                     return payload
-                raise ValueError(
-                    "Replied .json file does not contain a JSON object")
-        text = getattr(reply, "raw_text", None) or getattr(
-            reply, "text", None) or ""
+                raise ValueError("Replied .json file does not contain a JSON object")
+        text = getattr(reply, "raw_text", None) or getattr(reply, "text", None) or ""
         if text.strip():
             payload = text.strip()
             if payload.startswith("{"):
@@ -1294,8 +1285,7 @@ class OpenAgent(
 
     def _rich_bot_system_prompt(self, prompt: str) -> str:
         return (
-            self._system_prompt(prompt) +
-            "\n\n## Bot command final answer format\n"
+            self._system_prompt(prompt) + "\n\n## Bot command final answer format\n"
             "For this bot command, the final answer is sent as Telegram Rich Message HTML. "
             "Use BlockRich/Rich HTML block formatting directly in the final answer: "
             '<p>, <blockquote>, <pre><code class="language-python">, <details><summary>, '
@@ -1312,7 +1302,7 @@ class OpenAgent(
     )
     async def bot_oa(self, event: Event) -> None:
         if event.sender_id != self.kernel.ADMIN_ID:
-            return None
+            return
 
         prompt = self.args_raw(event).strip()
         if not prompt:
@@ -1324,8 +1314,7 @@ class OpenAgent(
             await event.reply("Rich draft bot client is unavailable")
             return
 
-        target = getattr(event, "chat_id", None) or getattr(
-            event, "sender_id", None)
+        target = getattr(event, "chat_id", None) or getattr(event, "sender_id", None)
         if target is None:
             await event.reply("Can't resolve target chat for rich draft")
             return
@@ -1385,8 +1374,7 @@ class OpenAgent(
         except Exception as exc:
             await push_draft("OpenAgent словил ошибку")
             error_html = (
-                "<p><b>OpenAgent error</b></p>"
-                f"<blockquote><code>{html.escape(
+                "<p><b>OpenAgent error</b></p>" f"<blockquote><code>{html.escape(
                     str(exc))}</code></blockquote>"
             )
             with contextlib.suppress(Exception):
@@ -1460,8 +1448,7 @@ class OpenAgent(
                     session = self._new_session(
                         int(chat_id), name=new_chat_name or None
                     )
-                    self.session_manager.set_preference(
-                        int(chat_id), "continue")
+                    self.session_manager.set_preference(int(chat_id), "continue")
                     await self._show_sessions_panel(
                         event,
                         int(chat_id),
@@ -1766,8 +1753,7 @@ class OpenAgent(
 
         if not content:
             content = (
-                getattr(reply, "raw_text", None) or getattr(
-                    reply, "text", "") or ""
+                getattr(reply, "raw_text", None) or getattr(reply, "text", "") or ""
             )
         if not content.strip():
             await self.edit(event, self.strings("skill_empty"))
@@ -1843,12 +1829,9 @@ class OpenAgent(
                             tools_text}"
                     )
                 if plugin.diagnostic:
-                    item_lines.append(
-                        f"Diagnostic: <code>{
-                            html.escape(plugin.diagnostic)}</code>"
-                    )
-                text += "<blockquote>" + \
-                    "\n".join(item_lines) + "</blockquote>\n"
+                    item_lines.append(f"Diagnostic: <code>{
+                            html.escape(plugin.diagnostic)}</code>")
+                text += "<blockquote>" + "\n".join(item_lines) + "</blockquote>\n"
         text += self.strings("plugins_total", count=len(installed))
         return text
 
@@ -1865,8 +1848,7 @@ class OpenAgent(
             except Exception as exc:
                 await self.edit(
                     event,
-                    self.strings("plugin_install_failed",
-                                 error=html.escape(str(exc))),
+                    self.strings("plugin_install_failed", error=html.escape(str(exc))),
                     as_html=True,
                 )
                 return
@@ -1962,19 +1944,19 @@ class OpenAgent(
         )
         text += f"📝 {html.escape(desc)}\n"
         if tools:
-            tools_str = ", ".join(
-                f"<code>{html.escape(t)}</code>" for t in tools[:8])
+            tools_str = ", ".join(f"<code>{html.escape(t)}</code>" for t in tools[:8])
             if len(tools) > 8:
-                tools_str += self.strings("plugin_more_tools",
-                                          count=len(tools) - 8)
+                tools_str += self.strings("plugin_more_tools", count=len(tools) - 8)
             text += f"\n🔧 <b>{html.escape(self.strings('plugin_tools_label'))}:</b> {
                 tools_str}"
         if permissions:
             perms_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in permissions
             )
-            text += f"\n🔐 <b>{html.escape(self.strings('plugin_permissions_label'))}:</b> {
+            text += (
+                f"\n🔐 <b>{html.escape(self.strings('plugin_permissions_label'))}:</b> {
                 perms_str}"
+            )
         if requirements:
             reqs_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in requirements
@@ -2007,8 +1989,7 @@ class OpenAgent(
                 ]
             )
         if raw_url:
-            buttons[0].append(self.Button.url(
-                self.strings("plugin_code_btn"), raw_url))
+            buttons[0].append(self.Button.url(self.strings("plugin_code_btn"), raw_url))
 
         nav = []
         if page > 0:
@@ -2086,13 +2067,11 @@ class OpenAgent(
         try:
             saved_name = await self._install_plugin_from_repo(name)
             plugins = await self._fetch_repo_plugins()
-            installed = self._find_installed_plugin_presentation(
-                source_stem=saved_name)
+            installed = self._find_installed_plugin_presentation(source_stem=saved_name)
             if installed is None:
                 raise ValueError("installed plugin record is unavailable")
             await call.answer(
-                self.strings("plugin_installed_alert",
-                             name=installed.display_name),
+                self.strings("plugin_installed_alert", name=installed.display_name),
                 alert=True,
             )
         except Exception as exc:
@@ -2133,10 +2112,8 @@ class OpenAgent(
                 tools_str += self.strings(
                     "plugin_more_tools", count=len(plugin.tools) - 8
                 )
-            text += (
-                f"\n{html.escape(self.strings('plugin_tools_label'))}: {
+            text += f"\n{html.escape(self.strings('plugin_tools_label'))}: {
                     tools_str}\n"
-            )
         if plugin.permissions:
             perms_str = ", ".join(
                 f"<code>{html.escape(item)}</code>" for item in plugin.permissions
@@ -2246,8 +2223,7 @@ class OpenAgent(
                 await invoker.quiesce(record.plugin_id, record.generation)
             self._unregister_plugin(record.plugin_id)
             await call.answer(
-                self.strings("plugin_deleted_alert",
-                             name=record.manifest.display_name),
+                self.strings("plugin_deleted_alert", name=record.manifest.display_name),
                 alert=True,
             )
         except Exception as exc:

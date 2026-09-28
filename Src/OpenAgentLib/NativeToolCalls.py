@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from .ToolKernel import MigrationDisposition, ToolSpec

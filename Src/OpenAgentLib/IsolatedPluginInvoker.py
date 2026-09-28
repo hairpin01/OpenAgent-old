@@ -8,17 +8,17 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
+from .InstalledPluginRegistry import (
+    InstalledPluginRecord,
+    InstalledPluginRegistry,
+    InstalledPluginStatus,
+)
 from .PluginCapabilities import (
     CapabilityErrorCode,
     CapabilityRequest,
     CapabilityResponse,
 )
 from .PluginDiscovery import StaticPluginSource
-from .InstalledPluginRegistry import (
-    InstalledPluginRecord,
-    InstalledPluginRegistry,
-    InstalledPluginStatus,
-)
 from .PluginHost import PluginHost, PluginHostOutcome, PluginHostRequest, SandboxMount
 from .ToolKernel import ToolCall
 from .ToolPolicy import ToolPolicyRequest

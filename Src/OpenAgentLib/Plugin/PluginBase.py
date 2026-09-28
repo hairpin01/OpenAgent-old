@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MethodType
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.lib.types import Kernel
@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 HOOK_NO_RESULT = object()
 
 __all__ = [
-    "AgentHookContext",
     "HOOK_NO_RESULT",
+    "AgentHookContext",
     "MethodPatch",
     "OpenAgentPlugin",
     "PluginHookResult",
@@ -132,7 +132,7 @@ class OpenAgentPlugin:
 
     def __init__(self, agent: Any) -> None:
         self._agent = agent
-        self.kernel: "Kernel" = self._agent.kernel
+        self.kernel: Kernel = self._agent.kernel
         self.client = self._agent.client
         self._method_patches: list[MethodPatch] = []
 
@@ -334,7 +334,6 @@ class OpenAgentPlugin:
 
     async def on_load(self) -> None:
         """Called after plugin is registered."""
-        pass
 
     async def on_unload(self) -> None:
         """Called when plugin is unregistered/disabled when possible."""

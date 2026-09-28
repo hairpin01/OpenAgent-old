@@ -1,19 +1,16 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from pathlib import Path
 import asyncio
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from .Manager.Session import SessionManager
 from .HttpClient import OpenAgentHttpClient
-from .ToolTracePersistence import ToolTracePersistence
-from .V2Bootstrap import build_v2_tool_runtime
-from .InstalledPluginRegistry import InstalledPluginRegistry, InstalledPluginStatus
 from .InstalledPluginActions import InstalledPluginActionStore
-from .PluginHost import PluginHost
+from .InstalledPluginRegistry import InstalledPluginRegistry, InstalledPluginStatus
 from .IsolatedPluginInvoker import IsolatedPluginInvoker
+from .Manager.Session import SessionManager
 from .PluginCapabilities import (
     CapabilityBroker,
     CapabilityErrorCode,
@@ -21,6 +18,7 @@ from .PluginCapabilities import (
     CapabilityRequest,
     CapabilityResponse,
 )
+from .PluginHost import PluginHost
 from .PluginSDK import CapabilityFamily
 from .RuntimeCapabilityBackends import (
     RuntimeConfigurationBackend,
@@ -30,6 +28,8 @@ from .RuntimeCapabilityBackends import (
 )
 from .ToolKernel import ToolCall
 from .ToolPolicy import ToolPolicyRequest
+from .ToolTracePersistence import ToolTracePersistence
+from .V2Bootstrap import build_v2_tool_runtime
 
 
 class _OpenAgentLifecycleMixin:

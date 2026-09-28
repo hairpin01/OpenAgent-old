@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from typing import Any
 import contextlib
-import re
 import random
+import re
 import time
+from typing import Any
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
 

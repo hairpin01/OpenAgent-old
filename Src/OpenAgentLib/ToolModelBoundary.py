@@ -156,21 +156,32 @@ class ModelBoundaryLimits:
                 )
 
 
-_FENCE_OPENER_RE = re.compile(r"```(?P<label>tool_call|json)\b[^\r\n]*\r?\n", re.IGNORECASE)
+_FENCE_OPENER_RE = re.compile(
+    r"```(?P<label>tool_call|json)\b[^\r\n]*\r?\n", re.IGNORECASE
+)
 _XML_RE = re.compile(
     r"<(?P<name>[a-z][a-z0-9_.-]*)(?P<attrs>[^<>]*?)(?:(?P<self>/)>|>(?P<body>.*?)</(?P=name)\s*>)",
     re.IGNORECASE | re.DOTALL,
 )
-_HARMONY_RE = re.compile(r"(?P<header>.*?)<\|message\|>(?P<body>.*?)<\|call\|>", re.DOTALL)
-_XML_MARKER_RE = re.compile(r"<(?P<close>/)?(?P<name>[a-z][a-z0-9_.-]*)\b", re.IGNORECASE)
+_HARMONY_RE = re.compile(
+    r"(?P<header>.*?)<\|message\|>(?P<body>.*?)<\|call\|>", re.DOTALL
+)
+_XML_MARKER_RE = re.compile(
+    r"<(?P<close>/)?(?P<name>[a-z][a-z0-9_.-]*)\b", re.IGNORECASE
+)
 _RAW_CALL_SHAPE_RE = re.compile(
     r"\{\s*\"(?:tool|name)\"\s*:\s*.*?\"(?:args|arguments)\"\s*:", re.DOTALL
 )
-_FINAL_FENCE_RE = re.compile(r"```final(?:_answer)?[ \t]*\r?\n(.*?)```", re.IGNORECASE | re.DOTALL)
-_FINAL_TAG_RE = re.compile(r"<final(?:_answer)?>(.*?)</final(?:_answer)?>", re.IGNORECASE | re.DOTALL)
+_FINAL_FENCE_RE = re.compile(
+    r"```final(?:_answer)?[ \t]*\r?\n(.*?)```", re.IGNORECASE | re.DOTALL
+)
+_FINAL_TAG_RE = re.compile(
+    r"<final(?:_answer)?>(.*?)</final(?:_answer)?>", re.IGNORECASE | re.DOTALL
+)
 _ATTR_RE = re.compile(r"\s*([a-zA-Z_][\w.-]*)\s*=\s*(['\"])(.*?)\2", re.DOTALL)
 _SECRET_KEY_RE = re.compile(
-    r"(?:pass(?:word)?|secret|token|api[_-]?key|authorization|cookie|credential)", re.IGNORECASE
+    r"(?:pass(?:word)?|secret|token|api[_-]?key|authorization|cookie|credential)",
+    re.IGNORECASE,
 )
 _BODY_FIELDS = (
     "body",

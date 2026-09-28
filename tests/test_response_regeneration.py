@@ -73,7 +73,9 @@ def _record(tmp_path: Path, digest: str = "a" * 64) -> InstalledPluginRecord:
 
 
 def _payload(harness: _Harness, *, actor_id: int = 7) -> tuple[str, dict]:
-    harness._final_buttons(1, "p", "p", [], source_event=_Event(actor_id), agent_log=["demo.run"])
+    harness._final_buttons(
+        1, "p", "p", [], source_event=_Event(actor_id), agent_log=["demo.run"]
+    )
     token, payload = next(iter(harness._regen_payloads.items()))
     return token, payload
 
@@ -97,15 +99,24 @@ def test_regen_rejects_replaced_owner_but_not_unrelated_plugin(tmp_path: Path) -
             plugin_id="other.plugin",
             source=InstalledPluginSource((tmp_path / "other.py").resolve(), "c" * 64),
             manifest=InstalledPluginManifest(
-                manifest_version="2", api_version="2", version="1", entrypoint="other.HANDLERS",
+                manifest_version="2",
+                api_version="2",
+                version="1",
+                entrypoint="other.HANDLERS",
                 capabilities=frozenset({"network"}),
-                tools=(InstalledPluginTool(canonical_id="other.run", capabilities=frozenset({"network"})),),
+                tools=(
+                    InstalledPluginTool(
+                        canonical_id="other.run", capabilities=frozenset({"network"})
+                    ),
+                ),
             ),
         )
     )
     harness = _Harness(registry)
     token, _payload_value = _payload(harness)
-    registry.replace_active(_record(tmp_path, "b" * 64), expected_generation=active.generation)
+    registry.replace_active(
+        _record(tmp_path, "b" * 64), expected_generation=active.generation
+    )
     assert harness._validate_regen_payload(token, _Event(7), consume=True) is None
 
     token, _payload_value = _payload(harness)

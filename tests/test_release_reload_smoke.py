@@ -7,7 +7,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CORE_ROOT = ROOT.parent / "MCUB-fork"
 
@@ -32,8 +31,7 @@ def test_built_artifact_replaces_stale_openagent_dependencies(tmp_path: Path) ->
         text=True,
     )
 
-    smoke = textwrap.dedent(
-        """
+    smoke = textwrap.dedent("""
         import importlib.util
         import inspect
         import json
@@ -96,8 +94,7 @@ def test_built_artifact_replaces_stale_openagent_dependencies(tmp_path: Path) ->
             for origin in origins
         )
         print(json.dumps({"loaded": loaded}, sort_keys=True))
-        """
-    )
+        """)
     environment = os.environ | {
         "CUBKIT_CACHE_DIR": str(tmp_path / "cubkit-cache"),
         "PYTHONPATH": str(CORE_ROOT),

@@ -251,9 +251,7 @@ def test_terminal_run_transports_arbitrary_non_shell_argv_literally() -> None:
 
     for argv, expected_stdout in invocations:
         call = _call(terminal, "terminal.run", {"argv": argv, "cwd": "."})
-        result = terminal.HANDLERS["terminal.run"](
-            call, _capability(call, transport)
-        )
+        result = terminal.HANDLERS["terminal.run"](call, _capability(call, transport))
         assert result["stdout"] == expected_stdout
 
     assert [frame["payload"]["argv"] for frame in transport.frames] == [
@@ -264,7 +262,9 @@ def test_terminal_run_transports_arbitrary_non_shell_argv_literally() -> None:
         _call(terminal, "terminal.run", {"command": "echo injected"})
 
 
-@pytest.mark.parametrize("executable", ("sh", "bash", "zsh", "fish", "cmd", "powershell"))
+@pytest.mark.parametrize(
+    "executable", ("sh", "bash", "zsh", "fish", "cmd", "powershell")
+)
 def test_terminal_run_rejects_shell_interpreters(executable: str) -> None:
     terminal = importlib.import_module("plugins.terminal")
     blocked = _call(

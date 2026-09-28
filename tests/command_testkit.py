@@ -16,7 +16,6 @@ from OpenAgentLib.InstalledPluginRegistry import (
     InstalledPluginStatus,
 )
 
-
 FIXED_NOW = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
 
 
@@ -88,7 +87,9 @@ class FakeCommandEvent:
         self._calls: list[FakeCommandCall] = []
         self.answer_result = FakeCommandResult("answer", msg_id)
 
-    def _record(self, operation: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    def _record(
+        self, operation: str, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> None:
         self._calls.append(
             FakeCommandCall(
                 operation,
@@ -367,10 +368,7 @@ class FakeInstalledPluginActionStore:
             raise FakeInstalledPluginActionError(
                 FakeInstalledPluginActionErrorCode.MISSING, action
             ) from exc
-        if (
-            owner.plugin_id != action.plugin_id
-            or owner.generation != action.generation
-        ):
+        if owner.plugin_id != action.plugin_id or owner.generation != action.generation:
             raise FakeInstalledPluginActionError(
                 FakeInstalledPluginActionErrorCode.STALE_GENERATION, action
             )

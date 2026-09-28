@@ -280,12 +280,16 @@ def _classification(
     }:
         capability = "state-write"
     elif (
-        group == "skills" and action in {"install", "save_from_ai", "import_md"}
-    ) or canonical_id == "skill.save" or group == "code" and action in {
-        "generate_file",
-        "generate_mcub_module",
-        "attach_result",
-    }:
+        (group == "skills" and action in {"install", "save_from_ai", "import_md"})
+        or canonical_id == "skill.save"
+        or group == "code"
+        and action
+        in {
+            "generate_file",
+            "generate_mcub_module",
+            "attach_result",
+        }
+    ):
         capability = "filesystem-write"
     elif group == "utility" and action == "error_file":
         capability = "filesystem-read"

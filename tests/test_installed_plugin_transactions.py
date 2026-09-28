@@ -177,9 +177,7 @@ def test_real_invoker_invokes_relocated_terminal_after_disable_and_reenable(
     host = _RecordingHost()
     harness._v2_plugin_invoker._host = host
     files = _terminal_files()
-    installed = asyncio.run(
-        harness._install_v2_plugin_files(files, "terminal.py")
-    )
+    installed = asyncio.run(harness._install_v2_plugin_files(files, "terminal.py"))
     disabled = asyncio.run(
         harness._set_installed_plugin_enabled(
             installed.plugin_id, expected_generation=installed.generation, enabled=False
@@ -211,9 +209,10 @@ def test_real_invoker_invokes_relocated_terminal_after_disable_and_reenable(
     )
 
     assert active.status is InstalledPluginStatus.ACTIVE
-    assert harness._v2_plugin_invoker._sources["terminal"].path == (
-        installed_plugins / "terminal.py"
-    ).resolve()
+    assert (
+        harness._v2_plugin_invoker._sources["terminal"].path
+        == (installed_plugins / "terminal.py").resolve()
+    )
     assert host.requests[0].payload["module"] == "openagent_plugins.terminal"
     assert host.requests[0].payload["source_sha256"] == active.source.digest
 

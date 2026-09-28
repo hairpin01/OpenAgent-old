@@ -3097,7 +3097,9 @@ class _OpenAgentStatusMixin:
                 with contextlib.suppress(Exception):
                     candidate._openagent_status_buttons = buttons
                 with contextlib.suppress(Exception):
-                    candidate._openagent_source_chat_id = getattr(event, "chat_id", None)
+                    candidate._openagent_source_chat_id = getattr(
+                        event, "chat_id", None
+                    )
             return result or target_event
 
         chat_id = getattr(event, "chat_id", None) or getattr(

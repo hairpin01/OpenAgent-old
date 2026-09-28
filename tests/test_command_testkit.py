@@ -27,7 +27,9 @@ from OpenAgentLib.InstalledPluginRegistry import (
 def _record(tmp_path: Path, *, digest: str = "a" * 64) -> InstalledPluginRecord:
     return InstalledPluginRecord(
         plugin_id="example.plugin",
-        source=InstalledPluginSource((tmp_path / "example_plugin.py").resolve(), digest),
+        source=InstalledPluginSource(
+            (tmp_path / "example_plugin.py").resolve(), digest
+        ),
         manifest=InstalledPluginManifest(
             manifest_version="2",
             api_version="2",
@@ -229,9 +231,7 @@ def test_replaced_generation_makes_action_stale(tmp_path: Path) -> None:
         installed, actor_id=42, clock=clock, token="stale-action"
     )
     replacement = _record(tmp_path, digest="b" * 64)
-    replaced = registry.replace(
-        replacement, expected_generation=installed.generation
-    )
+    replaced = registry.replace(replacement, expected_generation=installed.generation)
 
     _assert_action_error(
         FakeInstalledPluginActionErrorCode.STALE_GENERATION,
@@ -251,9 +251,7 @@ def test_consumed_action_cannot_be_replayed(tmp_path: Path) -> None:
     store = FakeInstalledPluginActionStore()
     store.issue(action, registry)
 
-    record, consumed = store.consume(
-        action, registry, actor_id=42, now=clock()
-    )
+    record, consumed = store.consume(action, registry, actor_id=42, now=clock())
 
     assert record.generation == installed.generation
     assert action.token not in record.action_ids

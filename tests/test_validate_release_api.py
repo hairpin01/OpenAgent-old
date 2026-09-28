@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "validate_release_api", ROOT / "scripts" / "validate_release_api.py"
@@ -88,11 +87,15 @@ def test_valid_api_and_import_cleanup(tmp_path: Path) -> None:
 def test_rejects_artifact_that_reuses_stale_dependencies(tmp_path: Path) -> None:
     artifact, core = _write_fixture(tmp_path, NON_EVICTING_VALID)
 
-    with pytest.raises(validator.ReleaseAPIError, match="reused stale dependency modules"):
+    with pytest.raises(
+        validator.ReleaseAPIError, match="reused stale dependency modules"
+    ):
         validator.validate_release_api(artifact, core)
 
 
-def test_accepts_artifact_that_evicts_and_imports_stale_dependencies(tmp_path: Path) -> None:
+def test_accepts_artifact_that_evicts_and_imports_stale_dependencies(
+    tmp_path: Path,
+) -> None:
     artifact, core = _write_fixture(
         tmp_path,
         """
@@ -115,7 +118,9 @@ class OpenAgent(Marker, ModuleBase):
     validator.validate_release_api(artifact, core)
 
 
-def test_import_failure_restores_stale_modules_and_path(tmp_path: Path, monkeypatch) -> None:
+def test_import_failure_restores_stale_modules_and_path(
+    tmp_path: Path, monkeypatch
+) -> None:
     artifact, core = _write_fixture(tmp_path, "raise RuntimeError('boom')\n")
     previous_path = list(sys.path)
     previous_modules = {
@@ -159,7 +164,11 @@ class OpenAgent(ModuleBase):
 def test_invalid_api(tmp_path: Path, source: str, message: str) -> None:
     artifact, core = _write_fixture(
         tmp_path,
-        source if source.startswith("raise ") else VALID.split("from core", 1)[0] + source,
+        (
+            source
+            if source.startswith("raise ")
+            else VALID.split("from core", 1)[0] + source
+        ),
     )
     with pytest.raises(validator.ReleaseAPIError, match=message):
         validator.validate_release_api(artifact, core)
@@ -187,7 +196,12 @@ def test_parse_matching_openagent_main_source_map_header() -> None:
 
 
 def test_parse_missing_openagent_main_source_map_header() -> None:
-    assert _parse_openagent_main_sha256("# CubKit source map:\n# - generated line 1 -> OpenAgentMain.py:1\n") is None
+    assert (
+        _parse_openagent_main_sha256(
+            "# CubKit source map:\n# - generated line 1 -> OpenAgentMain.py:1\n"
+        )
+        is None
+    )
 
 
 def test_parse_mismatched_openagent_main_source_map_header() -> None:
@@ -206,7 +220,9 @@ def test_current_artifact_when_present_and_current() -> None:
         pytest.skip(f"stale release artifact absent: {artifact}")
     embedded_hash = _parse_openagent_main_sha256(artifact.read_text(encoding="utf-8"))
     if embedded_hash is None:
-        pytest.skip("stale release artifact has no OpenAgentMain.py SHA256 source-map entry")
+        pytest.skip(
+            "stale release artifact has no OpenAgentMain.py SHA256 source-map entry"
+        )
     current_hash = _current_source_sha256()
     if embedded_hash != current_hash:
         pytest.skip(
@@ -214,5 +230,7 @@ def test_current_artifact_when_present_and_current() -> None:
             f"embedded SHA256 {embedded_hash}, current SHA256 {current_hash}"
         )
     if not core.is_dir():
-        pytest.skip(f"MCUB core unavailable for current release artifact validation: {core}")
+        pytest.skip(
+            f"MCUB core unavailable for current release artifact validation: {core}"
+        )
     validator.validate_release_api(artifact, core)

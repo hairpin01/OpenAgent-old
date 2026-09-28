@@ -520,9 +520,9 @@ def test_allow_any_executable_bypasses_only_the_process_executable_tuple(
     )
     backend = FakeBackend()
 
-    allowed = CapabilityBroker(
-        policy, {CapabilityFamily.PROCESS: backend}
-    ).dispatch(call, policy_request, terminal_grant, terminal_request)
+    allowed = CapabilityBroker(policy, {CapabilityFamily.PROCESS: backend}).dispatch(
+        call, policy_request, terminal_grant, terminal_request
+    )
 
     assert allowed.ok is True
     assert backend.calls[0][1]["argv"] == (

@@ -236,7 +236,8 @@ class OpenAgent(
         r"<update_profile([^>]*)>(.*?)</update_profile>", re.DOTALL | re.IGNORECASE
     )
     SET_PROFILE_PHOTO_RE = re.compile(
-        r"<set_profile_photo([^>]*)>(.*?)</set_profile_photo>", re.DOTALL | re.IGNORECASE
+        r"<set_profile_photo([^>]*)>(.*?)</set_profile_photo>",
+        re.DOTALL | re.IGNORECASE,
     )
     DELETE_MESSAGES_RE = re.compile(
         r"<delete_messages([^>]*)>(.*?)</delete_messages>", re.DOTALL | re.IGNORECASE
@@ -253,9 +254,12 @@ class OpenAgent(
     )
     MCUB_DOCS_URL = "https://x0.at/y2rb.md"
     TOOL_CALL_RE = re.compile(
-        r"<([a-z0-9._]+)([^>]*)>(.*?)</\1>|<([a-z0-9._]+)([^>]*)/?>", re.DOTALL | re.IGNORECASE
+        r"<([a-z0-9._]+)([^>]*)>(.*?)</\1>|<([a-z0-9._]+)([^>]*)/?>",
+        re.DOTALL | re.IGNORECASE,
     )
-    TOOL_CALL_JSON_RE = re.compile(r"```tool_call\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+    TOOL_CALL_JSON_RE = re.compile(
+        r"```tool_call\s*(.*?)```", re.DOTALL | re.IGNORECASE
+    )
     TOOL_REGISTRY = ()
     # Built-in tools are now discovered dynamically from
     # OpenAgentLib/SystemPlugins/<group>/<tool>.py.

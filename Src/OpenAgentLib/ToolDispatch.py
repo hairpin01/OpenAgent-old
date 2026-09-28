@@ -498,7 +498,10 @@ class _OpenAgentToolRegistryMixin:
             text = fenced.group(1).strip()
         else:
             text = re.sub(
-                r"^```(?:tool_call|json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL
+                r"^```(?:tool_call|json)?\s*|\s*```$",
+                "",
+                text,
+                flags=re.IGNORECASE | re.DOTALL,
             ).strip()
 
         json_text = text

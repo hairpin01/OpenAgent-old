@@ -9,7 +9,6 @@ import pytest
 
 from conftest import ROOT
 
-
 sys.path.insert(0, str(ROOT / "Src"))
 
 from OpenAgentLib.InstalledPluginRegistry import (  # noqa: E402
@@ -46,9 +45,11 @@ def _record(
             version="1.0.0",
             entrypoint="example_plugin.HANDLERS",
             display_name="Example plugin",
-            metadata=metadata
-            if metadata is not None
-            else {"author": "Ada", "presentation": {"tags": ["demo"]}},
+            metadata=(
+                metadata
+                if metadata is not None
+                else {"author": "Ada", "presentation": {"tags": ["demo"]}}
+            ),
             capabilities=frozenset({"network"}),
             tools=(
                 InstalledPluginTool(
@@ -90,7 +91,9 @@ def test_lookup_normalizes_and_returns_immutable_snapshots(tmp_path: Path) -> No
         installed.enabled = False  # type: ignore[misc]
 
 
-def test_record_rejects_non_json_metadata_and_noncanonical_source(tmp_path: Path) -> None:
+def test_record_rejects_non_json_metadata_and_noncanonical_source(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(InstalledPluginRecordError) as non_json:
         _record(tmp_path, metadata={"unsupported": object()})
     assert non_json.value.code.value == "invalid_record"
@@ -389,12 +392,16 @@ def test_action_and_task_ownership_is_generation_safe(tmp_path: Path) -> None:
 
     assert task_owned.callback_ids == frozenset({"callback-1"})
     assert task_owned.task_ids == frozenset({"task-1"})
-    assert registry.get_action_owner(
-        "callback-1", expected_generation=task_owned.generation
-    ) is task_owned
-    assert registry.get_task_owner(
-        "task-1", expected_generation=task_owned.generation
-    ) is task_owned
+    assert (
+        registry.get_action_owner(
+            "callback-1", expected_generation=task_owned.generation
+        )
+        is task_owned
+    )
+    assert (
+        registry.get_task_owner("task-1", expected_generation=task_owned.generation)
+        is task_owned
+    )
     with pytest.raises(InstalledPluginTransitionError):
         registry.begin_unload(
             task_owned.plugin_id, expected_generation=task_owned.generation

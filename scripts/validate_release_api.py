@@ -62,7 +62,9 @@ def _has_symlink_component(path: Path) -> bool:
     return False
 
 
-def _validate_paths(artifact_value: str | Path, core_root_value: str | Path) -> tuple[Path, Path]:
+def _validate_paths(
+    artifact_value: str | Path, core_root_value: str | Path
+) -> tuple[Path, Path]:
     artifact = _absolute_path(artifact_value)
     core_root = _absolute_path(core_root_value)
     if artifact.is_symlink() or _has_symlink_component(artifact):
@@ -99,7 +101,9 @@ def _import_artifact(artifact: Path, core_root: Path):
         sys.modules[module_name] = module
         module_spec.loader.exec_module(module)
         retained = sorted(
-            name for name, sentinel in stale_modules.items() if sys.modules.get(name) is sentinel
+            name
+            for name, sentinel in stale_modules.items()
+            if sys.modules.get(name) is sentinel
         )
         if retained:
             raise ReleaseAPIError(
@@ -109,7 +113,9 @@ def _import_artifact(artifact: Path, core_root: Path):
     except ReleaseAPIError:
         raise
     except Exception as exc:
-        raise ReleaseAPIError(f"artifact import failed: {type(exc).__name__}: {exc}") from exc
+        raise ReleaseAPIError(
+            f"artifact import failed: {type(exc).__name__}: {exc}"
+        ) from exc
     finally:
         for name in set(sys.modules) - previous_modules:
             sys.modules.pop(name, None)
@@ -121,7 +127,9 @@ def _import_artifact(artifact: Path, core_root: Path):
         sys.path[:] = previous_path
 
 
-def validate_release_api(artifact_value: str | Path, core_root_value: str | Path) -> None:
+def validate_release_api(
+    artifact_value: str | Path, core_root_value: str | Path
+) -> None:
     artifact, core_root = _validate_paths(artifact_value, core_root_value)
     module, module_base = _import_artifact(artifact, core_root)
     agent = getattr(module, "OpenAgent", None)
@@ -140,8 +148,12 @@ def validate_release_api(artifact_value: str | Path, core_root_value: str | Path
     try:
         parameters = inspect.signature(final_buttons).parameters.values()
     except (TypeError, ValueError) as exc:
-        raise ReleaseAPIError(f"cannot inspect _final_buttons signature: {exc}") from exc
-    agent_log = next((parameter for parameter in parameters if parameter.name == "agent_log"), None)
+        raise ReleaseAPIError(
+            f"cannot inspect _final_buttons signature: {exc}"
+        ) from exc
+    agent_log = next(
+        (parameter for parameter in parameters if parameter.name == "agent_log"), None
+    )
     if agent_log is None or agent_log.kind not in {
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.KEYWORD_ONLY,
@@ -150,7 +162,9 @@ def validate_release_api(artifact_value: str | Path, core_root_value: str | Path
 
     registry_getter = getattr(agent, "_get_installed_plugin_registry", None)
     if registry_getter is not None and not callable(registry_getter):
-        raise ReleaseAPIError("OpenAgent has a non-callable registry initialization path")
+        raise ReleaseAPIError(
+            "OpenAgent has a non-callable registry initialization path"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

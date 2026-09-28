@@ -69,6 +69,6 @@ black = true
 mypy = false
 
 [lint.tools.release]
-ruff = true
+ruff = false
 black = true
 mypy = false

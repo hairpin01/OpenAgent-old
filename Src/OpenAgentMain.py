@@ -3,6 +3,7 @@
 # -- repo data --
 # repo: https://github.com/hairpin01/repo-MCUB-fork/
 # source: https://github.com/hairpin01/OpenAgent-old/
+# banner_url: https://raw.githubusercontent.com/hairpin01/repo-MCUB-fork/main/assets/banner/openagent-banner.png
 # -- end --
 # scop: kernel min v1.4.7
 

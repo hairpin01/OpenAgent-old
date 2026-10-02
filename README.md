@@ -1,3 +1,9 @@
+<dir align="center">
+
+<img src="assets/banner/vector-banner.png" alt="banner" width=600/>
+
+</dir>
+
 # OpenAgent for MCUB
 
 OpenAgent is a tool-oriented AI agent implemented as a multi-file MCUB module

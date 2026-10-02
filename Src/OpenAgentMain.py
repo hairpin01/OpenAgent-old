@@ -119,7 +119,7 @@ class OpenAgent(
 ):
     DEBUG = OpenAgentSettings.DEBUG
     name = "OpenAgent"
-    version = "0.8.2-main.build:1057"
+    version = "0.8.2-main.build:1058"
     author = "@dev_dolbaeb && @Hairpin00"
     description = {
         "ru": "ИИ агент в юзерботе с новой архитектурой инструментов",

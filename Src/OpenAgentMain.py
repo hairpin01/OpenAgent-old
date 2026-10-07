@@ -58,6 +58,7 @@ from core.lib.loader.module_base import (
     bot_command,
     callback,
     command,
+    guest_command,
 )
 from core.lib.loader.module_config import (
     Answer,
@@ -970,7 +971,49 @@ class OpenAgent(
     def _oa_arg_parser(self, event: Event) -> Any | None:
         with contextlib.suppress(Exception):
             return self.args(event)
+        # Guest queries come without the userbot prefix ("@bot oa <args>"),
+        # so the default parser rejects them - rebuild it around the prefix.
+        guest_args = getattr(event, "guest_args", None)
+        if guest_args is not None:
+            with contextlib.suppress(Exception):
+                import utils
+
+                prefix = self.get_prefix()
+                return utils.parse_arguments(f"{prefix}oa {guest_args}", prefix=prefix)
         return None
+
+    async def _oa_ack(self, event: Any, text: str) -> None:
+        """Answer the caller, whatever the entry point is.
+
+        Guest queries cannot be edited (the bot posts instead), so they are
+        answered with ``event.reply()``; regular commands edit their source
+        message as before.
+        """
+        if getattr(event, "is_query", False):
+            with contextlib.suppress(Exception):
+                await event.reply(text, parse_mode="html")
+                return
+        await self.edit(event, text, as_html=True)
+
+    async def _oa_start_status(
+        self, event: Any, text: str, buttons: list[list[Any]]
+    ) -> Any:
+        """Post the status message the answer will be edited into.
+
+        A guest query can be answered only once, but ``event.reply()`` posts
+        the message right away and returns it with its inline id, so it works
+        the same as the inline form used elsewhere.
+        """
+        if getattr(event, "is_query", False):
+            with contextlib.suppress(Exception):
+                posted = await event.reply(text, parse_mode="html", buttons=buttons)
+                if posted is not None:
+                    with contextlib.suppress(Exception):
+                        posted._openagent_status_buttons = buttons
+                    return posted
+                self.log.debug("OA guest status: query already answered")
+                return None
+        return await self._start_inline_status(event, text, buttons)
 
     def _oa_prompt_from_parser(self, parser: Any | None) -> str:
         if parser is None:
@@ -1428,11 +1471,9 @@ class OpenAgent(
                 session.messages.clear()
                 self._tool_memory.pop(int(chat_id), None)
                 self._touch_session(session)
-                await self.edit(
-                    event, html.escape(self.strings("context_cleared")), as_html=True
-                )
+                await self._oa_ack(event, html.escape(self.strings("context_cleared")))
             else:
-                await self.edit(event, self.strings("need_text"))
+                await self._oa_ack(event, self.strings("need_text"))
             return
         if prompt.strip() == "--chats" or (
             parser is not None and parser.get_flag("chats")
@@ -1441,7 +1482,7 @@ class OpenAgent(
             if chat_id is not None:
                 await self._show_sessions_panel(event, int(chat_id), force_inline=True)
             else:
-                await self.edit(event, self.strings("need_text"))
+                await self._oa_ack(event, self.strings("need_text"))
             return
         reply_context, attachments = await self._reply_context(event)
         if not prompt and reply_context:
@@ -1463,7 +1504,7 @@ class OpenAgent(
                     return
                 await self._show_sessions_panel(event, int(chat_id), force_inline=True)
             else:
-                await self.edit(event, self.strings("need_text"))
+                await self._oa_ack(event, self.strings("need_text"))
             return
 
         full_prompt = prompt
@@ -1500,7 +1541,7 @@ class OpenAgent(
             bool(reply_context),
             len(attachments or []),
         )
-        loading = await self._start_inline_status(
+        loading = await self._oa_start_status(
             event,
             self._thinking_text(),
             self._runtime_control_buttons(cancel_token, event),
@@ -1567,6 +1608,16 @@ class OpenAgent(
                 started_at=started,
                 source="OpenAgent",
             )
+
+    @guest_command(
+        "oa",
+        alias=["agent"],
+        doc_ru="<запрос> спросить ИИ агента из любого чата через бота",
+        doc_en="<prompt> ask AI agent from any chat through the bot",
+    )
+    async def cmd_oa_guest(self, event: Event) -> None:
+        """Guest mode: `@bot oa <prompt>` runs the exact same command."""
+        await self.cmd_oa(event)
 
     @command(
         "oaexport",

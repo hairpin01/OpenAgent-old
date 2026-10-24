@@ -9,59 +9,53 @@ requires = "aiohttp"
 source = 'Src'
 entrypoint = "OpenAgentMain.py"
 packages = ['OpenAgentLib']
-sources = ['MCUBEvent.py', 'Settings.py']
-locales = 'locales'
-output = 'dist/OpenDebug.py'
-debug_output = 'dist/OpenDebug.py'
-release_output = 'dist/OpenAgent-MCUB-repo.py'
+sources = ['']
+locales = 'Locales'
+output = 'Dist/OpenDebug.py'
+debug_output = 'Dist/OpenDebug.py'
+release_output = 'Dist/OpenAgent-MCUB-repo.py'
 sign = true
 fail_on_secrets = true
 
 [hooks.debug]
-pre_build = ['python', 'scripts/configure_build_profile.py', 'debug']
+pre_build = ['python', 'Scripts/configure_build_profile.py', 'debug']
 post_build = [
-    ['python', 'scripts/configure_build_profile.py', 'release'],
-    ['python', 'scripts/notify_build.py'],
+    ['python', 'Scripts/configure_build_profile.py', 'release'],
+    ['python', 'Scripts/notify_build.py'],
 ]
 
 [hooks.release]
-pre_build = ['python', 'scripts/configure_build_profile.py', 'release']
+pre_build = ['python', 'Scripts/configure_build_profile.py', 'release']
 # The two atomic copies can briefly differ if the second replacement fails, but
 # copy_release never leaves a partially written destination.
 post_build = [
     [
         'python',
-        'scripts/validate_release_api.py',
+        'Scripts/validate_release_api.py',
         '{output}',
         '../MCUB-fork',
     ],
     [
         'python',
-        'scripts/copy_release.py',
+        'Scripts/copy_release.py',
         '{output}',
         '../repo-MCUB-fork/OpenAgent-MCUB-repo.py',
     ],
     [
         'python',
-        'scripts/copy_release.py',
+        'Scripts/copy_release.py',
         '{output}',
-        '../MCUB-fork/modules_loaded/OpenAgent.py',
+        '../MCUB-fork/modules_loaded/OpenAgent.py'
     ],
-    [
-        'python',
-        'scripts/sync_v2_plugins.py',
-        '../repo-MCUB-fork/OpenAgent/plugins',
-        '../MCUB-fork/openagent_plugins',
-    ],
-    ['bash', 'scripts/release_github.sh', '{output}'],
-    ['python', 'scripts/notify_build.py'],
+    ['bash', 'Scripts/release_github.sh', '{output}'],
+    ['python', 'Scripts/notify_build.py'],
 ]
 [lint]
 auto = true
 check_imports = true
 strict_imports = true
-ignore = [".*", "dist/*"]
-runtime_modules = ["openagent_system_tool_api"]
+ignore = [".*", "Dist/*"]
+runtime_modules = ''
 
 [lint.tools.debug]
 ruff = false

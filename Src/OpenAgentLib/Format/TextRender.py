@@ -15,10 +15,10 @@ from typing import Any, Callable, TYPE_CHECKING
 
 from core.lib.types import Message, InlineMessage
 
-from ....Settings import CUSTOM_EMOJI, MAX_REPLY_CHARS
+from Settings import CUSTOM_EMOJI, MAX_REPLY_CHARS
 
 if TYPE_CHECKING:
-    from ....OpenAgentMain import OpenAgent
+    from OpenAgentMain import OpenAgent
 
 from .RichBoby import render_body
 
@@ -236,7 +236,7 @@ def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 text_format("notice", "standalone_header", "body")
 text_format("progress", "status_header", "prompt", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "ask")
+text_format("result", "status_header", "prompt", "body")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body")
 text_format("usage", "usage_header", "usage_body", "copy_button")

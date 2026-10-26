@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 from html.parser import HTMLParser
 
-from ....Settings import (
+from Settings import (
     ALLOWED_TAGS,
     VOID_TAGS,
     BLOCK_TAGS_FORBIDDEN_IN_CELLS,

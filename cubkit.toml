@@ -9,6 +9,8 @@ requires = ["aiohttp"]
 [bundle]
 source = "Src"
 entrypoint = "OpenAgentMain.py"
+sources = ["Settings.py"]
+packages = ["OpenAgentLib"]
 locales = "Locales"
 output = "Dist/OpenDebug.py"
 debug_output = "Dist/OpenDebug.py"

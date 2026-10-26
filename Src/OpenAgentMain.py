@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 # Standard library
+import ast
 import asyncio
 import html
 import time
 import uuid
+import json
 from typing import Any
 from urllib.parse import urlparse
 
@@ -34,7 +36,14 @@ from .Settings import (
     MODELS_PATH,
     PROGRESS_UPDATE_INTERVAL,
     CUSTOM_EMOJI,
+    RICH_HTML_RULES,
+    DEFAULT_CONTEXT_ENABLED,
+    DEFAULT_CONTEXT_SIZE,
+    MAX_CONTEXT_MESSAGES,
+    CONTEXT_RESET_ARGS,
 )
+# Text rendering
+from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
 
 
 class AgentError(Exception):
@@ -100,11 +109,24 @@ class OpenAgent(loader.ModuleBase):
             description=lambda self: self.strings("cfg_system_prompt"),
             validator=cfg.String(),
         ),
+        cfg.ConfigValue(
+            "context_enabled",
+            DEFAULT_CONTEXT_ENABLED,
+            description=lambda self: self.strings("cfg_context_enabled"),
+            validator=cfg.Boolean(),
+        ),
+        cfg.ConfigValue(
+            "context_size",
+            DEFAULT_CONTEXT_SIZE,
+            description=lambda self: self.strings("cfg_context_size"),
+            validator=cfg.Integer(min=1, max=MAX_CONTEXT_MESSAGES),
+        ),
     )
 
     _http: aiohttp.ClientSession | None = None
     _active_requests: dict[str, dict[str, Any]] = {}
     _models_cache: tuple[str, ...] = ()
+
 
     async def on_load(self) -> None:
         await super().on_load()
@@ -114,9 +136,8 @@ class OpenAgent(loader.ModuleBase):
 
         me = await self.client.get_me()
         if me.premium is False:
-
-            for key, html in CUSTOM_EMOJI.items():
-                CUSTOM_EMOJI[key] = tg_emoji_to_link(html)
+            for key, html_emoji in CUSTOM_EMOJI.items():
+                CUSTOM_EMOJI[key] = tg_emoji_to_link(html_emoji)
 
         # One shared session for all requests, closed in on_unload
         self._http = aiohttp.ClientSession()
@@ -130,6 +151,7 @@ class OpenAgent(loader.ModuleBase):
             await self._http.close()
             self._http = None
         await super().on_unload()
+
 
     async def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
@@ -164,12 +186,20 @@ class OpenAgent(loader.ModuleBase):
             )
         return body
 
-    async def _chat(self, prompt: str) -> str:
+    async def _chat(self, prompt: str, history: list[dict[str, str]]) -> str:
         """POST a chat completion request and return the reply text."""
         messages: list[dict[str, str]] = []
         system = str(self.config["system_prompt"]).strip()
         if system:
-            messages.append({"role": "system", "content": system})
+            messages.append({
+                "role": "system",
+                "content": (
+                    f'<rules>{RICH_HTML_RULES}</rules>'
+                    + "\nUser system prompt:\n<user-prompt>" + system + "</user-prompt>"
+                ),
+            })
+
+        messages.extend(history)
         messages.append({"role": "user", "content": prompt})
 
         data = await self._request(
@@ -209,6 +239,66 @@ class OpenAgent(loader.ModuleBase):
             return text
         return text[:MAX_REPLY_CHARS].rstrip() + "…"
 
+    async def _load_context(self, chat_id):
+        try:
+            raw = await self.db.db_get(self.name.lower(), f"ctx_{chat_id}")
+        except Exception as exc:
+            self.log.error("OpenAgent context load failed: %s", exc)
+            return []
+    
+        if raw is None:
+            return []
+            
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return []
+            try:
+                raw = json.loads(s)
+            except ValueError:
+                try:
+                    raw = ast.literal_eval(s)
+                except (ValueError, SyntaxError):
+                    self.log.error("OpenAgent ctx unparsable: %r", raw[:200])
+                    return []
+    
+        if not isinstance(raw, list):
+            return []
+
+        limit = int(self.config["context_size"]) * 2
+        out: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role in ("user", "assistant") and isinstance(content, str) and content:
+                out.append({"role": role, "content": content})
+        return out[-limit:]
+
+    async def _save_context(self, chat_id: int | str, history: list[dict[str, str]]) -> None:
+        try:
+            await self.db.db_set(self.name.lower(), f"ctx_{chat_id}", history)
+        except Exception as exc:
+            self.log.error("OpenAgent context save failed: %s", exc)
+
+    async def _clear_context(self, chat_id: int | str) -> int:
+        history = await self._load_context(chat_id)
+        removed = len(history)
+        if removed:
+            await self._save_context(chat_id, [])
+        return removed
+
+    async def _append_context(self, chat_id: int | str, prompt: str, answer: str) -> int:
+        history = await self._load_context(chat_id)
+        history.append({"role": "user", "content": prompt})
+        history.append({"role": "assistant", "content": answer})
+        limit = int(self.config["context_size"]) * 2
+        if len(history) > limit:
+            history = history[-limit:]
+        await self._save_context(chat_id, history)
+        return len(history) // 2
+
     def _provider_label(self) -> str:
         raw = str(self.config["base_url"]).strip()
         parsed = urlparse(raw)
@@ -218,70 +308,10 @@ class OpenAgent(loader.ModuleBase):
         return label
 
     def _header(self, state: dict[str, Any], kind: str) -> str:
-        elapsed = max(time.perf_counter() - state["start"], 0.0)
-        model = html.escape(str(state["model"]))
-        provider = html.escape(str(state["provider"]))
-
-        if kind == "running":
-            badges = [
-                f"<tg-pill style='success'>{model}</tg-pill>",
-                f"<tg-pill style='primary'>{provider}</tg-pill>",
-            ]
-        else:
-            if kind == "done":
-                style, label = "success", self.strings("status_done")
-            elif kind == "error":
-                style, label = "danger", self.strings("status_error")
-            else:
-                style, label = "danger", self.strings("status_cancelled")
-            badges = [
-                f"<tg-pill style='{style}'>{html.escape(label)}</tg-pill>",
-                f"<tg-pill style='primary'>{model}</tg-pill>",
-            ]
-
-        badges.append(f"<tg-pill style='primary'>⏱ {elapsed:.2f}s</tg-pill>")
-        return f"<p>{' '.join(badges)}</p>"
-
-    def _build_progress_text(self, state: dict[str, Any]) -> str:
-        return "\n".join(
-            [
-                self._header(state, "running"),
-                f"<blockquote>{CUSTOM_EMOJI['think']} "
-                f"<i>{html.escape(self.strings('thinking'))}</i></blockquote>",
-                state["cancel_tag"],
-            ]
-        )
-
-    def _build_result_text(
-        self, state: dict[str, Any], kind: str, text: str = ""
-    ) -> str:
-        if kind == "cancelled":
-            body = (
-                f"<blockquote>{html.escape(self.strings('cancelled_body'))}"
-                "</blockquote>"
-            )
-        elif text:
-            body = (
-                f"<blockquote expandable>{html.escape(self._clip(text))}"
-                "</blockquote>"
-            )
-        else:
-            body = (
-                f"<blockquote>{html.escape(self.strings('err_bad_reply'))}"
-                "</blockquote>"
-            )
-        return f"{self._header(state, kind)}\n{body}"
-
-    def _build_error_text(self, text: str) -> str:
-        model = html.escape(str(self.config["model"]))
-        return "\n".join(
-            [
-                f"<p><tg-pill style='danger'>"
-                f"{html.escape(self.strings('status_error'))}</tg-pill> "
-                f"<tg-pill style='primary'>{model}</tg-pill></p>",
-                f"<blockquote expandable>{html.escape(self._clip(text))}"
-                "</blockquote>",
-            ]
+        return render_text(
+            self,
+            "status_header",
+            RenderContext(state=state, kind=kind)
         )
 
     def _guest_mention(self) -> str:
@@ -290,50 +320,41 @@ class OpenAgent(loader.ModuleBase):
         )
         return f"@{username}" if username else "@bot"
 
-    def _build_usage_text(self) -> str:
-        mention = self._guest_mention()
-        model = html.escape(str(self.config["model"]))
-        command = html.escape(f"{mention} agent ", quote=True)
-        label = html.escape(self.strings("btn_copy_prompt"), quote=True)
-        return "\n".join(
-            [
-                f"<p><tg-pill style='success'>OpenAgent</tg-pill> <tg-pill style='primary'>{model}</tg-pill></p>",
-                f"<blockquote>{html.escape(self.strings('usage', mention=mention))}"
-                "</blockquote>",
-                "<tg-button-row align='left'>"
-                f"<tg-button type='copy_text' text='{command}' style='primary'>"
-                f"{label}</tg-button></tg-button-row>",
-            ]
+
+    def _build_progress_text(self, state: dict[str, Any]) -> str:
+        return render_text(
+            self,
+            "progress",
+            RenderContext(kind="running", state=state),
         )
+
+    def _build_result_text(
+        self, state: dict[str, Any], kind: str, text: str = "", message: typ.Message = None
+    ) -> str:
+        fmt = "cancelled" if kind == "cancelled" else "result"
+        return render_text(
+            self,
+            fmt,
+            RenderContext(kind=kind, text=text, copy_text=text, state=state, extra={"message": message}),
+        )
+
+    def _build_error_text(self, text: str) -> str:
+        return render_text(
+            self,
+            "error_standalone",
+            RenderContext(kind="error", text=text),
+        )
+
+    def _build_usage_text(self) -> str:
+        mention = agent._guest_mention()
+        command = html.escape(f"{mention} agent ", quote=True)
+        return render_text(self, "usage", RenderContext(copy_text=command, label=self.strings("btn_copy_prompt")))
 
     def _render_models(self, models: tuple[str, ...] | list[str]) -> str:
-        current = str(self.config["model"])
-        header = (
-            f"<p>{CUSTOM_EMOJI['bals']} "
-            f"<b>{html.escape(self.strings('models_title'))}</b> "
-            f"<tg-pill style='success'>{html.escape(current)}</tg-pill></p>"
-        )
-        if not models:
-            return (
-                f"{header}\n<blockquote>"
-                f"{html.escape(self.strings('models_empty'))}</blockquote>"
-            )
-
-        rows = []
-        for model in models:
-            selected = model == current
-            style = "success" if selected else "primary"
-            marker = CUSTOM_EMOJI["ok"] if selected else "•"
-            button = self.Button.rich.inline(
-                model,
-                self.on_change_model,
-                data=model,
-                style=style,
-                html_tag=True,
-            )
-            rows.append(f"{marker} {button}")
-        return "\n".join(
-            [header, "<blockquote expandable>", "<br>".join(rows), "</blockquote>"]
+        return render_text(
+            self,
+            "models",
+            RenderContext(extra={"models": list(models)}),
         )
 
     async def _build_models_text(self) -> str:
@@ -348,6 +369,7 @@ class OpenAgent(loader.ModuleBase):
 
         self._models_cache = tuple(list_models)
         return self._render_models(list_models)
+
 
     async def _edit_rich(self, message: Any, text: str) -> None:
         try:
@@ -370,6 +392,37 @@ class OpenAgent(loader.ModuleBase):
             except Exception as exc:
                 state["ui_alive"] = False
                 self.log.debug("OpenAgent progress update failed: %s", exc)
+
+
+    def _build_notice_text(
+        self, text: str, style: str = "primary", label: str | None = None
+    ) -> str:
+        return render_text(
+            self,
+            "notice",
+            RenderContext(
+                kind="notice",
+                text=text,
+                extra={"label": label or self.strings("status_done"), "style": style},
+            ),
+        )
+
+    async def _handle_context_reset(self, event: typ.Message) -> str:
+        chat_id = "global"
+        if chat_id is None:
+            return self._build_notice_text(
+                self.strings("err_context_no_chat"),
+                style="danger",
+                label=self.strings("status_error"),
+            )
+        removed = await self._clear_context(chat_id)
+        text = (
+            self.strings("context_cleared", count=removed)
+            if removed
+            else self.strings("context_empty")
+        )
+        return self._build_notice_text(text)
+
 
     @loader.callback()
     async def on_cancel_request(self, call: typ.InlineMessage, data=None) -> None:
@@ -406,8 +459,8 @@ class OpenAgent(loader.ModuleBase):
 
     @loader.guest_command(
         "agent",
-        doc_ru="<запрос> | models - спросить LLM или показать модели",
-        doc_en="<prompt> | models - ask the LLM or list models",
+        doc_ru="<запрос> | models | reset - спросить LLM, показать модели, очистить контекст",
+        doc_en="<prompt> | models | reset - ask the LLM, list models, clear context",
     )
     async def guest_cmd_agent(self, event: typ.Event) -> None:
         raw = event.guest_args
@@ -419,19 +472,21 @@ class OpenAgent(loader.ModuleBase):
             await event.reply_rich(await self._build_models_text())
             return
 
+        if raw.strip().lower() in CONTEXT_RESET_ARGS:
+            await event.reply_rich(await self._handle_context_reset(event))
+            return
+
         start = time.perf_counter()
         request_id = uuid.uuid4().hex
-        task = asyncio.create_task(self._chat(raw))
         ttl = int(self.config["timeout"]) + 60
         state: dict[str, Any] = {
-            "task": task,
             "start": start,
             "model": str(self.config["model"]),
             "provider": self._provider_label(),
             "cancelled": False,
             "ui_alive": True,
+            "prompt": raw,
         }
-
         try:
             cancel_button = self.Button.rich.inline(
                 self.strings("btn_cancel"),
@@ -442,10 +497,23 @@ class OpenAgent(loader.ModuleBase):
                 html_tag=True,
             )
             state["cancel_tag"] = (
-                "<tg-button-row>" f"{cancel_button}</tg-button-row>"
+                f"<tg-button-row>{cancel_button}</tg-button-row>"
             )
-            self._active_requests[request_id] = state
+
             message = await event.reply_rich(self._build_progress_text(state))
+
+            chat_id = "global"
+            context_enabled = (
+                chat_id is not None and bool(self.config["context_enabled"])
+            )
+
+            history = await self._load_context(chat_id) if context_enabled else []
+            task = asyncio.create_task(self._chat(raw, history))
+            state['context_count'] = len(history) // 2
+            state["task"] = task
+            self._active_requests[request_id] = state
+
+
         except BaseException:
             task.cancel()
             self._active_requests.pop(request_id, None)
@@ -464,7 +532,7 @@ class OpenAgent(loader.ModuleBase):
             await self._edit_rich(message, self._build_result_text(state, "cancelled"))
         except AgentError as exc:
             await self._edit_rich(
-                message, self._build_result_text(state, "error", str(exc))
+                message, self._build_result_text(state, "error", str(exc), message=message)
             )
         except Exception as exc:
             await self._edit_rich(
@@ -473,10 +541,15 @@ class OpenAgent(loader.ModuleBase):
                     state,
                     "error",
                     self.strings("err_unexpected", error=str(exc)),
+                    prompt=raw,
                 ),
             )
         else:
-            await self._edit_rich(message, self._build_result_text(state, "done", text))
+            if context_enabled:
+                state["context_count"] = await self._append_context(
+                    chat_id, raw, text
+                )
+            await self._edit_rich(message, self._build_result_text(state, "done", text, message=message))
         finally:
             self._active_requests.pop(request_id, None)
             if not task.done():

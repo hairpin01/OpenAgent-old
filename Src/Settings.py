@@ -18,7 +18,7 @@ CHAT_PATH = "/chat/completions"
 MODELS_PATH = "/models"
 
 # Limits
-MAX_REPLY_CHARS = 3500
+MAX_REPLY_CHARS = 6200
 MAX_MODELS_LISTED = 50
 MAX_DETAIL_CHARS = 200
 
@@ -28,8 +28,59 @@ PROGRESS_UPDATE_INTERVAL = 1
 # Sub-command that lists provider models with a GET request
 MODELS_ARG = "models"
 
+# Premium emoji
 CUSTOM_EMOJI = {
     "think": '<tg-emoji emoji-id="5352865883293267245">🎲</tg-emoji>',
     "ok": '<tg-emoji emoji-id="5350552124281368665">✅</tg-emoji>',
     "bals": '<tg-emoji emoji-id="5352830479877843657">🌐</tg-emoji>',
 }
+
+# Rich rules
+RICH_HTML_RULES = """
+Отвечай в HTML для Telegram Rich Messages.
+Используй только эти теги:
+- Абзацы: <p>...</p>
+- Заголовки: <h1>…</h1> … <h6>…</h6>
+- Инлайн: <b>, <i>, <u>, <s>, <code>, <mark>, <sub>, <sup>, <tg-spoiler>
+- Ссылки: <a href="https://...">текст</a>
+- Цитаты: <blockquote>…<cite>Автор</cite></blockquote> (или <blockquote expandable>)
+- Код: <pre><code class="language-python">…</code></pre>
+- Списки: <ul><li>…</li></ul> или <ol><li>…</li></ol>
+- Футер: <footer>…</footer>, разделитель: <hr/>
+- Таблицы: <table bordered striped>…</table>
+  Внутри: <caption>, <thead>, <tbody>, <tr>, <th>, <td>.
+  В ячейках — только inline-теги (<b>, <i>, <code>, <a>, <mark> и т.п.).
+  Не используй внутри ячеек <p>, <pre>, <blockquote>, <ul>, <ol>.
+  Максимум 20 колонок.
+- Эмодзи: <tg-emoji emoji-id="...">😀</tg-emoji> (не знаешь emoji-id? — не пишешь)
+- Время: <tg-time unix="..." format="wDT">...</tg-time>
+- Формулы: <tg-math>x^2</tg-math>
+Не используй Markdown. Не добавляй <html> или <body>. Только фрагмент.
+"""
+
+# HTML rules for RichBoby
+ALLOWED_TAGS = {
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "blockquote", "cite", "pre", "footer", "hr",
+    "ul", "ol", "li", "details", "summary", "aside",
+    "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+    "code", "mark", "sub", "sup", "tg-spoiler",
+    "a", "tg-emoji", "tg-time", "tg-math", "img",
+    "table", "caption", "thead", "tbody", "tfoot",
+    "tr", "th", "td",
+}
+
+VOID_TAGS = {"hr", "img"}
+
+BLOCK_TAGS_FORBIDDEN_IN_CELLS = {
+    "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "blockquote", "pre", "footer", "hr",
+    "ul", "ol", "li", "details", "summary", "aside",
+    "table", "tr", "td", "th",
+}
+
+# Context
+DEFAULT_CONTEXT_ENABLED = True
+DEFAULT_CONTEXT_SIZE = 10
+MAX_CONTEXT_MESSAGES = 50
+CONTEXT_RESET_ARGS = ("reset", "clear", "forget")

@@ -29,6 +29,7 @@ from .Settings import (
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT,
+    DEFAULT_TOOL_RULES_ENABLED,
     DEFAULT_TOOL_TIMEOUT,
     MAX_DETAIL_CHARS,
     MAX_MODELS_LISTED,
@@ -39,6 +40,7 @@ from .Settings import (
     PROGRESS_UPDATE_INTERVAL,
     CUSTOM_EMOJI,
     RICH_HTML_RULES,
+    TOOL_RULES,
     DEFAULT_CONTEXT_ENABLED,
     DEFAULT_CONTEXT_SIZE,
     MAX_CONTEXT_MESSAGES,
@@ -132,6 +134,12 @@ class OpenAgent(loader.ModuleBase):
             description=lambda self: self.strings("cfg_context_size"),
             validator=cfg.Integer(min=1, max=MAX_CONTEXT_MESSAGES),
         ),
+        cfg.ConfigValue(
+            "tool_rules",
+            DEFAULT_TOOL_RULES_ENABLED,
+            description=lambda self: self.strings("cfg_tool_rules"),
+            validator=cfg.Boolean(),
+        ),
     )
 
     _http: aiohttp.ClientSession | None = None
@@ -207,10 +215,16 @@ class OpenAgent(loader.ModuleBase):
         messages: list[dict[str, Any]] = []
         system = str(self.config["system_prompt"]).strip()
         if system:
+            rules = f"<rules>{RICH_HTML_RULES}</rules>"
+            if self.config["tool_rules"] and self._tools:
+                listing = "\n".join(
+                    f"- {tool.name}: {tool.description}" for tool in self._tools
+                )
+                rules += f"\n<tool-rules>{TOOL_RULES.format(tools=listing)}</tool-rules>"
             messages.append({
                 "role": "system",
                 "content": (
-                    f'<rules>{RICH_HTML_RULES}</rules>'
+                    rules
                     + "\nUser system prompt:\n<user-prompt>" + system + "</user-prompt>"
                 ),
             })
@@ -256,6 +270,7 @@ class OpenAgent(loader.ModuleBase):
             http=self._http,
             event=event,
             chat_id=chat_id,
+            tools=self._tools,
         )
 
         for step in range(MAX_TOOL_ITERATIONS):

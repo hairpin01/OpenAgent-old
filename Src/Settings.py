@@ -12,6 +12,7 @@ DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TIMEOUT = 60
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+DEFAULT_TOOL_RULES_ENABLED = True
 
 # Provider endpoints, relative to base_url (OpenAI compatible)
 CHAT_PATH = "/chat/completions"
@@ -61,6 +62,17 @@ RICH_HTML_RULES = """
 - Время: <tg-time unix="..." format="wDT">...</tg-time>
 - Формулы: <tg-math>x^2</tg-math>
 Не используй Markdown. Не добавляй <html> или <body>. Только фрагмент.
+"""
+
+# Tool rules, appended to the system prompt when tool_rules is enabled
+TOOL_RULES = """
+У тебя есть инструменты (tools). Вызывай их, когда они нужны для ответа.
+Не выдумывай результат инструмента и не вызывай несуществующие инструменты.
+Аргументы передавай JSON-объектом строго по схеме инструмента.
+Не уверен в аргументах — сначала вызови help_tool с именем инструмента.
+Если инструмент вернул {{"ok": false}}, исправь аргументы или объясни ошибку.
+Доступные инструменты:
+{tools}
 """
 
 # HTML rules for RichBoby

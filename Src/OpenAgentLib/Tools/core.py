@@ -46,6 +46,7 @@ class ToolContext:
     http: Any = None
     event: Any = None
     chat_id: int | str | None = None
+    tools: list[Tool] | None = None
 
 
 def load_tools(logger: logging.Logger | None = None) -> list[Tool]:

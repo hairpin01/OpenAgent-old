@@ -94,6 +94,13 @@ def _header(agent: "OpenAgent", ctx: RenderContext) -> str | None:
             f"<tg-pill style='primary'>{model}</tg-pill>",
         ]
 
+    tool = str(state.get("tool") or "")
+    tool_calls = int(state.get("tool_calls") or 0)
+    if tool:
+        badges.append(f"<tg-pill style='primary'>🔧 {html.escape(tool)}</tg-pill>")
+    elif tool_calls:
+        badges.append(f"<tg-pill style='primary'>🔧 {tool_calls}</tg-pill>")
+
     ctx_count = int(state.get("context_count") or 0)
     badges.append(f"<tg-pill style='primary'>🧠 {ctx_count}/{agent.config.get('context_size')}</tg-pill>")
 
@@ -121,10 +128,31 @@ def _usage_header(agent: "OpenAgent", ctx: RenderContext) -> str:
     )
 
 
+STICK_FRAMES = ('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+STICK_FRAME_SECONDS = 0.15
+
+
+def stick_frame(elapsed: float) -> str:
+    """Return a stick-spinner frame for ``elapsed`` seconds."""
+
+    index = int(max(elapsed, 0.0) / STICK_FRAME_SECONDS) % len(STICK_FRAMES)
+    return STICK_FRAMES[index]
+
+
+@text_module("stick_animation")
+def _stick_animation(agent: "OpenAgent", ctx: RenderContext) -> str:
+    """Render one frame of the rotating stick animation."""
+
+    start = (ctx.state or {}).get("start")
+    now = time.perf_counter()
+    elapsed = now - float(start) if start is not None else now
+    return f"<tg-pill style='primary'>{html.escape(stick_frame(elapsed))}</tg-pill>"
+
+
 @text_module("thinking")
 def _thinking(agent: "OpenAgent", ctx: RenderContext) -> str:
     return (
-        f"<blockquote>{CUSTOM_EMOJI['think']} "
+        f"<blockquote><b>{_stick_animation(agent, ctx)}</b> "
         f"<i>{html.escape(agent.strings('thinking'))}</i></blockquote>"
     )
 

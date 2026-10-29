@@ -29,9 +29,11 @@ from .Settings import (
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT,
+    DEFAULT_TOOL_TIMEOUT,
     MAX_DETAIL_CHARS,
     MAX_MODELS_LISTED,
     MAX_REPLY_CHARS,
+    MAX_TOOL_ITERATIONS,
     MODELS_ARG,
     MODELS_PATH,
     PROGRESS_UPDATE_INTERVAL,
@@ -41,6 +43,15 @@ from .Settings import (
     DEFAULT_CONTEXT_SIZE,
     MAX_CONTEXT_MESSAGES,
     CONTEXT_RESET_ARGS,
+)
+
+# Tools
+from .OpenAgentLib.Tools import (
+    Tool,
+    ToolContext,
+    call_tool,
+    load_tools,
+    tool_schemas,
 )
 # Text rendering
 from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
@@ -126,6 +137,7 @@ class OpenAgent(loader.ModuleBase):
     _http: aiohttp.ClientSession | None = None
     _active_requests: dict[str, dict[str, Any]] = {}
     _models_cache: tuple[str, ...] = ()
+    _tools: list[Tool] = []
 
 
     async def on_load(self) -> None:
@@ -133,6 +145,8 @@ class OpenAgent(loader.ModuleBase):
 
         self._active_requests = {}
         self._models_cache = ()
+        self._tools = load_tools(self.log)
+        self.log.debug("OpenAgent tools loaded: %s", len(self._tools))
 
         me = await self.client.get_me()
         if me.premium is False:
@@ -146,6 +160,7 @@ class OpenAgent(loader.ModuleBase):
         for state in self._active_requests.values():
             state["task"].cancel()
         self._active_requests.clear()
+        self._tools = []
 
         if self._http is not None:
             await self._http.close()
@@ -186,9 +201,10 @@ class OpenAgent(loader.ModuleBase):
             )
         return body
 
-    async def _chat(self, prompt: str, history: list[dict[str, str]]) -> str:
-        """POST a chat completion request and return the reply text."""
-        messages: list[dict[str, str]] = []
+    def _build_messages(
+        self, prompt: str, history: list[dict[str, str]]
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
         system = str(self.config["system_prompt"]).strip()
         if system:
             messages.append({
@@ -201,23 +217,102 @@ class OpenAgent(loader.ModuleBase):
 
         messages.extend(history)
         messages.append({"role": "user", "content": prompt})
+        return messages
 
-        data = await self._request(
-            "POST",
-            CHAT_PATH,
-            {
-                "model": str(self.config["model"]),
-                "messages": messages,
-                "temperature": float(self.config["temperature"]),
-            },
-        )
+    async def _chat_request(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": str(self.config["model"]),
+            "messages": messages,
+            "temperature": float(self.config["temperature"]),
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        data = await self._request("POST", CHAT_PATH, payload)
         try:
-            content = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError):
             raise AgentError(self.strings("err_bad_reply")) from None
-        if not isinstance(content, str) or not content.strip():
+        if not isinstance(message, dict):
             raise AgentError(self.strings("err_bad_reply"))
-        return content.strip()
+        return message
+
+    async def _chat_with_tools(
+        self,
+        prompt: str,
+        history: list[dict[str, str]],
+        state: dict[str, Any],
+        message: Any,
+        event: typ.Event,
+        chat_id: int | str,
+    ) -> str:
+        messages = self._build_messages(prompt, history)
+        tools = tool_schemas(self._tools)
+        context = ToolContext(
+            logger=self.log,
+            http=self._http,
+            event=event,
+            chat_id=chat_id,
+        )
+
+        for step in range(MAX_TOOL_ITERATIONS):
+            response = await self._chat_request(messages, tools)
+            calls = response.get("tool_calls") or []
+            if not calls:
+                content = response.get("content")
+                if not isinstance(content, str) or not content.strip():
+                    raise AgentError(self.strings("err_bad_reply"))
+                return content.strip()
+
+            messages.append({
+                "role": "assistant",
+                "content": response.get("content") or "",
+                "tool_calls": calls,
+            })
+
+            for index, call in enumerate(calls):
+                function = call.get("function") or {}
+                name = str(function.get("name") or "")
+                raw_arguments = function.get("arguments") or "{}"
+                state["tool_calls"] = int(state.get("tool_calls") or 0) + 1
+
+                if isinstance(raw_arguments, str):
+                    try:
+                        arguments = json.loads(raw_arguments)
+                    except (TypeError, ValueError):
+                        arguments = None
+                else:
+                    arguments = raw_arguments
+
+                if not isinstance(arguments, dict):
+                    result = json.dumps(
+                        {"ok": False, "error": "tool arguments must be a JSON object"},
+                        ensure_ascii=False,
+                    )
+                else:
+                    state["tool"] = name
+                    await self._edit_rich(message, self._build_progress_text(state))
+                    if DEBUG:
+                        self.log.debug("tool call %s: %s", name, arguments)
+                    result = await call_tool(
+                        self._tools,
+                        name,
+                        arguments,
+                        context,
+                        timeout=DEFAULT_TOOL_TIMEOUT,
+                    )
+                    state["tool"] = ""
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"call_{step}_{index}",
+                    "content": result,
+                })
+
+        raise AgentError(self.strings("err_tool_limit"))
 
     async def _models(self) -> list[str]:
         """GET the model list and return it as plain text."""
@@ -486,6 +581,8 @@ class OpenAgent(loader.ModuleBase):
             "cancelled": False,
             "ui_alive": True,
             "prompt": raw,
+            "tool": "",
+            "tool_calls": 0,
         }
         try:
             cancel_button = self.Button.rich.inline(
@@ -508,7 +605,9 @@ class OpenAgent(loader.ModuleBase):
             )
 
             history = await self._load_context(chat_id) if context_enabled else []
-            task = asyncio.create_task(self._chat(raw, history))
+            task = asyncio.create_task(
+                self._chat_with_tools(raw, history, state, message, event, chat_id)
+            )
             state['context_count'] = len(history) // 2
             state["task"] = task
             self._active_requests[request_id] = state

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Build marker. Rewritten by Scripts/configure_build_profile.py
 # (debug / release). Keep exactly one such line in this file.
-DEBUG = False
+DEBUG = True
 
 # Default values for the user config (ModuleConfig)
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -22,8 +22,13 @@ MAX_REPLY_CHARS = 6200
 MAX_MODELS_LISTED = 50
 MAX_DETAIL_CHARS = 200
 
+# Tools
+MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_OUTPUT_CHARS = 8000
+DEFAULT_TOOL_TIMEOUT = 20
+
 # Seconds between rich-message progress refreshes while a request is running
-PROGRESS_UPDATE_INTERVAL = 1
+PROGRESS_UPDATE_INTERVAL = 0.8
 
 # Sub-command that lists provider models with a GET request
 MODELS_ARG = "models"

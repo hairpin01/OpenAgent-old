@@ -45,6 +45,7 @@ from .Settings import (
     DEFAULT_CONTEXT_SIZE,
     MAX_CONTEXT_MESSAGES,
     CONTEXT_RESET_ARGS,
+    CHAT_ID,
 )
 
 # Tools
@@ -85,6 +86,7 @@ class OpenAgent(loader.ModuleBase):
 
     strings = load_strings()
 
+    # User config
     config = cfg.ModuleConfig(
         cfg.ConfigValue(
             "api_key",
@@ -460,7 +462,7 @@ class OpenAgent(loader.ModuleBase):
         )
 
     def _build_usage_text(self) -> str:
-        mention = agent._guest_mention()
+        mention = self._guest_mention()
         command = html.escape(f"{mention} agent ", quote=True)
         return render_text(self, "usage", RenderContext(copy_text=command, label=self.strings("btn_copy_prompt")))
 
@@ -618,7 +620,7 @@ class OpenAgent(loader.ModuleBase):
 
             message = await event.reply_rich(self._build_progress_text(state))
 
-            chat_id = "global"
+            chat_id = CHAT_ID
             context_enabled = (
                 chat_id is not None and bool(self.config["context_enabled"])
             )
@@ -659,7 +661,6 @@ class OpenAgent(loader.ModuleBase):
                     state,
                     "error",
                     self.strings("err_unexpected", error=str(exc)),
-                    prompt=raw,
                 ),
             )
         else:

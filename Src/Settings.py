@@ -6,6 +6,9 @@ from __future__ import annotations
 # (debug / release). Keep exactly one such line in this file.
 DEBUG = True
 
+# Context chat
+CHAT_ID = 'global'
+
 # Default values for the user config (ModuleConfig)
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"

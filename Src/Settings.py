@@ -28,6 +28,10 @@ MAX_TOOL_ITERATIONS = 6
 MAX_TOOL_OUTPUT_CHARS = 8000
 DEFAULT_TOOL_TIMEOUT = 20
 
+# File tools work only inside this directory (relative to the bot working dir)
+TOOL_WORKSPACE_DIR = "openagent_workspace"
+MAX_FILE_BYTES = 200000
+
 # Seconds between rich-message progress refreshes while a request is running
 PROGRESS_UPDATE_INTERVAL = 0.8
 
@@ -70,6 +74,7 @@ TOOL_RULES = """
 Не выдумывай результат инструмента и не вызывай несуществующие инструменты.
 Аргументы передавай JSON-объектом строго по схеме инструмента.
 Не уверен в аргументах — сначала вызови help_tool с именем инструмента.
+Перед правкой файла прочитай его через read_file, итог правок смотри через diff.
 Если инструмент вернул {{"ok": false}}, исправь аргументы или объясни ошибку.
 Доступные инструменты:
 {tools}

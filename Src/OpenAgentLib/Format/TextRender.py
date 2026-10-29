@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from OpenAgentMain import OpenAgent
 
 from .RichBoby import render_body
+from ..Tools.workspace import make_diff
 
 @dataclass
 class RenderContext:
@@ -56,9 +57,17 @@ def text_format(name: str, *modules: str) -> None:
 def render(agent: "OpenAgent", format_name: str, ctx: RenderContext) -> str:
     """Render ``format_name`` by joining non-empty module chunks."""
 
+    chain = [(name, None) for name in TEXT_FORMATS.get(format_name, ())]
+    # Modules added by tools for this request only (see ToolContext.add_module)
+    extra = ((ctx.state or {}).get("ui") or {}).get(format_name, ())
+    for after, name, fn in extra:
+        names = [item[0] for item in chain]
+        index = names.index(after) + 1 if after in names else len(chain)
+        chain.insert(index, (name, fn))
+
     parts: list[str] = []
-    for module_name in TEXT_FORMATS.get(format_name, ()):
-        module = TEXT_MODULES.get(module_name)
+    for module_name, fn in chain:
+        module = fn or TEXT_MODULES.get(module_name)
         if module is None:
             continue
         chunk = module(agent, ctx)
@@ -232,6 +241,21 @@ def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
 @text_module("prompt")
 def _prompt(agent: "OpenAgent", ctx: RenderContext) -> str:
     return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(ctx.state["prompt"]))}</details>"""
+
+@text_module("diffs")
+def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """One collapsible diff per file changed by the file tools."""
+    blocks = []
+    for name, change in ((ctx.state or {}).get("changes") or {}).items():
+        diff = make_diff(name, change["old"], change["new"])
+        if diff:
+            blocks.append(
+                f"<details><summary>Diff: {html.escape(name)} file</summary>"
+                f"<pre><code class=\"language-diff\">{html.escape(diff)}</code></pre>"
+                "</details>"
+            )
+    return "\n".join(blocks) or None
+
 
 @text_module("ask")
 def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:

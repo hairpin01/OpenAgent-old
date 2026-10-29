@@ -6,7 +6,7 @@ import json
 import logging
 import pkgutil
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from Settings import DEFAULT_TOOL_TIMEOUT, MAX_TOOL_OUTPUT_CHARS
@@ -47,6 +47,25 @@ class ToolContext:
     event: Any = None
     chat_id: int | str | None = None
     tools: list[Tool] | None = None
+    state: dict[str, Any] = field(default_factory=dict)  # active request state
+
+    def add_module(
+        self,
+        format_name: str,
+        module: str,
+        fn: Callable[..., str | None] | None = None,
+        *,
+        after: str | None = None,
+    ) -> None:
+        """Add a text module to ``format_name`` for the current request only.
+
+        ``fn`` is optional: without it the module is taken from TEXT_MODULES.
+        The module is placed after ``after``, or at the end of the format.
+        """
+        entries = self.state.setdefault("ui", {}).setdefault(format_name, [])
+        if any(item[1] == module for item in entries):
+            return
+        entries.append((after, module, fn))
 
 
 def load_tools(logger: logging.Logger | None = None) -> list[Tool]:

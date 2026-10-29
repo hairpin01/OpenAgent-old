@@ -271,6 +271,7 @@ class OpenAgent(loader.ModuleBase):
             event=event,
             chat_id=chat_id,
             tools=self._tools,
+            state=state,
         )
 
         for step in range(MAX_TOOL_ITERATIONS):

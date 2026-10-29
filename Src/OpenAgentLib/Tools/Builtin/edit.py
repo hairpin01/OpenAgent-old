@@ -46,7 +46,7 @@ TOOL = Tool(
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "File path inside the workspace."},
+            "path": {"type": "string", "description": "File path (relative to the bot working dir or absolute)."},
             "old_strings": {
                 "type": "array",
                 "items": {"type": "string"},

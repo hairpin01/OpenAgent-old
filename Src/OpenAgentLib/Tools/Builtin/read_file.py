@@ -15,11 +15,11 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
 
 TOOL = Tool(
     name="read_file",
-    description="Read a text file from the workspace, optionally a range of lines.",
+    description="Read a text file, optionally a range of lines.",
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "File path inside the workspace."},
+            "path": {"type": "string", "description": "File path (relative to the bot working dir or absolute)."},
             "start_line": {"type": "integer", "description": "First line, 1-based."},
             "end_line": {"type": "integer", "description": "Last line, inclusive."},
         },

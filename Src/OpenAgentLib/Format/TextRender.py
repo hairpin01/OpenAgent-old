@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from .RichBoby import render_body
 from ..Tools.workspace import make_diff
+from ...Settings import TOOL_LOG_JSON_CHARS
 
 @dataclass
 class RenderContext:
@@ -242,6 +243,21 @@ def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
 def _prompt(agent: "OpenAgent", ctx: RenderContext) -> str:
     return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(ctx.state["prompt"]))}</details>"""
 
+@text_module("tool_log")
+def _tool_log(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """Collapsible list of the tool calls made during the request."""
+    rows = []
+    for item in (ctx.state or {}).get("tool_log") or []:
+        data = str(item["args"]).replace("\n", " ")
+        if len(data) > TOOL_LOG_JSON_CHARS:
+            data = data[:TOOL_LOG_JSON_CHARS] + "…"
+        rows.append(f"<b>{html.escape(item['name'])}:</b> {html.escape(data)}")
+    if not rows:
+        return None
+    title = html.escape(agent.strings("tool_calls_title"))
+    return f"<details><summary>{title}</summary>{'<br>'.join(rows)}</details>"
+
+
 @text_module("diffs")
 def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     """One collapsible diff per file changed by the file tools."""
@@ -287,8 +303,8 @@ def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body")
+text_format("progress", "status_header", "prompt", "tool_log", "thinking", "cancel_button")
+text_format("result", "status_header", "prompt", "tool_log", "body")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body")
 text_format("usage", "usage_header", "usage_body", "copy_button")

@@ -2,6 +2,7 @@ usage: "Usage: {mention} agent <prompt> | {mention} agent models | {mention} age
 thinking: "Thinking..."
 models_title: "Available models:"
 prompt: "Prompt"
+tool_calls_title: "Tool calls"
 models_empty: "The provider returned no models."
 status_done: "Done"
 status_error: "Error"

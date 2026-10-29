@@ -2,6 +2,7 @@ usage: "Использование: {mention} agent <запрос> | {mention} a
 thinking: "Думаю..."
 models_title: "Доступные модели:"
 prompt: "Промпт"
+tool_calls_title: "Вызовы инструментов"
 models_empty: "Провайдер не вернул ни одной модели."
 status_done: "Готово"
 status_error: "Ошибка"

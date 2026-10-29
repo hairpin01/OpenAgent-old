@@ -20,6 +20,7 @@ class Tool:
     description: str
     parameters: dict[str, Any]
     handler: ToolHandler
+    timeout: float | None = None  # overrides DEFAULT_TOOL_TIMEOUT for this tool
 
     def __post_init__(self) -> None:
         if (
@@ -38,6 +39,8 @@ class Tool:
             raise ValueError(f"{self.name}: parameters must be an object schema")
         if not callable(self.handler):
             raise ValueError(f"{self.name}: handler must be callable")
+        if self.timeout is not None and self.timeout <= 0:
+            raise ValueError(f"{self.name}: timeout must be positive")
 
 
 @dataclass(slots=True)
@@ -139,13 +142,14 @@ async def call_tool(
             {"ok": False, "error": f"unknown tool: {name}"}, ensure_ascii=False
         )
 
+    limit = tool.timeout if tool.timeout is not None else timeout
     try:
         result = await asyncio.wait_for(
-            tool.handler(context, arguments), timeout=timeout
+            tool.handler(context, arguments), timeout=limit
         )
     except asyncio.TimeoutError:
         return json.dumps(
-            {"ok": False, "error": f"tool timed out after {timeout}s"},
+            {"ok": False, "error": f"tool timed out after {limit}s"},
             ensure_ascii=False,
         )
     except Exception as exc:

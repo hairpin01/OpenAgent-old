@@ -310,6 +310,9 @@ class OpenAgent(loader.ModuleBase):
                     )
                 else:
                     state["tool"] = name
+                    state.setdefault("tool_log", []).append(
+                        {"name": name, "args": json.dumps(arguments, ensure_ascii=False)}
+                    )
                     await self._edit_rich(message, self._build_progress_text(state))
                     if DEBUG:
                         self.log.debug("tool call %s: %s", name, arguments)

@@ -641,7 +641,7 @@ class OpenAgent(loader.ModuleBase):
             "prompt": raw,
             "tool": "",
             "tool_calls": 0,
-            "user_id": call.message.sender_id,
+            "user_id": event.message.sender_id,
         }
         try:
             cancel_button = self.Button.rich.inline(

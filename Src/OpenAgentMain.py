@@ -665,10 +665,10 @@ class OpenAgent(loader.ModuleBase):
 
             history = await self._load_context(chat_id) if context_enabled else []
             state['context_count'] = len(history) // 2
-            state["task"] = task
             task = asyncio.create_task(
                 self._chat_with_tools(raw, history, state, message, event, chat_id)
             )
+            state["task"] = task
             self._active_requests[request_id] = state
 
 

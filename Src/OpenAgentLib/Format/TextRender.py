@@ -251,23 +251,25 @@ def _log_clip(text: object, limit: int) -> str:
 
 @text_module("tool_log")
 def _tool_log(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    """Tree of the tool calls made during the request, with status and output."""
-    lines: list[str] = []
+    """Tool calls made during the request: status pill, args and output."""
+    rows: list[str] = []
     for item in (ctx.state or {}).get("tool_log") or []:
-        name = html.escape(item["name"])
+        name = f"<b>{html.escape(item['name'])}</b>"
         if item.get("status", "run") == "run":
             elapsed = max(time.perf_counter() - item.get("start", 0.0), 0.0)
-            lines.append(f"{name}: [RUN] {elapsed:.1f}s")
+            pill = f"<tg-pill style='primary'>{stick_frame(elapsed)} {elapsed:.1f}s</tg-pill>"
+            rows.append(f"{pill} {name}")
             continue
-        tag = "OK" if item["status"] == "ok" else "ERR"
-        lines.append(f"{name}: {html.escape(_log_clip(item['args'], TOOL_LOG_JSON_CHARS))}")
-        lines.append(f"[{tag}] {html.escape(_log_clip(item.get('result', ''), TOOL_LOG_OUTPUT_CHARS))}")
-    if not lines:
+        ok = item["status"] == "ok"
+        pill = f"<tg-pill style='{'success' if ok else 'danger'}'>{'OK' if ok else 'ERR'}</tg-pill>"
+        args = html.escape(_log_clip(item["args"], TOOL_LOG_JSON_CHARS))
+        out = html.escape(_log_clip(item.get("result", ""), TOOL_LOG_OUTPUT_CHARS))
+        rows.append(f"{pill} {name} <code>{args}</code>")
+        rows.append(f"↳ <code>{out}</code>")
+    if not rows:
         return None
-    last = len(lines) - 1
-    rows = [("└" if i == last else "├") + line for i, line in enumerate(lines)]
     title = html.escape(agent.strings("tool_calls_title"))
-    return f"<blockquote><cite>{title}</cite><br>{'<br>'.join(rows)}</blockquote>"
+    return f"<blockquote expandable><cite>{title}</cite><br>{'<br>'.join(rows)}</blockquote>"
 
 
 @text_module("diffs")

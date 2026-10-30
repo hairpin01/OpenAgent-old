@@ -542,6 +542,9 @@ class OpenAgent(loader.ModuleBase):
 
     @loader.callback()
     async def on_cancel_request(self, call: typ.InlineMessage, data=None) -> None:
+        if not call.sender_id == self.kernel.ADMIN_ID:
+            return
+
         state = self._active_requests.get(data) if data else None
         if state is None or state["task"].done():
             await call.answer(self.strings("already_finished"))
@@ -552,6 +555,9 @@ class OpenAgent(loader.ModuleBase):
 
     @loader.callback()
     async def on_change_model(self, call: typ.InlineMessage, data=None) -> None:
+        if not call.sender_id == self.kernel.ADMIN_ID:
+            return
+
         if not data:
             return
 
@@ -604,6 +610,7 @@ class OpenAgent(loader.ModuleBase):
             "prompt": raw,
             "tool": "",
             "tool_calls": 0,
+            "user_id": call.message.sender_id,
         }
         try:
             cancel_button = self.Button.rich.inline(
@@ -626,11 +633,11 @@ class OpenAgent(loader.ModuleBase):
             )
 
             history = await self._load_context(chat_id) if context_enabled else []
+            state['context_count'] = len(history) // 2
+            state["task"] = task
             task = asyncio.create_task(
                 self._chat_with_tools(raw, history, state, message, event, chat_id)
             )
-            state['context_count'] = len(history) // 2
-            state["task"] = task
             self._active_requests[request_id] = state
 
 

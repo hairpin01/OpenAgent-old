@@ -310,7 +310,7 @@ class OpenAgent(loader.ModuleBase):
                         {"ok": False, "error": "tool arguments must be a JSON object"},
                         ensure_ascii=False,
                     )
-                    state.setdefault("tool_log", []).append(
+                    state.setdefault("tool_bar", []).append(
                         {
                             "name": name,
                             "args": str(raw_arguments),
@@ -326,7 +326,7 @@ class OpenAgent(loader.ModuleBase):
                         "status": "run",
                         "start": time.perf_counter(),
                     }
-                    state.setdefault("tool_log", []).append(entry)
+                    state.setdefault("tool_bar", []).append(entry)
                     await self._edit_rich(message, self._build_progress_text(state))
                     if DEBUG:
                         self.log.debug("tool call %s: %s", name, arguments)
@@ -583,6 +583,13 @@ class OpenAgent(loader.ModuleBase):
         state["cancelled"] = True
         state["task"].cancel()
         await call.answer(self.strings("cancelling"))
+
+    @loader.callback()
+    async def on_tool_args(self, call: typ.InlineMessage, data=None) -> None:
+        if not call.sender_id == self.kernel.ADMIN_ID:
+            return
+
+        await call.answer(str(data or ""))
 
     @loader.callback()
     async def on_change_model(self, call: typ.InlineMessage, data=None) -> None:

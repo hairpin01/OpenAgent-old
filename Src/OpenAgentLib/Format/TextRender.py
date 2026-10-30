@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 from .RichBoby import render_body
 from ..Tools.workspace import make_diff
-from ...Settings import TOOL_LOG_JSON_CHARS, TOOL_LOG_OUTPUT_CHARS
+from ...Settings import MAX_DETAIL_CHARS, TOOL_BAR_TTL
 
 @dataclass
 class RenderContext:
@@ -243,31 +243,39 @@ def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
 def _prompt(agent: "OpenAgent", ctx: RenderContext) -> str:
     return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(ctx.state["prompt"]))}</details>"""
 
-def _log_clip(text: object, limit: int) -> str:
+def _bar_clip(text: object, limit: int) -> str:
     """Flatten ``text`` to one line and cut it to ``limit`` chars."""
     flat = str(text).replace("\n", " ")
     return flat[:limit] + "…" if len(flat) > limit else flat
 
 
-@text_module("tool_log")
-def _tool_log(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    """Tree of the tool calls made during the request, with status and output."""
-    lines: list[str] = []
-    for item in (ctx.state or {}).get("tool_log") or []:
-        name = html.escape(item["name"])
+@text_module("tool_bar")
+def _tool_bar(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """One line of pills, one per tool call; a finished pill shows its args on tap."""
+    pills: list[str] = []
+    for item in (ctx.state or {}).get("tool_bar") or []:
+        name = item["name"]
         if item.get("status", "run") == "run":
             elapsed = max(time.perf_counter() - item.get("start", 0.0), 0.0)
-            lines.append(f"{name}: [RUN] {elapsed:.1f}s")
+            pills.append(
+                f"<tg-pill style='primary'>{stick_frame(elapsed)} {elapsed:.1f}s "
+                f"{html.escape(name)}</tg-pill>"
+            )
             continue
-        tag = "OK" if item["status"] == "ok" else "ERR"
-        lines.append(f"{name}: {html.escape(_log_clip(item['args'], TOOL_LOG_JSON_CHARS))}")
-        lines.append(f"[{tag}] {html.escape(_log_clip(item.get('result', ''), TOOL_LOG_OUTPUT_CHARS))}")
-    if not lines:
+        if "button" not in item:
+            # Built once: every render would otherwise register a new callback
+            item["button"] = agent.Button.rich.inline(
+                name,
+                agent.on_tool_args,
+                data=_bar_clip(f"{name}: {item['args']}", MAX_DETAIL_CHARS),
+                style="success" if item["status"] == "ok" else "danger",
+                ttl=TOOL_BAR_TTL,
+                html_tag=True,
+            )
+        pills.append(item["button"])
+    if not pills:
         return None
-    last = len(lines) - 1
-    rows = [("└" if i == last else "├") + line for i, line in enumerate(lines)]
-    title = html.escape(agent.strings("tool_calls_title"))
-    return f"<blockquote><cite>{title}</cite><br>{'<br>'.join(rows)}</blockquote>"
+    return f"<blockquote><p>{' &gt; '.join(pills)}</p></blockquote>"
 
 
 @text_module("diffs")
@@ -315,8 +323,8 @@ def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "tool_log", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "tool_log", "body")
+text_format("progress", "status_header", "prompt", "tool_bar", "thinking", "cancel_button")
+text_format("result", "status_header", "prompt", "body", "tool_bar")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body")
 text_format("usage", "usage_header", "usage_body", "copy_button")

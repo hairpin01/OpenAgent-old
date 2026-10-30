@@ -310,21 +310,43 @@ class OpenAgent(loader.ModuleBase):
                         {"ok": False, "error": "tool arguments must be a JSON object"},
                         ensure_ascii=False,
                     )
+                    state.setdefault("tool_log", []).append(
+                        {
+                            "name": name,
+                            "args": str(raw_arguments),
+                            "status": "err",
+                            "result": result,
+                        }
+                    )
                 else:
                     state["tool"] = name
-                    state.setdefault("tool_log", []).append(
-                        {"name": name, "args": json.dumps(arguments, ensure_ascii=False)}
-                    )
+                    entry = {
+                        "name": name,
+                        "args": json.dumps(arguments, ensure_ascii=False),
+                        "status": "run",
+                        "start": time.perf_counter(),
+                    }
+                    state.setdefault("tool_log", []).append(entry)
                     await self._edit_rich(message, self._build_progress_text(state))
                     if DEBUG:
                         self.log.debug("tool call %s: %s", name, arguments)
-                    result = await call_tool(
-                        self._tools,
-                        name,
-                        arguments,
-                        context,
-                        timeout=DEFAULT_TOOL_TIMEOUT,
+                    task = asyncio.create_task(
+                        call_tool(
+                            self._tools,
+                            name,
+                            arguments,
+                            context,
+                            timeout=DEFAULT_TOOL_TIMEOUT,
+                        )
                     )
+                    try:
+                        # Refreshes the message (RUN timer) while the tool works
+                        result = await self._wait_for_reply(task, message, state)
+                    except asyncio.CancelledError:
+                        task.cancel()
+                        raise
+                    entry["result"] = result
+                    entry["status"] = "ok" if self._tool_ok(result) else "err"
                     state["tool"] = ""
 
                 messages.append({
@@ -334,6 +356,15 @@ class OpenAgent(loader.ModuleBase):
                 })
 
         raise AgentError(self.strings("err_tool_limit"))
+
+    @staticmethod
+    def _tool_ok(result: str) -> bool:
+        """A tool failed when it returned JSON with ``"ok": false``."""
+        try:
+            data = json.loads(result)
+        except (TypeError, ValueError):
+            return True
+        return not (isinstance(data, dict) and data.get("ok") is False)
 
     async def _models(self) -> list[str]:
         """GET the model list and return it as plain text."""

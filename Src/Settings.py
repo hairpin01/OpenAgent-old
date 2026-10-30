@@ -31,6 +31,7 @@ MAX_TOOL_ITERATIONS = 6
 MAX_TOOL_OUTPUT_CHARS = 8000
 DEFAULT_TOOL_TIMEOUT = 20
 TOOL_LOG_JSON_CHARS = 60  # JSON chars shown per call in the tool log
+TOOL_LOG_OUTPUT_CHARS = 120  # tool output chars shown per call in the tool log
 
 # Seconds between rich-message progress refreshes while a request is running
 PROGRESS_UPDATE_INTERVAL = 0.8

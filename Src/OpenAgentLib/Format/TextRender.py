@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 from .RichBoby import render_body
 from ..Tools.workspace import make_diff
-from ...Settings import TOOL_LOG_JSON_CHARS
+from ...Settings import TOOL_LOG_JSON_CHARS, TOOL_LOG_OUTPUT_CHARS
 
 @dataclass
 class RenderContext:
@@ -243,19 +243,31 @@ def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
 def _prompt(agent: "OpenAgent", ctx: RenderContext) -> str:
     return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(ctx.state["prompt"]))}</details>"""
 
+def _log_clip(text: object, limit: int) -> str:
+    """Flatten ``text`` to one line and cut it to ``limit`` chars."""
+    flat = str(text).replace("\n", " ")
+    return flat[:limit] + "…" if len(flat) > limit else flat
+
+
 @text_module("tool_log")
 def _tool_log(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    """Collapsible list of the tool calls made during the request."""
-    rows = []
+    """Tree of the tool calls made during the request, with status and output."""
+    lines: list[str] = []
     for item in (ctx.state or {}).get("tool_log") or []:
-        data = str(item["args"]).replace("\n", " ")
-        if len(data) > TOOL_LOG_JSON_CHARS:
-            data = data[:TOOL_LOG_JSON_CHARS] + "…"
-        rows.append(f"<b>{html.escape(item['name'])}:</b> {html.escape(data)}")
-    if not rows:
+        name = html.escape(item["name"])
+        if item.get("status", "run") == "run":
+            elapsed = max(time.perf_counter() - item.get("start", 0.0), 0.0)
+            lines.append(f"{name}: [RUN] {elapsed:.1f}s")
+            continue
+        tag = "OK" if item["status"] == "ok" else "ERR"
+        lines.append(f"{name}: {html.escape(_log_clip(item['args'], TOOL_LOG_JSON_CHARS))}")
+        lines.append(f"[{tag}] {html.escape(_log_clip(item.get('result', ''), TOOL_LOG_OUTPUT_CHARS))}")
+    if not lines:
         return None
+    last = len(lines) - 1
+    rows = [("└" if i == last else "├") + line for i, line in enumerate(lines)]
     title = html.escape(agent.strings("tool_calls_title"))
-    return f"<details><summary>{title}</summary>{'<br>'.join(rows)}</details>"
+    return f"<blockquote><cite>{title}</cite><br>{'<br>'.join(rows)}</blockquote>"
 
 
 @text_module("diffs")

@@ -22,7 +22,12 @@ if TYPE_CHECKING:
 
 from .RichBoby import render_body
 from ..Tools.workspace import make_diff
-from ...Settings import MAX_DETAIL_CHARS, TOOL_BAR_TTL, TOOL_DETAIL_CHARS
+from ...Settings import (
+    HISTORY_NAV_TTL,
+    MAX_DETAIL_CHARS,
+    TOOL_BAR_TTL,
+    TOOL_DETAIL_CHARS,
+)
 
 @dataclass
 class RenderContext:
@@ -241,7 +246,9 @@ def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 @text_module("prompt")
 def _prompt(agent: "OpenAgent", ctx: RenderContext) -> str:
-    return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(ctx.state["prompt"]))}</details>"""
+    # A history view passes the stored prompt through ctx.extra
+    prompt = ctx.extra.get("prompt", (ctx.state or {}).get("prompt", ""))
+    return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(prompt))}</details>"""
 
 def _bar_clip(text: object, limit: int) -> str:
     """Flatten ``text`` to one line and cut it to ``limit`` chars."""
@@ -323,6 +330,39 @@ def _tool_details(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     return "\n".join(blocks) or None
 
 
+@text_module("history_header")
+def _history_header(agent: "OpenAgent", ctx: RenderContext) -> str:
+    """Header of a stored (older) exchange shown by the history pager."""
+    pos = int(ctx.extra.get("pos") or 0)
+    total = int(ctx.extra.get("total") or 0)
+    return (
+        f"<p><tg-pill style='primary'>🕘 {html.escape(agent.strings('history_title'))}</tg-pill> "
+        f"<tg-pill style='primary'>{pos + 1}/{total}</tg-pill></p>"
+    )
+
+
+@text_module("history_nav")
+def _history_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """Back / Next row that scrolls through the saved conversation history."""
+    state = ctx.state or {}
+    if len(state.get("history") or []) < 4:  # fewer than two saved exchanges
+        return None
+    if "history_buttons" not in state:
+        # Built once: every render would otherwise register new callbacks
+        state["history_buttons"] = "".join(
+            agent.Button.rich.inline(
+                agent.strings(label),
+                agent.on_history_scroll,
+                data=(state, step),
+                style="link",
+                ttl=HISTORY_NAV_TTL,
+                html_tag=True,
+            )
+            for label, step in (("btn_back", -1), ("btn_next", 1))
+        )
+    return f"<tg-button-row align='center'>{state['history_buttons']}</tg-button-row>"
+
+
 @text_module("diffs")
 def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     """One collapsible diff per file changed by the file tools."""
@@ -369,7 +409,8 @@ def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 text_format("notice", "standalone_header", "body")
 text_format("progress", "status_header", "prompt", "tool_bar", "tool_details", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "tool_bar", "tool_details")
+text_format("result", "status_header", "prompt", "body", "tool_bar", "tool_details", "history_nav")
+text_format("history", "history_header", "prompt", "body", "history_nav")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body")
 text_format("usage", "usage_header", "usage_body", "copy_button")

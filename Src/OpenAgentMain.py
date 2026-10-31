@@ -611,6 +611,53 @@ class OpenAgent(loader.ModuleBase):
             ),
         )
 
+    def _build_history_text(self, state: dict[str, Any]) -> str:
+        """Render the exchange at ``state['history_pos']`` (the latest one is the normal result)."""
+        history = state["history"]
+        pos = state["history_pos"]
+        total = len(history) // 2
+        last = state.get("last_result")
+        if pos == total - 1 and last is not None:
+            return self._build_result_text(
+                state, last["kind"], last["text"], last["message"]
+            )
+        return render_text(
+            self,
+            "history",
+            RenderContext(
+                kind="done",
+                text=history[2 * pos + 1]["content"],
+                state=state,
+                extra={
+                    "prompt": history[2 * pos]["content"],
+                    "pos": pos,
+                    "total": total,
+                },
+            ),
+        )
+
+    @loader.callback()
+    async def on_history_scroll(self, call: typ.InlineMessage, data=None) -> None:
+        """Back / Next through the saved exchanges, editing the message in place."""
+        if not call.sender_id == self.kernel.ADMIN_ID:
+            return
+        if not data:
+            return
+
+        state, step = data
+        total = len(state.get("history") or []) // 2
+        pos = int(state.get("history_pos", total - 1)) + step
+        if pos < 0:
+            await call.answer(self.strings("history_first"))
+            return
+        if pos >= total:
+            await call.answer(self.strings("history_last"))
+            return
+
+        state["history_pos"] = pos
+        await call.answer()
+        await self._edit_rich(call, self._build_history_text(state))
+
     @loader.callback()
     async def on_change_model(self, call: typ.InlineMessage, data=None) -> None:
         if not call.sender_id == self.kernel.ADMIN_ID:
@@ -733,6 +780,10 @@ class OpenAgent(loader.ModuleBase):
                 state["context_count"] = await self._append_context(
                     chat_id, raw, text
                 )
+                # Snapshot for the history pager: stable even if later requests
+                # append to the stored context
+                state["history"] = await self._load_context(chat_id)
+                state["history_pos"] = len(state["history"]) // 2 - 1
             await self._edit_rich(message, self._build_result_text(state, "done", text, message=message))
         finally:
             self._active_requests.pop(request_id, None)

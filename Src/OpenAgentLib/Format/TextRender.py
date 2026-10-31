@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 from .RichBoby import render_body
 from ..Tools.workspace import make_diff
-from ...Settings import MAX_DETAIL_CHARS, TOOL_BAR_TTL
+from ...Settings import MAX_DETAIL_CHARS, TOOL_BAR_TTL, TOOL_DETAIL_CHARS
 
 @dataclass
 class RenderContext:
@@ -251,7 +251,7 @@ def _bar_clip(text: object, limit: int) -> str:
 
 @text_module("tool_bar")
 def _tool_bar(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    """One line of pills, one per tool call; a finished pill shows its args on tap."""
+    """One line of pills, one per tool call; a finished pill toggles its details."""
     pills: list[str] = []
     for item in (ctx.state or {}).get("tool_bar") or []:
         name = item["name"]
@@ -263,11 +263,12 @@ def _tool_bar(agent: "OpenAgent", ctx: RenderContext) -> str | None:
             )
             continue
         if "button" not in item:
-            # Built once: every render would otherwise register a new callback
+            # Built once: every render would otherwise register a new callback.
+            # data carries (state, item) so the handler can toggle and re-render.
             item["button"] = agent.Button.rich.inline(
                 name,
                 agent.on_tool_args,
-                data=_bar_clip(f"{name}: {item['args']}", MAX_DETAIL_CHARS),
+                data=(ctx.state, item),
                 style="success" if item["status"] == "ok" else "danger",
                 ttl=TOOL_BAR_TTL,
                 html_tag=True,
@@ -276,6 +277,50 @@ def _tool_bar(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     if not pills:
         return None
     return f"<blockquote><p>{' &gt; '.join(pills)}</p></blockquote>"
+
+
+def _detail_clip(text: object) -> str:
+    """Escaped one-line preview of ``text`` for the details block."""
+    return html.escape(_bar_clip(text, TOOL_DETAIL_CHARS))
+
+
+@text_module("tool_details")
+def _tool_details(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """One details block per finished tool call that the user opened."""
+    blocks: list[str] = []
+    for item in (ctx.state or {}).get("tool_bar") or []:
+        if not item.get("open") or item.get("status", "run") == "run":
+            continue
+
+        name = str(item["name"])
+        ok = item["status"] == "ok"
+        style = "success" if ok else "danger"
+        label = agent.strings("tool_ok" if ok else "tool_failed")
+        tool = next((t for t in agent._tools if t.name == name), None)
+        description = tool.description if tool else ""
+        elapsed = float(item.get("elapsed") or 0.0)
+
+        head = (
+            f"<tg-pill style='{style}'>{html.escape(name)}</tg-pill> "
+            f"<tg-pill style='{style}'>{html.escape(label)}</tg-pill>"
+        )
+        if description:
+            head += f"<br><b>📝 {_detail_clip(description)}</b>"
+
+        rows = [
+            f"<b>{html.escape(agent.strings('tool_in'))}</b> "
+            f"<code>{_detail_clip(item.get('args', ''))}</code>",
+            f"<b>{html.escape(agent.strings('tool_out'))}</b> "
+            f"<code>{_detail_clip(item.get('result', ''))}</code>",
+            f"<b>{html.escape(agent.strings('tool_time'))}</b> "
+            f"<tg-pill style='primary'>⏱️ {elapsed:.1f}s</tg-pill>",
+        ]
+        blocks.append(
+            f"<blockquote><cite>{html.escape(agent.strings('tool_info_title'))}</cite>\n"
+            f"{head}\n<hr/>\n"
+            f"<blockquote>\n{'<br>'.join(rows)}\n</blockquote></blockquote>"
+        )
+    return "\n".join(blocks) or None
 
 
 @text_module("diffs")
@@ -323,8 +368,8 @@ def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "tool_bar", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "tool_bar")
+text_format("progress", "status_header", "prompt", "tool_bar", "tool_details", "thinking", "cancel_button")
+text_format("result", "status_header", "prompt", "body", "tool_bar", "tool_details")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body")
 text_format("usage", "usage_header", "usage_body", "copy_button")

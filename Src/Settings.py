@@ -31,6 +31,7 @@ MAX_TOOL_ITERATIONS = 6
 MAX_TOOL_OUTPUT_CHARS = 8000
 DEFAULT_TOOL_TIMEOUT = 20
 TOOL_BAR_TTL = 3600  # seconds the tool bar buttons stay clickable
+TOOL_DETAIL_CHARS = 600  # max chars of tool args / output / description shown in details
 
 # Seconds between rich-message progress refreshes while a request is running
 PROGRESS_UPDATE_INTERVAL = 0.8

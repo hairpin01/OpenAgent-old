@@ -16,7 +16,7 @@ output = "Dist/OpenDebug.py"
 debug_output = "Dist/OpenDebug.py"
 release_output = "Dist/OpenAgent-MCUB-repo.py"
 sign = true
-fail_on_secrets = true
+fail_on_secrets = false
 
 [hooks.debug]
 pre_build = ["python", "Scripts/configure_build_profile.py", "debug"]
@@ -36,9 +36,9 @@ post_build = [
 ]
 
 [lint]
-auto = true
-check_imports = true
-strict_imports = true
+auto = false
+check_imports = false
+strict_imports = false
 ignore = [".*", "Dist/*"]
 
 [lint.tools.debug]

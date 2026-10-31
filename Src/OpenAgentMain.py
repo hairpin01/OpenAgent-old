@@ -316,6 +316,7 @@ class OpenAgent(loader.ModuleBase):
                             "args": str(raw_arguments),
                             "status": "err",
                             "result": result,
+                            "elapsed": 0.0,
                         }
                     )
                 else:
@@ -346,6 +347,7 @@ class OpenAgent(loader.ModuleBase):
                         task.cancel()
                         raise
                     entry["result"] = result
+                    entry["elapsed"] = time.perf_counter() - entry["start"]
                     entry["status"] = "ok" if self._tool_ok(result) else "err"
                     state["tool"] = ""
 
@@ -479,6 +481,8 @@ class OpenAgent(loader.ModuleBase):
         self, state: dict[str, Any], kind: str, text: str = "", message: typ.Message = None
     ) -> str:
         fmt = "cancelled" if kind == "cancelled" else "result"
+        # Kept so a tool button can re-render the final message on click
+        state["last_result"] = {"kind": kind, "text": text, "message": message}
         return render_text(
             self,
             fmt,
@@ -586,10 +590,26 @@ class OpenAgent(loader.ModuleBase):
 
     @loader.callback()
     async def on_tool_args(self, call: typ.InlineMessage, data=None) -> None:
+        """Toggle the details block (tool, description, args, output, time)."""
         if not call.sender_id == self.kernel.ADMIN_ID:
             return
+        if not data:
+            return
 
-        await call.answer(str(data or ""))
+        state, entry = data
+        entry["open"] = not entry.get("open")
+        await call.answer()
+
+        last = state.get("last_result")
+        if last is None:
+            # Still running: the next progress refresh renders the block
+            return
+        await self._edit_rich(
+            call,
+            self._build_result_text(
+                state, last["kind"], last["text"], last["message"]
+            ),
+        )
 
     @loader.callback()
     async def on_change_model(self, call: typ.InlineMessage, data=None) -> None:

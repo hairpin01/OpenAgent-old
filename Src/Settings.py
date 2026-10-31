@@ -27,7 +27,7 @@ MAX_MODELS_LISTED = 50
 MAX_DETAIL_CHARS = 200
 
 # Tools
-MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_ITERATIONS = 20
 MAX_TOOL_OUTPUT_CHARS = 8000
 DEFAULT_TOOL_TIMEOUT = 20
 TOOL_BAR_TTL = 3600  # seconds the tool bar buttons stay clickable
@@ -35,7 +35,7 @@ HISTORY_NAV_TTL = 3600  # seconds the history Back/Next buttons stay clickable
 TOOL_DETAIL_CHARS = 600  # max chars of tool args / output / description shown in details
 
 # Seconds between rich-message progress refreshes while a request is running
-PROGRESS_UPDATE_INTERVAL = 0.8
+PROGRESS_UPDATE_INTERVAL = 2
 
 # Sub-command that lists provider models with a GET request
 MODELS_ARG = "models"
@@ -98,7 +98,7 @@ VOID_TAGS = {"hr", "img"}
 
 BLOCK_TAGS_FORBIDDEN_IN_CELLS = {
     "p", "h1", "h2", "h3", "h4", "h5", "h6",
-    "blockquote", "pre", "footer", "hr",
+    "pre", "footer", "hr",
     "ul", "ol", "li", "details", "summary", "aside",
     "table", "tr", "td", "th",
 }

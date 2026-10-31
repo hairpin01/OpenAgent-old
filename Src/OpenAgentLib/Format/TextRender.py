@@ -301,11 +301,11 @@ def _tool_details(agent: "OpenAgent", ctx: RenderContext) -> str | None:
         elapsed = float(item.get("elapsed") or 0.0)
 
         head = (
-            f"<tg-pill style='{style}'>{html.escape(name)}</tg-pill> "
-            f"<tg-pill style='{style}'>{html.escape(label)}</tg-pill>"
+            f"<p><tg-pill style='{style}'>{html.escape(name)}</tg-pill> "
+            f"<tg-pill style='{style}'>{html.escape(label)}</tg-pill></p>"
         )
         if description:
-            head += f"<br><b>📝 {_detail_clip(description)}</b>"
+            head += f"\n<b>📝 {_detail_clip(description)}</b>"
 
         rows = [
             f"<b>{html.escape(agent.strings('tool_in'))}</b> "
@@ -313,7 +313,7 @@ def _tool_details(agent: "OpenAgent", ctx: RenderContext) -> str | None:
             f"<b>{html.escape(agent.strings('tool_out'))}</b> "
             f"<code>{_detail_clip(item.get('result', ''))}</code>",
             f"<b>{html.escape(agent.strings('tool_time'))}</b> "
-            f"<tg-pill style='primary'>⏱️ {elapsed:.1f}s</tg-pill>",
+            f"<p><tg-pill style='primary'>⏱️ {elapsed:.1f}s</tg-pill></p>",
         ]
         blocks.append(
             f"<blockquote><cite>{html.escape(agent.strings('tool_info_title'))}</cite>\n"

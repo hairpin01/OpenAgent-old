@@ -22,8 +22,6 @@ from utils.tg_emoji import tg_emoji_to_link
 
 # Build config
 from .Settings import (
-    CHAT_PATH,
-    DEBUG,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
@@ -32,13 +30,10 @@ from .Settings import (
     DEFAULT_TOOL_RULES_ENABLED,
     DEFAULT_TOOL_TIMEOUT,
     MAX_DETAIL_CHARS,
-    MAX_PROVIDER_ERROR_CHARS,
     MAX_MODELS_LISTED,
     MAX_REPLY_CHARS,
-    MAX_TOOL_ITERATIONS,
     MODELS_ARG,
     MODELS_PAGE_SIZE,
-    MODELS_PATH,
     PROGRESS_UPDATE_INTERVAL,
     CUSTOM_EMOJI,
     RICH_HTML_RULES,
@@ -53,54 +48,14 @@ from .Settings import (
 )
 
 # Tools
-from .OpenAgentLib.Tools import (
-    Tool,
-    ToolContext,
-    call_tool,
-    load_tools,
-    tool_schemas,
-)
+from .OpenAgentLib.Tools import Tool, ToolContext, load_tools
+
+# Harness: the agent loop and the provider (UI-agnostic)
+from .OpenAgentLib.harness import AgentError, RunInput, run as harness_run
+from .OpenAgentLib.providers import OpenAIProvider
+
 # Text rendering
 from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
-
-
-class AgentError(Exception):
-    """Provider or configuration error with a ready user-facing text.
-
-    ``detail`` carries the raw provider error text for the expanded
-    error block in the message.
-    """
-
-    def __init__(self, text: str, detail: str | None = None):
-        super().__init__(text)
-        self.detail = detail
-
-
-def _one_line(text: object) -> str:
-    """Flatten ``text`` to one line (for pill-sized error summaries)."""
-    return " ".join(str(text).split())
-
-
-def _error_detail(body: Any, raw: str = "") -> str:
-    """Extract the provider error text from a response body.
-
-    JSON bodies take the message from ``error.message`` / ``error`` /
-    ``message``; anything else falls back to the raw response text, so
-    non-JSON error pages are not lost either.
-    """
-    text = ""
-    if isinstance(body, dict):
-        err = body.get("error", body.get("message", ""))
-        if isinstance(err, dict):
-            text = str(err.get("message") or err.get("detail") or err.get("details") or "")
-        elif err:
-            text = str(err)
-    elif isinstance(body, str) and body:
-        text = body
-    if not text:
-        text = _one_line(raw)
-    text = text.strip()
-    return text[:MAX_PROVIDER_ERROR_CHARS]
 
 
 class OpenAgent(loader.ModuleBase):
@@ -176,6 +131,7 @@ class OpenAgent(loader.ModuleBase):
     _active_requests: dict[str, dict[str, Any]] = {}
     _models_cache: tuple[str, ...] = ()
     _tools: list[Tool] = []
+    _provider: OpenAIProvider | None = None
 
 
     async def on_load(self) -> None:
@@ -199,57 +155,21 @@ class OpenAgent(loader.ModuleBase):
             state["task"].cancel()
         self._active_requests.clear()
         self._tools = []
+        self._provider = None
 
         if self._http is not None:
             await self._http.close()
             self._http = None
         await super().on_unload()
 
-
-    async def _request(
-        self, method: str, path: str, payload: dict[str, Any] | None = None
-    ) -> Any:
-        """Send a GET or POST request to the provider and return JSON."""
-        api_key = str(self.config["api_key"]).strip()
-        if not api_key:
-            raise AgentError(self.strings("err_no_key"))
-        if self._http is None:
-            raise AgentError(self.strings("err_network", error="no session"))
-
-        url = str(self.config["base_url"]).rstrip("/") + path
-        headers = {"Authorization": f"Bearer {api_key}"}
-        timeout = aiohttp.ClientTimeout(total=int(self.config["timeout"]))
-        if DEBUG:
-            self.log.debug(f"{method} {url}")
-
-        try:
-            async with self._http.request(
-                method, url, json=payload, headers=headers, timeout=timeout
-            ) as resp:
-                status = resp.status
-                # Read as text first: providers may answer with a non-JSON
-                # error page, and the text must not be lost on json failure
-                raw = (await resp.read()).decode("utf-8", "replace")
-                try:
-                    body: Any = json.loads(raw)
-                except ValueError:
-                    body = None
-        except asyncio.TimeoutError:
-            raise AgentError(self.strings("err_timeout")) from None
-        except (aiohttp.ClientError, ValueError) as exc:
-            raise AgentError(self.strings("err_network", error=str(exc))) from None
-
-        if status >= 400:
-            detail = _error_detail(body, raw)
-            short = _one_line(detail)
-            if len(short) > MAX_DETAIL_CHARS:
-                short = short[:MAX_DETAIL_CHARS].rstrip() + "…"
-            if short:
-                text = self.strings("err_http", status=status, detail=short)
-            else:
-                text = self.strings("err_http", status=status, detail="").rstrip(": ")
-            raise AgentError(text, detail=detail or None)
-        return body
+    @property
+    def provider(self) -> OpenAIProvider:
+        """The active provider; built once the http session exists."""
+        if self._provider is None:
+            self._provider = OpenAIProvider(
+                self._http, self.config, self.strings, self.log
+            )
+        return self._provider
 
     def _build_messages(
         self, prompt: str, history: list[dict[str, str]]
@@ -320,35 +240,6 @@ class OpenAgent(loader.ModuleBase):
         return out
 
 
-    async def _chat_request(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": str(self.config["model"]),
-            "messages": messages,
-            "temperature": float(self.config["temperature"]),
-        }
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-
-        data = await self._request("POST", CHAT_PATH, payload)
-        # Some providers wrap errors in a 200 body
-        if (
-            isinstance(data, dict)
-            and "choices" not in data
-            and (data.get("error") or data.get("message"))
-        ):
-            detail = _error_detail(data, "")
-            raise AgentError(self.strings("err_bad_reply"), detail=detail or None)
-        try:
-            message = data["choices"][0]["message"]
-        except (KeyError, IndexError, TypeError):
-            raise AgentError(self.strings("err_bad_reply")) from None
-        if not isinstance(message, dict):
-            raise AgentError(self.strings("err_bad_reply"))
-        return message
-
     async def _chat_with_tools(
         self,
         prompt: str,
@@ -358,10 +249,17 @@ class OpenAgent(loader.ModuleBase):
         event: typ.Event,
         chat_id: int | str,
     ) -> str:
-        messages = self._build_messages(prompt, history)
-        start_len = len(messages)  # first index of this exchange's new messages
-        tools = tool_schemas(self._tools)
-        context = ToolContext(
+        """Thin UI adapter over the provider-agnostic harness loop.
+
+        The harness drives the chat <-> tool steps; this method only
+        translates its events into rich-message updates.
+        """
+        async def on_event(name: str, payload: dict[str, Any]) -> None:
+            # Any harness event (tool_start / tool_done) re-renders the
+            # progress message with the current state (RUN timer, pills).
+            await self._edit_rich(message, self._build_progress_text(state))
+
+        tool_context = ToolContext(
             logger=self.log,
             http=self._http,
             event=event,
@@ -370,126 +268,19 @@ class OpenAgent(loader.ModuleBase):
             tools=self._tools,
             state=state,
         )
-
-        for step in range(MAX_TOOL_ITERATIONS):
-            response = await self._chat_request(messages, tools)
-            calls = response.get("tool_calls") or []
-            if not calls:
-                content = response.get("content")
-                if not isinstance(content, str) or not content.strip():
-                    raise AgentError(self.strings("err_bad_reply"))
-                # Compact record of this exchange's tool calls for the context
-                record: list[dict[str, str]] = []
-                for item in messages[start_len:]:
-                    if not isinstance(item, dict) or item.get("role") != "tool":
-                        continue
-                    record.append({
-                        "name": str(item.get("tool_name") or "?"),
-                        "output": str(item.get("content") or ""),
-                    })
-                state["exchange_tools"] = record[:CONTEXT_TOOL_RECORD_LIMIT]
-                return content.strip()
-
-            messages.append({
-                "role": "assistant",
-                "content": response.get("content") or "",
-                "tool_calls": calls,
-            })
-
-            for index, call in enumerate(calls):
-                function = call.get("function") or {}
-                name = str(function.get("name") or "")
-                raw_arguments = function.get("arguments") or "{}"
-                state["tool_calls"] = int(state.get("tool_calls") or 0) + 1
-
-                if isinstance(raw_arguments, str):
-                    try:
-                        arguments = json.loads(raw_arguments)
-                    except (TypeError, ValueError):
-                        arguments = None
-                else:
-                    arguments = raw_arguments
-
-                if not isinstance(arguments, dict):
-                    result = json.dumps(
-                        {"ok": False, "error": "tool arguments must be a JSON object"},
-                        ensure_ascii=False,
-                    )
-                    state.setdefault("tool_bar", []).append(
-                        {
-                            "name": name,
-                            "args": str(raw_arguments),
-                            "status": "err",
-                            "result": result,
-                            "elapsed": 0.0,
-                        }
-                    )
-                else:
-                    state["tool"] = name
-                    entry = {
-                        "name": name,
-                        "args": json.dumps(arguments, ensure_ascii=False),
-                        "status": "run",
-                        "start": time.perf_counter(),
-                    }
-                    state.setdefault("tool_bar", []).append(entry)
-                    await self._edit_rich(message, self._build_progress_text(state))
-                    if DEBUG:
-                        self.log.debug("tool call %s: %s", name, arguments)
-                    task = asyncio.create_task(
-                        call_tool(
-                            self._tools,
-                            name,
-                            arguments,
-                            context,
-                            timeout=DEFAULT_TOOL_TIMEOUT,
-                        )
-                    )
-                    try:
-                        # Refreshes the message (RUN timer) while the tool works
-                        result = await self._wait_for_reply(task, message, state)
-                    except asyncio.CancelledError:
-                        task.cancel()
-                        raise
-                    entry["result"] = result
-                    entry["elapsed"] = time.perf_counter() - entry["start"]
-                    entry["status"] = "ok" if self._tool_ok(result) else "err"
-                    state["tool"] = ""
-                    # A fast tool may have changed the UI (e.g. added a thinking
-                    # note) — push it now, since _wait_for_reply returns as soon
-                    # as the task is done without a final edit.
-                    await self._edit_rich(message, self._build_progress_text(state))
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id") or f"call_{step}_{index}",
-                    "tool_name": name,
-                    "content": result,
-                })
-
-        raise AgentError(self.strings("err_tool_limit"))
-
-    @staticmethod
-    def _tool_ok(result: str) -> bool:
-        """A tool failed when it returned JSON with ``"ok": false``."""
-        try:
-            data = json.loads(result)
-        except (TypeError, ValueError):
-            return True
-        return not (isinstance(data, dict) and data.get("ok") is False)
-
-    async def _models(self) -> list[str]:
-        """GET the model list and return it as plain text."""
-        data = await self._request("GET", MODELS_PATH)
-        items = data.get("data", []) if isinstance(data, dict) else []
-        ids = sorted(
-            {
-                str(item.get("id", ""))
-                for item in items
-                if isinstance(item, dict) and item.get("id")
-            }
+        return await harness_run(
+            RunInput(
+                messages=self._build_messages(prompt, history),
+                tools=self._tools,
+                tool_context=tool_context,
+                state=state,
+                provider=self.provider,
+                logger=self.log,
+                strings=self.strings,
+                on_event=on_event,
+                tool_timeout=DEFAULT_TOOL_TIMEOUT,
+            )
         )
-        return ids[:MAX_MODELS_LISTED]
 
     @staticmethod
     def _clip(text: str) -> str:
@@ -651,7 +442,7 @@ class OpenAgent(loader.ModuleBase):
 
     async def _build_models_text(self) -> str:
         try:
-            list_models = await self._models()
+            list_models = await self.provider.models()
         except AgentError as exc:
             return self._build_error_text(str(exc), detail=exc.detail)
         except Exception as exc:

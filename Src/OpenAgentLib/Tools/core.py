@@ -6,6 +6,7 @@ import json
 import logging
 import pkgutil
 from collections.abc import Awaitable, Callable
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -110,17 +111,27 @@ def load_tools(logger: logging.Logger | None = None) -> list[Tool]:
 
 
 def tool_schemas(tools: list[Tool]) -> list[dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            },
-        }
-        for tool in tools
-    ]
+    schemas = []
+    for tool in tools:
+        params = copy.deepcopy(tool.parameters) if tool.parameters else {"type": "object", "properties": {}}
+        if params.get("type") == "object":
+            props = params.setdefault("properties", {})
+            if "thinking" not in props:
+                props["thinking"] = {
+                    "type": "string",
+                    "description": "Short explanation of why you are calling this tool (one short sentence, shown to the user).",
+                }
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": params,
+                },
+            }
+        )
+    return schemas
 
 
 def _clip(text: str) -> str:

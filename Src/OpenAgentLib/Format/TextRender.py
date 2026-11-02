@@ -166,8 +166,36 @@ def _stick_animation(agent: "OpenAgent", ctx: RenderContext) -> str:
     return f"<tg-pill style='primary'>{html.escape(stick_frame(elapsed))}</tg-pill>"
 
 
+def _stream_html(state: dict[str, Any] | None) -> str:
+    """Formatted live answer; cached, as two modules ask for it per render."""
+    if state is None:
+        return ""
+    text = state.get("stream_text") or ""
+    cached = state.get("stream_cache")
+    if cached is None or cached[0] != text:
+        cached = (text, render_body(text, MAX_REPLY_CHARS, partial=True))
+        state["stream_cache"] = cached
+    return cached[1]
+
+
+@text_module("stream")
+def _stream(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """The answer as received so far, formatted even while it is incomplete."""
+    return _stream_html(ctx.state) or None
+
+
 @text_module("thinking")
-def _thinking(agent: "OpenAgent", ctx: RenderContext) -> str:
+def _thinking(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    # The streamed text itself shows that the model is working
+    if _stream_html(ctx.state):
+        return None
+    lines = (ctx.state or {}).get("thinking_lines")
+    if lines:
+        body = "\n\n".join(f"<i>{html.escape(str(line))}</i>" for line in lines)
+        return (
+            f"<blockquote><cite>{html.escape(agent.strings('thinking_title'))}</cite>\n"
+            f"{body}</blockquote>"
+        )
     return (
         f"<blockquote><b>{_stick_animation(agent, ctx)}</b> "
         f"<i>{html.escape(agent.strings('thinking'))}</i></blockquote>"
@@ -535,7 +563,7 @@ def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "token_stats", "tool_bar", "tool_details", "thinking", "cancel_button")
+text_format("progress", "status_header", "prompt", "token_stats", "tool_bar", "tool_details", "stream", "thinking", "cancel_button")
 text_format("result", "status_header", "prompt", "body", "error_detail", "token_stats", "tool_bar", "tool_details", "history_nav")
 text_format("history", "history_header", "prompt", "body", "history_nav")
 text_format("cancelled", "status_header", "cancelled_body")

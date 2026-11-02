@@ -22,6 +22,7 @@ from utils.tg_emoji import tg_emoji_to_link
 from .Settings import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
+    DEFAULT_STREAM,
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT,
@@ -33,6 +34,7 @@ from .Settings import (
     MODELS_ARG,
     MODELS_PAGE_SIZE,
     PROGRESS_UPDATE_INTERVAL,
+    STREAM_UPDATE_INTERVAL,
     CUSTOM_EMOJI,
     DEFAULT_CONTEXT_ENABLED,
     DEFAULT_CONTEXT_SIZE,
@@ -122,6 +124,12 @@ class OpenAgent(loader.ModuleBase):
             description=lambda self: self.strings("cfg_tool_rules"),
             validator=cfg.Boolean(),
         ),
+        cfg.ConfigValue(
+            "stream",
+            DEFAULT_STREAM,
+            description=lambda self: self.strings("cfg_stream"),
+            validator=cfg.Boolean(),
+        ),
     )
 
     _http: aiohttp.ClientSession | None = None
@@ -194,6 +202,11 @@ class OpenAgent(loader.ModuleBase):
             # Latest provider step's token counts for the token_stats widget
             state["tokens"] = usage
 
+        async def on_stream(text: str) -> None:
+            # Picked up by the refresh loop (_wait_for_reply); no edit here,
+            # so a fast stream cannot flood Telegram with message edits
+            state["stream_text"] = text
+
         tool_context = ToolContext(
             logger=self.log,
             http=self._http,
@@ -221,6 +234,7 @@ class OpenAgent(loader.ModuleBase):
                 on_event=on_event,
                 on_usage=on_usage,
                 tool_timeout=DEFAULT_TOOL_TIMEOUT,
+                on_stream=on_stream if self.config["stream"] else None,
             )
         )
 
@@ -328,17 +342,35 @@ class OpenAgent(loader.ModuleBase):
     async def _wait_for_reply(
         self, task: asyncio.Task[str], message: Any, state: dict[str, Any]
     ) -> str:
-        """Wait for the provider while refreshing the elapsed-time header."""
+        """Wait for the provider while refreshing the header and the live answer."""
+        last_len = -1
+        last_edit = 0.0
         while True:
-            timeout = PROGRESS_UPDATE_INTERVAL if state["ui_alive"] else None
+            streaming = bool(state.get("stream_text"))
+            interval = STREAM_UPDATE_INTERVAL if streaming else PROGRESS_UPDATE_INTERVAL
+            timeout = interval if state["ui_alive"] else None
             done, _ = await asyncio.wait({task}, timeout=timeout)
             if done:
                 return task.result()
 
+            if streaming:
+                # Nothing new in the answer: the header timer alone can wait
+                # for the normal (slower) refresh
+                length = len(state["stream_text"])
+                now = time.perf_counter()
+                if length == last_len and now - last_edit < PROGRESS_UPDATE_INTERVAL:
+                    continue
+                last_len, last_edit = length, now
+
             try:
                 await message.edit_rich(self._build_progress_text(state))
+                state["ui_errors"] = 0
             except Exception as exc:
-                state["ui_alive"] = False
+                # A stream edits often, so one failed edit (flood wait) must
+                # not kill the live view; a plain wait gives up at once
+                state["ui_errors"] = int(state.get("ui_errors") or 0) + 1
+                if not streaming or state["ui_errors"] >= 3:
+                    state["ui_alive"] = False
                 self.log.debug("OpenAgent progress update failed: %s", exc)
 
 
@@ -572,7 +604,10 @@ class OpenAgent(loader.ModuleBase):
     )
     async def guest_cmd_agent(self, event: typ.Event) -> None:
         raw = event.guest_args or ""
-        msg = getattr(event, "message", None)
+        reply = await event.message.get_reply_message()
+        msg = None
+        if reply is not None:
+            msg = reply.message
 
         file_text_parts: list[str] = []
         if msg is not None:
@@ -622,6 +657,9 @@ class OpenAgent(loader.ModuleBase):
         if raw.strip().lower() in CONTEXT_RESET_ARGS:
             await event.reply_rich(await self._handle_context_reset(event))
             return
+
+        if reply is not None:
+            raw = raw + f"\n[reply context]:\n{reply.html_text}"
 
         start = time.perf_counter()
         request_id = uuid.uuid4().hex

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Build marker. Rewritten by Scripts/configure_build_profile.py
 # (debug / release). Keep exactly one such line in this file.
-DEBUG = True
+DEBUG = False
 
 # Context chat
 CHAT_ID = 'global'
@@ -16,6 +16,7 @@ DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TIMEOUT = 60
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 DEFAULT_TOOL_RULES_ENABLED = True
+DEFAULT_STREAM = True  # show the answer while it is being generated
 
 # Provider endpoints, relative to base_url (OpenAI compatible)
 CHAT_PATH = "/chat/completions"
@@ -40,6 +41,8 @@ TOOL_DETAIL_CHARS = 600  # max chars of tool args / output / description shown i
 
 # Seconds between rich-message progress refreshes while a request is running
 PROGRESS_UPDATE_INTERVAL = 2
+# Same, while a streamed answer is arriving (keep >= 1: Telegram edit limits)
+STREAM_UPDATE_INTERVAL = 1.0
 
 # Sub-command that lists provider models with a GET request
 MODELS_ARG = "models"

@@ -176,7 +176,16 @@ def _thinking(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 @text_module("cancel_button")
 def _cancel_button(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    return (ctx.state or {}).get("cancel_tag") or ctx.extra.get("cancel_tag")
+    state = ctx.state or {}
+    # Supplement (input) button goes first, cancel stays last in the row
+    buttons = [
+        state.get("supplement_btn"),
+        state.get("cancel_btn"),
+    ]
+    buttons = [button for button in buttons if button]
+    if buttons:
+        return f"<tg-button-row>{''.join(buttons)}</tg-button-row>"
+    return state.get("cancel_tag") or ctx.extra.get("cancel_tag")
 
 
 
@@ -286,7 +295,7 @@ def _models_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
 
     def tag(key: str, label: str, step: int) -> str:
         # Built once: every render would otherwise register a new callback
-        if key not in tags
+        if key not in tags:
             tags[key] = agent.Button.rich.inline(
                 agent.strings(label),
                 agent.on_models_scroll,

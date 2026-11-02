@@ -385,6 +385,18 @@ class OpenAgent(loader.ModuleBase):
         state["task"].cancel()
         await call.answer(self.strings("cancelling"))
 
+    async def on_supplement(self, event: typ.InlineMessage, text, data=None) -> None:
+        """Queue extra user text for a running request (Supplement input button)."""
+        if getattr(event, "user_id", None) != self.kernel.ADMIN_ID:
+            return
+
+        text = str(text or "").strip()
+        state = self._active_requests.get(data) if data else None
+        if not text or state is None or state["task"].done():
+            return
+        # The harness drains this queue before the next provider step
+        state.setdefault("supplements", []).append(text)
+
     @loader.callback()
     async def on_tool_args(self, call: typ.InlineMessage, data=None) -> None:
         """Toggle the details block (tool, description, args, output, time)."""
@@ -635,8 +647,15 @@ class OpenAgent(loader.ModuleBase):
                 ttl=ttl,
                 html_tag=True,
             )
-            state["cancel_tag"] = (
-                f"<tg-button-row>{cancel_button}</tg-button-row>"
+            # TextRender's cancel_button module joins both into one row
+            state["cancel_btn"] = cancel_button
+            state["supplement_btn"] = self.Button.rich.input(
+                self.strings("btn_supplement"),
+                self.on_supplement,
+                data=request_id,
+                style="primary",
+                ttl=ttl,
+                html_tag=True,
             )
 
             message = await event.reply_rich(self._build_progress_text(state))

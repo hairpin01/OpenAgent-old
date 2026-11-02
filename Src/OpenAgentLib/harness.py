@@ -67,6 +67,18 @@ async def _await_ticked(
         await inp.on_event(event, {})
 
 
+def _drain_supplements(messages: list[dict[str, Any]], state: dict[str, Any]) -> None:
+    """Move queued user supplements into the dialogue as user messages."""
+    pending = state.get("supplements")
+    if not pending:
+        return
+    state["supplements"] = []
+    for text in pending:
+        messages.append({"role": "user", "content": text})
+    # Keep the supplements visible in the prompt block
+    state["prompt"] = "\n".join([str(state.get("prompt") or ""), *pending]).strip()
+
+
 async def run(inp: RunInput) -> str:
     """Run the chat <-> tool loop and return the final answer text."""
     messages = inp.messages
@@ -75,12 +87,20 @@ async def run(inp: RunInput) -> str:
     state = inp.state
 
     for step in range(MAX_TOOL_ITERATIONS):
+        _drain_supplements(messages, state)
         # The UI keeps refreshing on its own (outer wait loop) while the
         # provider answer is in flight
         message, usage = await inp.provider.chat(messages, schemas)
         if usage is not None:
             await inp.on_usage(usage)
         calls = message.get("tool_calls") or []
+        if not calls and state.get("supplements"):
+            # Extra input arrived while the final answer was in flight:
+            # keep that answer in the dialogue and answer again with it
+            messages.append(
+                {"role": "assistant", "content": message.get("content") or ""}
+            )
+            continue
         if not calls:
             content = message.get("content")
             if not isinstance(content, str) or not content.strip():

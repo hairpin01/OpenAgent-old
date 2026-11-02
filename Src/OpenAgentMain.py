@@ -604,7 +604,8 @@ class OpenAgent(loader.ModuleBase):
     )
     async def guest_cmd_agent(self, event: typ.Event) -> None:
         raw = event.guest_args or ""
-        reply = await event.message.get_reply_message()
+        r = getattr(event, "message", None) or event
+        reply = await r.get_reply_message()
         msg = None
         if reply is not None:
             msg = reply.message

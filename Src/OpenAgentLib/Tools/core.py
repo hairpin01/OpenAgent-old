@@ -49,6 +49,7 @@ class ToolContext:
     http: Any = None
     event: Any = None
     chat_id: int | str | None = None
+    client: Any = None  # userbot client from the module (not the inline bot)
     tools: list[Tool] | None = None
     state: dict[str, Any] = field(default_factory=dict)  # active request state
 

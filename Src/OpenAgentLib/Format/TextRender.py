@@ -13,8 +13,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, TYPE_CHECKING
 
-from core.lib.types import Message, InlineMessage
-
 from Settings import CUSTOM_EMOJI, MAX_REPLY_CHARS
 
 if TYPE_CHECKING:
@@ -25,6 +23,7 @@ from ..Tools.workspace import make_diff
 from ...Settings import (
     HISTORY_NAV_TTL,
     MAX_DETAIL_CHARS,
+    MODELS_NAV_TTL,
     TOOL_BAR_TTL,
     TOOL_DETAIL_CHARS,
 )
@@ -117,7 +116,9 @@ def _header(agent: "OpenAgent", ctx: RenderContext) -> str | None:
         badges.append(f"<tg-pill style='primary'>🔧 {tool_calls}</tg-pill>")
 
     ctx_count = int(state.get("context_count") or 0)
-    badges.append(f"<tg-pill style='primary'>🧠 {ctx_count}/{agent.config.get('context_size')}</tg-pill>")
+    ctx_size = int(agent.config.get("context_size") or 0)
+    ctx_label = "∞" if ctx_size == 0 else ctx_size
+    badges.append(f"<tg-pill style='primary'>🧠 {ctx_count}/{ctx_label}</tg-pill>")
 
     badges.append(f"<tg-pill style='primary'>⏱ {elapsed:.2f}s</tg-pill>")
     return f"<p>{' '.join(badges)}</p>"
@@ -185,6 +186,21 @@ def _body(agent: "OpenAgent", ctx: RenderContext) -> str:
     return render_body(ctx.text, MAX_REPLY_CHARS)
 
 
+@text_module("error_detail")
+def _error_detail(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """Raw provider error text, in a collapsible block under the body."""
+    if ctx.kind != "error":
+        return None
+    detail = str((ctx.state or {}).get("error_detail") or "").strip()
+    if not detail:
+        return None
+    return (
+        f"<details><summary>{html.escape(agent.strings('error_detail_title'))}</summary>"
+        f"<blockquote><cite>{html.escape(agent.strings('error_detail_title'))}</cite>\n"
+        f"<code>{html.escape(detail)}</code></blockquote></details>"
+    )
+
+
 @text_module("cancelled_body")
 def _cancelled_body(agent: "OpenAgent", ctx: RenderContext) -> str:
     return f"<blockquote>{html.escape(agent.strings('cancelled_body'))}</blockquote>"
@@ -210,11 +226,16 @@ def _copy_button(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 @text_module("models_header")
 def _models_header(agent: "OpenAgent", ctx: RenderContext) -> str:
-    current = str(agent.config["model"])
+    page = int(ctx.extra.get("page") or 0)
+    pages = int(ctx.extra.get("pages") or 1)
+    pager = (
+        f" <tg-pill style='primary'>{page + 1}/{pages}</tg-pill>"
+        if pages > 1
+        else ""
+    )
     return (
         f"<p>{CUSTOM_EMOJI['bals']} "
-        f"<b>{html.escape(agent.strings('models_title'))}</b> "
-        f"<tg-pill style='success'>{html.escape(current)}</tg-pill></p>"
+        f"<b>{html.escape(agent.strings('models_title'))}</b>{pager}</p>"
     )
 
 
@@ -225,20 +246,65 @@ def _models_list(agent: "OpenAgent", ctx: RenderContext) -> str:
         return f"<blockquote>{html.escape(agent.strings('models_empty'))}</blockquote>"
 
     current = str(agent.config["model"])
+    state = ctx.state or {}
     rows = []
     for model in models:
         selected = model == current
-        style = "success" if selected else "primary"
-        marker = CUSTOM_EMOJI["ok"] if selected else "•"
+        style = "success" if selected else "link"
+        marker = '  ' + CUSTOM_EMOJI["ok"] if selected else "  "
         button = agent.Button.rich.inline(
             model,
             agent.on_change_model,
-            data=model,
+            data=(state, model),
             style=style,
             html_tag=True,
         )
         rows.append(f"{marker} {button}")
-    return "\n".join(["<blockquote expandable>", "<br>".join(rows), "</blockquote>"])
+
+    current = str(agent.config["model"])
+    provider = agent._provider_label()
+    footer = (
+        f"<p><tg-pill style='success'>{html.escape(current)}</tg-pill> "
+        f"<tg-pill style='primary'>{html.escape(provider)}</tg-pill></p>"
+    )
+
+    return "\n".join(
+        ["\n".join(rows), f'<blockquote>{footer}</blockquote']
+    )
+
+@text_module("models_nav")
+def _models_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """Back / Next row for the paginated model list."""
+    state = ctx.state or {}
+    page = int(ctx.extra.get("page") or 0)
+    pages = int(ctx.extra.get("pages") or 1)
+    if pages <= 1:
+        return None
+
+    tags = state.setdefault("models_nav_tags", {})
+
+    def tag(key: str, label: str, step: int) -> str:
+        # Built once: every render would otherwise register a new callback
+        if key not in tags:
+            tags[key] = agent.Button.rich.inline(
+                agent.strings(label),
+                agent.on_models_scroll,
+                data=(state, step),
+                style="primary",
+                ttl=MODELS_NAV_TTL,
+                html_tag=True,
+            )
+        return tags[key]
+
+    buttons: list[str] = []
+    if page > 0:
+        buttons.append(tag("back", "btn_back", -1))
+    if page < pages - 1:
+        buttons.append(tag("next", "btn_next", 1))
+    if not buttons:
+        return None
+    return f"<tg-button-row>  {' '.join(buttons)}  </tg-button-row>"
+
 
 @text_module("line_break")
 def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
@@ -272,11 +338,16 @@ def _tool_bar(agent: "OpenAgent", ctx: RenderContext) -> str | None:
         if "button" not in item:
             # Built once: every render would otherwise register a new callback.
             # data carries (state, item) so the handler can toggle and re-render.
+            # An opened details block is highlighted as primary.
+            if item.get("open"):
+                style = "primary"
+            else:
+                style = "success" if item["status"] == "ok" else "danger"
             item["button"] = agent.Button.rich.inline(
                 name,
                 agent.on_tool_args,
                 data=(ctx.state, item),
-                style="success" if item["status"] == "ok" else "danger",
+                style=style,
                 ttl=TOOL_BAR_TTL,
                 html_tag=True,
             )
@@ -307,8 +378,19 @@ def _tool_details(agent: "OpenAgent", ctx: RenderContext) -> str | None:
         description = tool.description if tool else ""
         elapsed = float(item.get("elapsed") or 0.0)
 
+        # The tool-name pill is a button that collapses this details block.
+        # Built once: every render would otherwise register a new callback.
+        if "details_button" not in item:
+            item["details_button"] = agent.Button.rich.inline(
+                name,
+                agent.on_tool_args,
+                data=(ctx.state, item),
+                style=style,
+                ttl=TOOL_BAR_TTL,
+                html_tag=True,
+            )
         head = (
-            f"<p><tg-pill style='{style}'>{html.escape(name)}</tg-pill> "
+            f"<p>{item['details_button']} "
             f"<tg-pill style='{style}'>{html.escape(label)}</tg-pill></p>"
         )
         if description:
@@ -343,24 +425,62 @@ def _history_header(agent: "OpenAgent", ctx: RenderContext) -> str:
 
 @text_module("history_nav")
 def _history_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    """Back / Next row that scrolls through the saved conversation history."""
+    """Back / Again / Next row that scrolls through the saved conversation history.
+
+    Edge buttons are rendered only when there is somewhere to scroll, so the
+    latest exchange shows just Back/Again and the oldest one Back/Again/Next.
+    "Again" repeats the prompt of the currently displayed exchange.
+    """
     state = ctx.state or {}
-    if len(state.get("history") or []) < 4:  # fewer than two saved exchanges
+    history = state.get("history") or []
+    total = len(history) // 2
+    in_history = "pos" in ctx.extra
+    pos = int(
+        ctx.extra.get("pos", state.get("history_pos", total - 1 if total else 0))
+    )
+    if total:
+        pos = max(0, min(pos, total - 1))
+    prompt = ctx.extra.get("prompt") or state.get("prompt")
+    if not total and not prompt:
         return None
-    if "history_buttons" not in state:
-        # Built once: every render would otherwise register new callbacks
-        state["history_buttons"] = "".join(
-            agent.Button.rich.inline(
+
+    tags = state.setdefault("history_nav_tags", {})
+
+    def tag(key: str, label: str, handler, data, style: str) -> str:
+        # Built once per role: every render would otherwise register a new callback
+        if key not in tags:
+            tags[key] = agent.Button.rich.inline(
                 agent.strings(label),
-                agent.on_history_scroll,
-                data=(state, step),
-                style="link",
+                handler,
+                data=data,
+                style=style,
                 ttl=HISTORY_NAV_TTL,
                 html_tag=True,
             )
-            for label, step in (("btn_back", -1), ("btn_next", 1))
+        return tags[key]
+
+    buttons: list[str] = []
+    if total and pos > 0:
+        buttons.append(
+            tag("back", "btn_back", agent.on_history_scroll, (state, -1), "link")
         )
-    return f"<tg-button-row align='center'>{state['history_buttons']}</tg-button-row>"
+    if prompt:
+        buttons.append(
+            tag(
+                "again_history" if in_history else "again",
+                "btn_again",
+                agent.on_repeat_request,
+                (state, in_history),
+                "primary",
+            )
+        )
+    if total and pos < total - 1:
+        buttons.append(
+            tag("next", "btn_next", agent.on_history_scroll, (state, 1), "link")
+        )
+    if not buttons:
+        return None
+    return f"<tg-button-row align='center'>{''.join(buttons)}</tg-button-row>"
 
 
 @text_module("diffs")
@@ -378,40 +498,11 @@ def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     return "\n".join(blocks) or None
 
 
-@text_module("ask")
-def _ask(agent: "OpenAgent", ctx: RenderContext) -> str:
-
-    async def _input_ask(call: InlineMessage, args: str, data: Message | None = None):
-        if not data:
-            return
-
-        data.guest_args = args
-        data.reply_rich = data.edit_rich
-        data.reply = data.edit
-        try:
-            await agent.guest_cmd_agent(data)
-        except Exception as e:
-            await agent.kernel.handler_error(
-                e,
-                message="guest_cmd_agent call failed"
-            )
-
-    input_button = agent.Button.rich.input(
-        "Ask",
-        _input_ask,
-        style='success',
-        data=ctx.extra['message'],
-        html_tag=True,
-    )
-    row = "<tg-button-row>{button}</tg-button-row>".format(button=input_button)
-    return row
-
-
 text_format("notice", "standalone_header", "body")
 text_format("progress", "status_header", "prompt", "tool_bar", "tool_details", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "tool_bar", "tool_details", "history_nav")
+text_format("result", "status_header", "prompt", "body", "error_detail", "tool_bar", "tool_details", "history_nav")
 text_format("history", "history_header", "prompt", "body", "history_nav")
 text_format("cancelled", "status_header", "cancelled_body")
-text_format("error_standalone", "standalone_header", "body")
+text_format("error_standalone", "standalone_header", "body", "error_detail")
 text_format("usage", "usage_header", "usage_body", "copy_button")
-text_format("models", "models_header", "models_list")
+text_format("models", "models_header", "models_list", "models_nav")

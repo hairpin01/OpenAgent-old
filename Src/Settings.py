@@ -24,14 +24,17 @@ MODELS_PATH = "/models"
 # Limits
 MAX_REPLY_CHARS = 6200
 MAX_MODELS_LISTED = 50
+MODELS_PAGE_SIZE = 60
 MAX_DETAIL_CHARS = 200
+MAX_PROVIDER_ERROR_CHARS = 1500  # max chars of the raw provider error text shown in the message
 
 # Tools
-MAX_TOOL_ITERATIONS = 20
+MAX_TOOL_ITERATIONS = 59
 MAX_TOOL_OUTPUT_CHARS = 8000
 DEFAULT_TOOL_TIMEOUT = 20
 TOOL_BAR_TTL = 3600  # seconds the tool bar buttons stay clickable
 HISTORY_NAV_TTL = 3600  # seconds the history Back/Next buttons stay clickable
+MODELS_NAV_TTL = 3600  # seconds the models Back/Next buttons stay clickable
 TOOL_DETAIL_CHARS = 600  # max chars of tool args / output / description shown in details
 
 # Seconds between rich-message progress refreshes while a request is running
@@ -105,6 +108,12 @@ BLOCK_TAGS_FORBIDDEN_IN_CELLS = {
 
 # Context
 DEFAULT_CONTEXT_ENABLED = True
-DEFAULT_CONTEXT_SIZE = 10
-MAX_CONTEXT_MESSAGES = 50
+# Pairs of (user, assistant) messages kept in context; 0 = unlimited
+DEFAULT_CONTEXT_SIZE = 0
+# Hard cap: pairs stored even in "unlimited" mode (DB row limit guard)
+MAX_CONTEXT_MESSAGES = 200
+# Tool call/output records replayed into context (per exchange)
+CONTEXT_TOOL_RECORD_LIMIT = 4
+# Max chars of one tool output stored in the context record
+CONTEXT_TOOL_RECORD_CHARS = 4000
 CONTEXT_RESET_ARGS = ("reset", "clear", "forget")

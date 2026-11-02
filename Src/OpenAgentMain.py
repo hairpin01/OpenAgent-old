@@ -32,10 +32,12 @@ from .Settings import (
     DEFAULT_TOOL_RULES_ENABLED,
     DEFAULT_TOOL_TIMEOUT,
     MAX_DETAIL_CHARS,
+    MAX_PROVIDER_ERROR_CHARS,
     MAX_MODELS_LISTED,
     MAX_REPLY_CHARS,
     MAX_TOOL_ITERATIONS,
     MODELS_ARG,
+    MODELS_PAGE_SIZE,
     MODELS_PATH,
     PROGRESS_UPDATE_INTERVAL,
     CUSTOM_EMOJI,
@@ -44,6 +46,8 @@ from .Settings import (
     DEFAULT_CONTEXT_ENABLED,
     DEFAULT_CONTEXT_SIZE,
     MAX_CONTEXT_MESSAGES,
+    CONTEXT_TOOL_RECORD_LIMIT,
+    CONTEXT_TOOL_RECORD_CHARS,
     CONTEXT_RESET_ARGS,
     CHAT_ID,
 )
@@ -61,18 +65,42 @@ from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
 
 
 class AgentError(Exception):
-    """Provider or configuration error with a ready user-facing text."""
+    """Provider or configuration error with a ready user-facing text.
+
+    ``detail`` carries the raw provider error text for the expanded
+    error block in the message.
+    """
+
+    def __init__(self, text: str, detail: str | None = None):
+        super().__init__(text)
+        self.detail = detail
 
 
-def _error_detail(body: Any) -> str:
-    """Extract a short error message from a provider response body."""
+def _one_line(text: object) -> str:
+    """Flatten ``text`` to one line (for pill-sized error summaries)."""
+    return " ".join(str(text).split())
+
+
+def _error_detail(body: Any, raw: str = "") -> str:
+    """Extract the provider error text from a response body.
+
+    JSON bodies take the message from ``error.message`` / ``error`` /
+    ``message``; anything else falls back to the raw response text, so
+    non-JSON error pages are not lost either.
+    """
+    text = ""
     if isinstance(body, dict):
-        err = body.get("error")
+        err = body.get("error", body.get("message", ""))
         if isinstance(err, dict):
-            return str(err.get("message", ""))[:MAX_DETAIL_CHARS]
-        if err:
-            return str(err)[:MAX_DETAIL_CHARS]
-    return ""
+            text = str(err.get("message") or err.get("detail") or err.get("details") or "")
+        elif err:
+            text = str(err)
+    elif isinstance(body, str) and body:
+        text = body
+    if not text:
+        text = _one_line(raw)
+    text = text.strip()
+    return text[:MAX_PROVIDER_ERROR_CHARS]
 
 
 class OpenAgent(loader.ModuleBase):
@@ -134,7 +162,7 @@ class OpenAgent(loader.ModuleBase):
             "context_size",
             DEFAULT_CONTEXT_SIZE,
             description=lambda self: self.strings("cfg_context_size"),
-            validator=cfg.Integer(min=1, max=MAX_CONTEXT_MESSAGES),
+            validator=cfg.Integer(min=0, max=MAX_CONTEXT_MESSAGES),
         ),
         cfg.ConfigValue(
             "tool_rules",
@@ -198,17 +226,29 @@ class OpenAgent(loader.ModuleBase):
             async with self._http.request(
                 method, url, json=payload, headers=headers, timeout=timeout
             ) as resp:
-                body = await resp.json(content_type=None)
                 status = resp.status
+                # Read as text first: providers may answer with a non-JSON
+                # error page, and the text must not be lost on json failure
+                raw = (await resp.read()).decode("utf-8", "replace")
+                try:
+                    body: Any = json.loads(raw)
+                except ValueError:
+                    body = None
         except asyncio.TimeoutError:
             raise AgentError(self.strings("err_timeout")) from None
         except (aiohttp.ClientError, ValueError) as exc:
             raise AgentError(self.strings("err_network", error=str(exc))) from None
 
         if status >= 400:
-            raise AgentError(
-                self.strings("err_http", status=status, detail=_error_detail(body))
-            )
+            detail = _error_detail(body, raw)
+            short = _one_line(detail)
+            if len(short) > MAX_DETAIL_CHARS:
+                short = short[:MAX_DETAIL_CHARS].rstrip() + "…"
+            if short:
+                text = self.strings("err_http", status=status, detail=short)
+            else:
+                text = self.strings("err_http", status=status, detail="").rstrip(": ")
+            raise AgentError(text, detail=detail or None)
         return body
 
     def _build_messages(
@@ -231,9 +271,54 @@ class OpenAgent(loader.ModuleBase):
                 ),
             })
 
-        messages.extend(history)
+        messages.extend(self._history_to_messages(history))
         messages.append({"role": "user", "content": prompt})
         return messages
+
+    @staticmethod
+    def _context_limit_pairs() -> int:
+        """Pairs kept in context; 0 in config means unlimited (hard cap)."""
+        return MAX_CONTEXT_MESSAGES
+
+    @staticmethod
+    def _history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Convert stored context entries to provider messages.
+
+        Tool records saved alongside an answer are inlined into it as a
+        compact transcript, so the model keeps memory of which tools ran
+        and what they returned.
+        """
+        out: list[dict[str, Any]] = []
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role == "user" and isinstance(content, str) and content:
+                out.append({"role": "user", "content": content})
+            elif role == "assistant" and isinstance(content, str):
+                message: dict[str, Any] = {"role": "assistant", "content": content}
+                calls = item.get("tool_calls")
+                if isinstance(calls, list) and calls:
+                    message["tool_calls"] = calls
+                tools = item.get("tools")
+                if isinstance(tools, list) and tools:
+                    lines = [
+                        f"[{i}] {str(rec.get('name') or '?')}: "
+                        f"{str(rec.get('output') or '')[:CONTEXT_TOOL_RECORD_CHARS]}"
+                        for i, rec in enumerate(tools, 1)
+                        if isinstance(rec, dict)
+                    ]
+                    if lines:
+                        transcript = (
+                            "\n<tool-outputs>\n" + "\n".join(lines) + "\n</tool-outputs>"
+                        )
+                        message["content"] = (
+                            content + transcript if content else transcript.strip()
+                        )
+                out.append(message)
+        return out
+
 
     async def _chat_request(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -248,6 +333,14 @@ class OpenAgent(loader.ModuleBase):
             payload["tool_choice"] = "auto"
 
         data = await self._request("POST", CHAT_PATH, payload)
+        # Some providers wrap errors in a 200 body
+        if (
+            isinstance(data, dict)
+            and "choices" not in data
+            and (data.get("error") or data.get("message"))
+        ):
+            detail = _error_detail(data, "")
+            raise AgentError(self.strings("err_bad_reply"), detail=detail or None)
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError):
@@ -266,12 +359,14 @@ class OpenAgent(loader.ModuleBase):
         chat_id: int | str,
     ) -> str:
         messages = self._build_messages(prompt, history)
+        start_len = len(messages)  # first index of this exchange's new messages
         tools = tool_schemas(self._tools)
         context = ToolContext(
             logger=self.log,
             http=self._http,
             event=event,
             chat_id=chat_id,
+            client=self.client,
             tools=self._tools,
             state=state,
         )
@@ -283,6 +378,16 @@ class OpenAgent(loader.ModuleBase):
                 content = response.get("content")
                 if not isinstance(content, str) or not content.strip():
                     raise AgentError(self.strings("err_bad_reply"))
+                # Compact record of this exchange's tool calls for the context
+                record: list[dict[str, str]] = []
+                for item in messages[start_len:]:
+                    if not isinstance(item, dict) or item.get("role") != "tool":
+                        continue
+                    record.append({
+                        "name": str(item.get("tool_name") or "?"),
+                        "output": str(item.get("content") or ""),
+                    })
+                state["exchange_tools"] = record[:CONTEXT_TOOL_RECORD_LIMIT]
                 return content.strip()
 
             messages.append({
@@ -350,10 +455,15 @@ class OpenAgent(loader.ModuleBase):
                     entry["elapsed"] = time.perf_counter() - entry["start"]
                     entry["status"] = "ok" if self._tool_ok(result) else "err"
                     state["tool"] = ""
+                    # A fast tool may have changed the UI (e.g. added a thinking
+                    # note) — push it now, since _wait_for_reply returns as soon
+                    # as the task is done without a final edit.
+                    await self._edit_rich(message, self._build_progress_text(state))
 
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id") or f"call_{step}_{index}",
+                    "tool_name": name,
                     "content": result,
                 })
 
@@ -414,16 +524,22 @@ class OpenAgent(loader.ModuleBase):
         if not isinstance(raw, list):
             return []
 
-        limit = int(self.config["context_size"]) * 2
-        out: list[dict[str, str]] = []
+        limit = self._context_limit_pairs() * 2
+        out: list[dict[str, Any]] = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
             role = item.get("role")
             content = item.get("content")
             if role in ("user", "assistant") and isinstance(content, str) and content:
-                out.append({"role": role, "content": content})
-        return out[-limit:]
+                entry: dict[str, Any] = {"role": role, "content": content}
+                if isinstance(item.get("tools"), list):
+                    entry["tools"] = item["tools"]
+                out.append(entry)
+        out = out[-limit:]
+        if len(out) % 2:
+            out = out[1:]  # keep user/assistant pairs aligned
+        return out
 
     async def _save_context(self, chat_id: int | str, history: list[dict[str, str]]) -> None:
         try:
@@ -438,13 +554,24 @@ class OpenAgent(loader.ModuleBase):
             await self._save_context(chat_id, [])
         return removed
 
-    async def _append_context(self, chat_id: int | str, prompt: str, answer: str) -> int:
+    async def _append_context(
+        self,
+        chat_id: int | str,
+        prompt: str,
+        answer: str,
+        tools_record: list[dict[str, str]] | None = None,
+    ) -> int:
         history = await self._load_context(chat_id)
+        answer_entry: dict[str, Any] = {"role": "assistant", "content": answer}
+        if tools_record:
+            answer_entry["tools"] = tools_record
         history.append({"role": "user", "content": prompt})
-        history.append({"role": "assistant", "content": answer})
-        limit = int(self.config["context_size"]) * 2
+        history.append(answer_entry)
+        limit = self._context_limit_pairs() * 2
         if len(history) > limit:
             history = history[-limit:]
+            if len(history) % 2:
+                history = history[1:]  # keep user/assistant pairs aligned
         await self._save_context(chat_id, history)
         return len(history) // 2
 
@@ -489,11 +616,12 @@ class OpenAgent(loader.ModuleBase):
             RenderContext(kind=kind, text=text, copy_text=text, state=state, extra={"message": message}),
         )
 
-    def _build_error_text(self, text: str) -> str:
+    def _build_error_text(self, text: str, detail: str | None = None) -> str:
+        state = {"error_detail": detail} if detail else None
         return render_text(
             self,
             "error_standalone",
-            RenderContext(kind="error", text=text),
+            RenderContext(kind="error", text=text, state=state),
         )
 
     def _build_usage_text(self) -> str:
@@ -501,25 +629,38 @@ class OpenAgent(loader.ModuleBase):
         command = html.escape(f"{mention} agent ", quote=True)
         return render_text(self, "usage", RenderContext(copy_text=command, label=self.strings("btn_copy_prompt")))
 
-    def _render_models(self, models: tuple[str, ...] | list[str]) -> str:
+    def _render_models(self, state: dict[str, Any]) -> str:
+        """Render one page of the model list; ``state`` keeps the full list."""
+        models = list(state.get("models") or [])
+        pages = max((len(models) + MODELS_PAGE_SIZE - 1) // MODELS_PAGE_SIZE, 1)
+        page = max(0, min(int(state.get("page") or 0), pages - 1))
+        state["page"] = page
+        start = page * MODELS_PAGE_SIZE
         return render_text(
             self,
             "models",
-            RenderContext(extra={"models": list(models)}),
+            RenderContext(
+                state=state,
+                extra={
+                    "models": models[start : start + MODELS_PAGE_SIZE],
+                    "page": page,
+                    "pages": pages,
+                },
+            ),
         )
 
     async def _build_models_text(self) -> str:
         try:
             list_models = await self._models()
         except AgentError as exc:
-            return self._build_error_text(str(exc))
+            return self._build_error_text(str(exc), detail=exc.detail)
         except Exception as exc:
             return self._build_error_text(
                 self.strings("err_unexpected", error=str(exc))
             )
 
         self._models_cache = tuple(list_models)
-        return self._render_models(list_models)
+        return self._render_models({"models": list(list_models), "page": 0})
 
 
     async def _edit_rich(self, message: Any, text: str) -> None:
@@ -598,6 +739,9 @@ class OpenAgent(loader.ModuleBase):
 
         state, entry = data
         entry["open"] = not entry.get("open")
+        # Drop the cached buttons so they are rebuilt with the new style
+        entry.pop("button", None)
+        entry.pop("details_button", None)
         await call.answer()
 
         last = state.get("last_result")
@@ -610,6 +754,43 @@ class OpenAgent(loader.ModuleBase):
                 state, last["kind"], last["text"], last["message"]
             ),
         )
+
+    @staticmethod
+    def _repeat_prompt(state: dict[str, Any], from_history: bool) -> str:
+        """Prompt shown by the current view, used by the Again button."""
+        if from_history:
+            history = state.get("history") or []
+            total = len(history) // 2
+            pos = int(state.get("history_pos", total - 1))
+            if 0 <= pos < total:
+                return str(history[2 * pos]["content"])
+        return str(state.get("prompt") or "")
+
+    @loader.callback()
+    async def on_repeat_request(self, call: typ.InlineMessage, data=None) -> None:
+        """Repeat the prompt of the exchange currently shown in the message."""
+        if not call.sender_id == self.kernel.ADMIN_ID:
+            return
+        if not data:
+            return
+
+        state, from_history = data
+        prompt = self._repeat_prompt(state, bool(from_history))
+        if not prompt:
+            await call.answer(self.strings("repeat_empty"))
+            return
+
+        await call.answer()
+        # Re-run through the normal guest flow, editing the same message
+        call.guest_args = prompt
+        call.reply_rich = call.edit_rich
+        call.reply = call.edit
+        try:
+            await self.guest_cmd_agent(call)
+        except Exception as exc:
+            await self.kernel.handle_error(
+                exc, message="OpenAgent repeat request failed"
+            )
 
     def _build_history_text(self, state: dict[str, Any]) -> str:
         """Render the exchange at ``state['history_pos']`` (the latest one is the normal result)."""
@@ -666,7 +847,11 @@ class OpenAgent(loader.ModuleBase):
         if not data:
             return
 
-        model = str(data)
+        if isinstance(data, tuple) and len(data) == 2:
+            state, model = data
+            model = str(model)
+        else:
+            state, model = None, str(data)
         old_model = str(self.config["model"])
         self.config["model"] = model
         try:
@@ -681,8 +866,36 @@ class OpenAgent(loader.ModuleBase):
 
         self.kernel.store_module_config_schema(self.name, self.config)
         await call.answer(self.strings("model_changed", model=model))
-        if self._models_cache:
-            await self._edit_rich(call, self._render_models(self._models_cache))
+        if state is not None:
+            await self._edit_rich(call, self._render_models(state))
+        elif self._models_cache:
+            await self._edit_rich(
+                call,
+                self._render_models({"models": list(self._models_cache), "page": 0}),
+            )
+
+    @loader.callback()
+    async def on_models_scroll(self, call: typ.InlineMessage, data=None) -> None:
+        """Back / Next through the paginated model list."""
+        if not call.sender_id == self.kernel.ADMIN_ID:
+            return
+        if not data:
+            return
+
+        state, step = data
+        models = state.get("models") or []
+        pages = max((len(models) + MODELS_PAGE_SIZE - 1) // MODELS_PAGE_SIZE, 1)
+        page = int(state.get("page") or 0) + step
+        if page < 0:
+            await call.answer(self.strings("models_first"))
+            return
+        if page >= pages:
+            await call.answer(self.strings("models_last"))
+            return
+
+        state["page"] = page
+        await call.answer()
+        await self._edit_rich(call, self._render_models(state))
 
     @loader.guest_command(
         "agent",
@@ -715,7 +928,8 @@ class OpenAgent(loader.ModuleBase):
             "prompt": raw,
             "tool": "",
             "tool_calls": 0,
-            "user_id": event.message.sender_id,
+            "user_id": getattr(event, "sender_id", None)
+            or getattr(getattr(event, "message", None), "sender_id", None),
         }
         try:
             cancel_button = self.Button.rich.inline(
@@ -739,6 +953,10 @@ class OpenAgent(loader.ModuleBase):
 
             history = await self._load_context(chat_id) if context_enabled else []
             state['context_count'] = len(history) // 2
+            if context_enabled:
+                # Snapshot for the pager: errors can still scroll back
+                state["history"] = history
+                state["history_pos"] = max(len(history) // 2 - 1, 0)
             task = asyncio.create_task(
                 self._chat_with_tools(raw, history, state, message, event, chat_id)
             )
@@ -763,6 +981,7 @@ class OpenAgent(loader.ModuleBase):
                 raise
             await self._edit_rich(message, self._build_result_text(state, "cancelled"))
         except AgentError as exc:
+            state["error_detail"] = exc.detail
             await self._edit_rich(
                 message, self._build_result_text(state, "error", str(exc), message=message)
             )
@@ -778,7 +997,7 @@ class OpenAgent(loader.ModuleBase):
         else:
             if context_enabled:
                 state["context_count"] = await self._append_context(
-                    chat_id, raw, text
+                    chat_id, raw, text, state.get("exchange_tools") or None
                 )
                 # Snapshot for the history pager: stable even if later requests
                 # append to the stored context

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 # Standard library
-import ast
 import asyncio
 import html
 import time
 import uuid
-import json
 from typing import Any
 from urllib.parse import urlparse
 
@@ -36,13 +34,9 @@ from .Settings import (
     MODELS_PAGE_SIZE,
     PROGRESS_UPDATE_INTERVAL,
     CUSTOM_EMOJI,
-    RICH_HTML_RULES,
-    TOOL_RULES,
     DEFAULT_CONTEXT_ENABLED,
     DEFAULT_CONTEXT_SIZE,
     MAX_CONTEXT_MESSAGES,
-    CONTEXT_TOOL_RECORD_LIMIT,
-    CONTEXT_TOOL_RECORD_CHARS,
     CONTEXT_RESET_ARGS,
     CHAT_ID,
 )
@@ -53,6 +47,9 @@ from .OpenAgentLib.Tools import Tool, ToolContext, load_tools
 # Harness: the agent loop and the provider (UI-agnostic)
 from .OpenAgentLib.harness import AgentError, RunInput, run as harness_run
 from .OpenAgentLib.providers import OpenAIProvider
+
+# Chat context: DB history store + provider message building
+from .OpenAgentLib.context import ContextStore, build_messages
 
 # Text rendering
 from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
@@ -132,6 +129,7 @@ class OpenAgent(loader.ModuleBase):
     _models_cache: tuple[str, ...] = ()
     _tools: list[Tool] = []
     _provider: OpenAIProvider | None = None
+    _context_store: ContextStore | None = None
 
 
     async def on_load(self) -> None:
@@ -140,6 +138,7 @@ class OpenAgent(loader.ModuleBase):
         self._active_requests = {}
         self._models_cache = ()
         self._tools = load_tools(self.log)
+        self._context_store = ContextStore(self.db, self.name.lower(), self.log)
         self.log.debug("OpenAgent tools loaded: %s", len(self._tools))
 
         me = await self.client.get_me()
@@ -156,6 +155,7 @@ class OpenAgent(loader.ModuleBase):
         self._active_requests.clear()
         self._tools = []
         self._provider = None
+        self._context_store = None
 
         if self._http is not None:
             await self._http.close()
@@ -170,75 +170,6 @@ class OpenAgent(loader.ModuleBase):
                 self._http, self.config, self.strings, self.log
             )
         return self._provider
-
-    def _build_messages(
-        self, prompt: str, history: list[dict[str, str]]
-    ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
-        system = str(self.config["system_prompt"]).strip()
-        if system:
-            rules = f"<rules>{RICH_HTML_RULES}</rules>"
-            if self.config["tool_rules"] and self._tools:
-                listing = "\n".join(
-                    f"- {tool.name}: {tool.description}" for tool in self._tools
-                )
-                rules += f"\n<tool-rules>{TOOL_RULES.format(tools=listing)}</tool-rules>"
-            messages.append({
-                "role": "system",
-                "content": (
-                    rules
-                    + "\nUser system prompt:\n<user-prompt>" + system + "</user-prompt>"
-                ),
-            })
-
-        messages.extend(self._history_to_messages(history))
-        messages.append({"role": "user", "content": prompt})
-        return messages
-
-    @staticmethod
-    def _context_limit_pairs() -> int:
-        """Pairs kept in context; 0 in config means unlimited (hard cap)."""
-        return MAX_CONTEXT_MESSAGES
-
-    @staticmethod
-    def _history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Convert stored context entries to provider messages.
-
-        Tool records saved alongside an answer are inlined into it as a
-        compact transcript, so the model keeps memory of which tools ran
-        and what they returned.
-        """
-        out: list[dict[str, Any]] = []
-        for item in history:
-            if not isinstance(item, dict):
-                continue
-            role = item.get("role")
-            content = item.get("content")
-            if role == "user" and isinstance(content, str) and content:
-                out.append({"role": "user", "content": content})
-            elif role == "assistant" and isinstance(content, str):
-                message: dict[str, Any] = {"role": "assistant", "content": content}
-                calls = item.get("tool_calls")
-                if isinstance(calls, list) and calls:
-                    message["tool_calls"] = calls
-                tools = item.get("tools")
-                if isinstance(tools, list) and tools:
-                    lines = [
-                        f"[{i}] {str(rec.get('name') or '?')}: "
-                        f"{str(rec.get('output') or '')[:CONTEXT_TOOL_RECORD_CHARS]}"
-                        for i, rec in enumerate(tools, 1)
-                        if isinstance(rec, dict)
-                    ]
-                    if lines:
-                        transcript = (
-                            "\n<tool-outputs>\n" + "\n".join(lines) + "\n</tool-outputs>"
-                        )
-                        message["content"] = (
-                            content + transcript if content else transcript.strip()
-                        )
-                out.append(message)
-        return out
-
 
     async def _chat_with_tools(
         self,
@@ -270,7 +201,13 @@ class OpenAgent(loader.ModuleBase):
         )
         return await harness_run(
             RunInput(
-                messages=self._build_messages(prompt, history),
+                messages=build_messages(
+                    self.config["system_prompt"],
+                    self.config["tool_rules"],
+                    self._tools,
+                    history,
+                    prompt,
+                ),
                 tools=self._tools,
                 tool_context=tool_context,
                 state=state,
@@ -288,83 +225,6 @@ class OpenAgent(loader.ModuleBase):
         if len(text) <= MAX_REPLY_CHARS:
             return text
         return text[:MAX_REPLY_CHARS].rstrip() + "…"
-
-    async def _load_context(self, chat_id):
-        try:
-            raw = await self.db.db_get(self.name.lower(), f"ctx_{chat_id}")
-        except Exception as exc:
-            self.log.error("OpenAgent context load failed: %s", exc)
-            return []
-    
-        if raw is None:
-            return []
-            
-        if isinstance(raw, str):
-            s = raw.strip()
-            if not s:
-                return []
-            try:
-                raw = json.loads(s)
-            except ValueError:
-                try:
-                    raw = ast.literal_eval(s)
-                except (ValueError, SyntaxError):
-                    self.log.error("OpenAgent ctx unparsable: %r", raw[:200])
-                    return []
-    
-        if not isinstance(raw, list):
-            return []
-
-        limit = self._context_limit_pairs() * 2
-        out: list[dict[str, Any]] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            role = item.get("role")
-            content = item.get("content")
-            if role in ("user", "assistant") and isinstance(content, str) and content:
-                entry: dict[str, Any] = {"role": role, "content": content}
-                if isinstance(item.get("tools"), list):
-                    entry["tools"] = item["tools"]
-                out.append(entry)
-        out = out[-limit:]
-        if len(out) % 2:
-            out = out[1:]  # keep user/assistant pairs aligned
-        return out
-
-    async def _save_context(self, chat_id: int | str, history: list[dict[str, str]]) -> None:
-        try:
-            await self.db.db_set(self.name.lower(), f"ctx_{chat_id}", history)
-        except Exception as exc:
-            self.log.error("OpenAgent context save failed: %s", exc)
-
-    async def _clear_context(self, chat_id: int | str) -> int:
-        history = await self._load_context(chat_id)
-        removed = len(history)
-        if removed:
-            await self._save_context(chat_id, [])
-        return removed
-
-    async def _append_context(
-        self,
-        chat_id: int | str,
-        prompt: str,
-        answer: str,
-        tools_record: list[dict[str, str]] | None = None,
-    ) -> int:
-        history = await self._load_context(chat_id)
-        answer_entry: dict[str, Any] = {"role": "assistant", "content": answer}
-        if tools_record:
-            answer_entry["tools"] = tools_record
-        history.append({"role": "user", "content": prompt})
-        history.append(answer_entry)
-        limit = self._context_limit_pairs() * 2
-        if len(history) > limit:
-            history = history[-limit:]
-            if len(history) % 2:
-                history = history[1:]  # keep user/assistant pairs aligned
-        await self._save_context(chat_id, history)
-        return len(history) // 2
 
     def _provider_label(self) -> str:
         raw = str(self.config["base_url"]).strip()
@@ -498,7 +358,7 @@ class OpenAgent(loader.ModuleBase):
                 style="danger",
                 label=self.strings("status_error"),
             )
-        removed = await self._clear_context(chat_id)
+        removed = await self._context_store.clear(chat_id)
         text = (
             self.strings("context_cleared", count=removed)
             if removed
@@ -742,7 +602,7 @@ class OpenAgent(loader.ModuleBase):
                 chat_id is not None and bool(self.config["context_enabled"])
             )
 
-            history = await self._load_context(chat_id) if context_enabled else []
+            history = await self._context_store.load(chat_id) if context_enabled else []
             state['context_count'] = len(history) // 2
             if context_enabled:
                 # Snapshot for the pager: errors can still scroll back
@@ -787,12 +647,12 @@ class OpenAgent(loader.ModuleBase):
             )
         else:
             if context_enabled:
-                state["context_count"] = await self._append_context(
+                state["context_count"] = await self._context_store.append(
                     chat_id, raw, text, state.get("exchange_tools") or None
                 )
                 # Snapshot for the history pager: stable even if later requests
                 # append to the stored context
-                state["history"] = await self._load_context(chat_id)
+                state["history"] = await self._context_store.load(chat_id)
                 state["history_pos"] = len(state["history"]) // 2 - 1
             await self._edit_rich(message, self._build_result_text(state, "done", text, message=message))
         finally:

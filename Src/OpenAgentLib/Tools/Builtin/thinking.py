@@ -41,9 +41,9 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     lines.append(text)
     del lines[:-MAX_LINES]  # keep the newest notes only
 
-    # Show the notes in the running and final message, right before the tool bar
-    # (progress: ...prompt, tool_bar... | result: ...body, tool_bar...)
-    ctx.add_module("progress", "thinking_notes", _notes_module, after="prompt")
+    # The running message already renders ``thinking_lines`` through the
+    # built-in "thinking" module, so adding the notes there again would show
+    # the block twice. Only the final message needs an extra module.
     ctx.add_module("result", "thinking_notes", _notes_module, after="body")
 
     return "\n".join(lines)

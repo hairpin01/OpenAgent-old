@@ -237,7 +237,10 @@ async def run(inp: RunInput) -> str:
                 )
             else:
                 thinking_text = arguments.pop("thinking", None)
-                if thinking_text and isinstance(thinking_text, str):
+                # The "thinking" tool writes its own notes in its handler;
+                # counting the injected pseudo-argument too would add the same
+                # note twice.
+                if name != "thinking" and thinking_text and isinstance(thinking_text, str):
                     clean_thinking = " ".join(thinking_text.split())
                     if clean_thinking:
                         lines = state.setdefault("thinking_lines", [])

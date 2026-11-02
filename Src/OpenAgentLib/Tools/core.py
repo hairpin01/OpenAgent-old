@@ -116,7 +116,7 @@ def tool_schemas(tools: list[Tool]) -> list[dict[str, Any]]:
         params = copy.deepcopy(tool.parameters) if tool.parameters else {"type": "object", "properties": {}}
         if params.get("type") == "object":
             props = params.setdefault("properties", {})
-            if "thinking" not in props:
+            if "thinking" not in props and tool.name != "thinking":
                 props["thinking"] = {
                     "type": "string",
                     "description": "Short explanation of why you are calling this tool (one short sentence, shown to the user).",

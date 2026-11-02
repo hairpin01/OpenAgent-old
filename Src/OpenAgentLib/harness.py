@@ -44,10 +44,11 @@ class RunInput:
     tools: list[Tool]
     tool_context: ToolContext
     state: dict[str, Any]  # UI state (tool_bar, thinking notes, ...)
-    provider: Any  # .chat(messages, tools) -> message dict
+    provider: Any  # .chat(messages, tools) -> (message dict, usage|None)
     logger: Any
     strings: Callable[[str], str]
     on_event: Callable[[str, dict[str, Any]], Awaitable[None]]  # tool_start / tool_done
+    on_usage: Callable[[dict[str, Any]], Awaitable[None]]  # per-step token usage
     tool_timeout: float = DEFAULT_TOOL_TIMEOUT
 
 
@@ -76,10 +77,12 @@ async def run(inp: RunInput) -> str:
     for step in range(MAX_TOOL_ITERATIONS):
         # The UI keeps refreshing on its own (outer wait loop) while the
         # provider answer is in flight
-        response = await inp.provider.chat(messages, schemas)
-        calls = response.get("tool_calls") or []
+        message, usage = await inp.provider.chat(messages, schemas)
+        if usage is not None:
+            await inp.on_usage(usage)
+        calls = message.get("tool_calls") or []
         if not calls:
-            content = response.get("content")
+            content = message.get("content")
             if not isinstance(content, str) or not content.strip():
                 raise AgentError(inp.strings("err_bad_reply"))
             # Compact record of this exchange's tool calls for the context
@@ -96,7 +99,7 @@ async def run(inp: RunInput) -> str:
 
         messages.append({
             "role": "assistant",
-            "content": response.get("content") or "",
+            "content": message.get("content") or "",
             "tool_calls": calls,
         })
 

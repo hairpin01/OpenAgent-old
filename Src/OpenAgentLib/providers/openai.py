@@ -108,8 +108,8 @@ class OpenAIProvider:
 
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """One chat completion; returns the assistant message dict."""
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """One chat completion; returns (assistant message, usage)."""
         payload: dict[str, Any] = {
             "model": str(self._config["model"]),
             "messages": messages,
@@ -129,12 +129,14 @@ class OpenAIProvider:
             detail = error_detail(data, "")
             raise AgentError(self._strings("err_bad_reply"), detail=detail or None)
         try:
-            message = data["choices"][0]["message"]
+            choice = data["choices"][0]
+            message = choice.get("message")
         except (KeyError, IndexError, TypeError):
             raise AgentError(self._strings("err_bad_reply")) from None
         if not isinstance(message, dict):
             raise AgentError(self._strings("err_bad_reply"))
-        return message
+        usage = data.get("usage") if isinstance(data, dict) else None
+        return message, usage if isinstance(usage, dict) else None
 
     async def models(self) -> list[str]:
         """GET the model list and return it as plain ids."""

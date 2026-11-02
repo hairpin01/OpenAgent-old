@@ -33,6 +33,7 @@ MAX_TOOL_ITERATIONS = 59
 MAX_TOOL_OUTPUT_CHARS = 8000
 DEFAULT_TOOL_TIMEOUT = 20
 TOOL_BAR_TTL = 3600  # seconds the tool bar buttons stay clickable
+TOOL_BAR_MAX_PILLS = 5  # the tool bar is a feed: newest pills first, older ones drop
 HISTORY_NAV_TTL = 3600  # seconds the history Back/Next buttons stay clickable
 MODELS_NAV_TTL = 3600  # seconds the models Back/Next buttons stay clickable
 TOOL_DETAIL_CHARS = 600  # max chars of tool args / output / description shown in details

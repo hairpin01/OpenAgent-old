@@ -190,6 +190,10 @@ class OpenAgent(loader.ModuleBase):
             # progress message with the current state (RUN timer, pills).
             await self._edit_rich(message, self._build_progress_text(state))
 
+        async def on_usage(usage: dict[str, Any]) -> None:
+            # Latest provider step's token counts for the token_stats widget
+            state["tokens"] = usage
+
         tool_context = ToolContext(
             logger=self.log,
             http=self._http,
@@ -215,6 +219,7 @@ class OpenAgent(loader.ModuleBase):
                 logger=self.log,
                 strings=self.strings,
                 on_event=on_event,
+                on_usage=on_usage,
                 tool_timeout=DEFAULT_TOOL_TIMEOUT,
             )
         )
@@ -554,7 +559,46 @@ class OpenAgent(loader.ModuleBase):
         doc_en="<prompt> | models | reset - ask the LLM, list models, clear context",
     )
     async def guest_cmd_agent(self, event: typ.Event) -> None:
-        raw = event.guest_args
+        raw = event.guest_args or ""
+        msg = getattr(event, "message", None)
+
+        file_text_parts: list[str] = []
+        if msg is not None:
+            # Handle document (file)
+            if getattr(msg, "document", None):
+                doc = msg.document
+                # Only process text-based files (by mime type or extension)
+                mime = getattr(doc, "mime_type", "") or ""
+                name = getattr(doc, "file_name", "") or "file"
+                is_text = mime.startswith("text/") or mime in (
+                    "application/json",
+                    "application/xml",
+                    "application/javascript",
+                    "application/x-python-code",
+                ) or name.lower().endswith(
+                    (".txt", ".md", ".py", ".js", ".json", ".xml", ".html", ".css", ".csv", ".log", ".ini", ".cfg", ".yaml", ".yml", ".toml", ".sh", ".sql")
+                )
+                if is_text:
+                    try:
+                        file_bytes = await self.client.download_file(doc, bytes)
+                        content = file_bytes.decode("utf-8", errors="replace")
+                        file_text_parts.append(
+                            f"\n\n--- Attached file: {name} ({len(content)} chars) ---\n{content}\n--- End of {name} ---"
+                        )
+                    except Exception as exc:
+                        self.log.debug("OpenAgent failed to read attached document: %s", exc)
+                        file_text_parts.append(f"\n\n[Attached file: {name} - could not read: {exc}]")
+                else:
+                    file_text_parts.append(f"\n\n[Attached file: {name} (type: {mime or 'unknown'}) - binary file, not processed]")
+
+            # Handle photo (image)
+            elif getattr(msg, "photo", None):
+                file_text_parts.append("\n\n[Attached image - vision support depends on the model/provider]")
+
+        # Combine prompt with file content
+        if file_text_parts:
+            raw = (raw + "".join(file_text_parts)).strip()
+
         if not raw:
             await event.reply_rich(self._build_usage_text())
             return

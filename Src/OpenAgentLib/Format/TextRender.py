@@ -24,6 +24,7 @@ from ...Settings import (
     HISTORY_NAV_TTL,
     MAX_DETAIL_CHARS,
     MODELS_NAV_TTL,
+    TOOL_BAR_MAX_PILLS,
     TOOL_BAR_TTL,
     TOOL_DETAIL_CHARS,
 )
@@ -322,11 +323,37 @@ def _bar_clip(text: object, limit: int) -> str:
     return flat[:limit] + "…" if len(flat) > limit else flat
 
 
+def _fmt_tokens(value: object) -> str:
+    """Short human count for the token widget: 15.5k, 980, 0."""
+    n = int(value or 0)
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+@text_module("token_stats")
+def _token_stats(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """Token usage of the latest provider step: prompt in / completion out / total."""
+    usage = (ctx.state or {}).get("tokens") or {}
+    if not usage:
+        return None
+    return (
+        "<blockquote>"
+        f"↑ {_fmt_tokens(usage.get('prompt_tokens'))} | "
+        f"↓ {_fmt_tokens(usage.get('completion_tokens'))} | "
+        f"~{_fmt_tokens(usage.get('total_tokens'))}"
+        "</blockquote>"
+    )
+
+
 @text_module("tool_bar")
 def _tool_bar(agent: "OpenAgent", ctx: RenderContext) -> str | None:
-    """One line of pills, one per tool call; a finished pill toggles its details."""
+    """Feed of up to TOOL_BAR_MAX_PILLS pills, newest first; a finished pill
+    toggles its details."""
     pills: list[str] = []
-    for item in (ctx.state or {}).get("tool_bar") or []:
+    for item in reversed(
+        ((ctx.state or {}).get("tool_bar") or [])[-TOOL_BAR_MAX_PILLS:]
+    ):
         name = item["name"]
         if item.get("status", "run") == "run":
             elapsed = max(time.perf_counter() - item.get("start", 0.0), 0.0)
@@ -499,8 +526,8 @@ def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "tool_bar", "tool_details", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "error_detail", "tool_bar", "tool_details", "history_nav")
+text_format("progress", "status_header", "prompt", "token_stats", "tool_bar", "tool_details", "thinking", "cancel_button")
+text_format("result", "status_header", "prompt", "body", "error_detail", "token_stats", "tool_bar", "tool_details", "history_nav")
 text_format("history", "history_header", "prompt", "body", "history_nav")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body", "error_detail")

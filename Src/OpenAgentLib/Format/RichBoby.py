@@ -138,9 +138,14 @@ def render_body(text: str, limit: int, *, partial: bool = False) -> str:
     if not has_markup:
         text = f"<p>{html.escape(text)}</p>"
 
-    parser = _RichParser()
-    parser.feed(text)
-    balanced = parser.close_all()
+    try:
+        parser = _RichParser()
+        parser.feed(text)
+        balanced = parser.close_all()
+    except Exception:
+        # Fallback for broken/unparseable HTML: escape the whole text safely
+        balanced = f"<p>{html.escape(text)}</p>"
+
     if partial:
         balanced = _prune_empty(balanced)
     return _trim_html(balanced, limit)

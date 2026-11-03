@@ -347,11 +347,21 @@ class OpenAgent(loader.ModuleBase):
         return self._render_models({"models": list(list_models), "page": 0})
 
 
-    async def _edit_rich(self, message: Any, text: str) -> None:
+    async def _edit_rich(self, message: Any, text: str) -> bool:
         try:
             await message.edit_rich(text)
+            return True
         except Exception as exc:
-            self.log.debug("OpenAgent message update failed: %s", exc)
+            self.log.warning("OpenAgent rich message edit failed: %s", exc)
+            # Fallback: if edit failed because of invalid Rich HTML syntax, try fallback formatting
+            try:
+                # Replace content inside body or render clean escaped text
+                plain_escaped = f"<blockquote><b>⚠️ HTML Error:</b> <code>{html.escape(str(exc))}</code></blockquote>\n<pre><code>{html.escape(text)}</code></pre>"
+                await message.edit_rich(plain_escaped)
+                return True
+            except Exception as fallback_exc:
+                self.log.debug("OpenAgent message update fallback failed: %s", fallback_exc)
+                return False
 
     async def _wait_for_reply(
         self, task: asyncio.Task[str], message: Any, state: dict[str, Any]
@@ -377,15 +387,23 @@ class OpenAgent(loader.ModuleBase):
                 last_len, last_edit = length, now
 
             try:
-                await message.edit_rich(self._build_progress_text(state))
+                progress_text = self._build_progress_text(state)
+                await message.edit_rich(progress_text)
                 state["ui_errors"] = 0
             except Exception as exc:
-                # A stream edits often, so one failed edit (flood wait) must
-                # not kill the live view; a plain wait gives up at once
+                # If rich rendering or HTML in stream fails, fallback to escaped preview or report
                 state["ui_errors"] = int(state.get("ui_errors") or 0) + 1
+                self.log.debug("OpenAgent progress update failed: %s", exc)
+                # If error is due to bad markup in live stream, don't let UI freeze
+                if streaming:
+                    try:
+                        # Clean stream text in state if it's breaking HTML
+                        fallback_text = self._build_progress_text(state)
+                        await message.edit_rich(fallback_text)
+                    except Exception:
+                        pass
                 if not streaming or state["ui_errors"] >= 3:
                     state["ui_alive"] = False
-                self.log.debug("OpenAgent progress update failed: %s", exc)
 
 
     def _build_notice_text(

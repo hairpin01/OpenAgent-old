@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(ctx: ToolContext, args: dict) -> str:
@@ -53,7 +53,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return "\n\n".join(results)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="tg_get_messages",
     description=(
         "Get the latest messages from a Telegram chat (oldest first). "
@@ -82,3 +82,5 @@ TOOL = Tool(
     handler=handle,
     timeout=30,
 )
+
+TOOL = PLUGIN

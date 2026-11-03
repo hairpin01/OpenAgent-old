@@ -6,7 +6,7 @@ import json
 
 from Settings import TODO_ITEM_CHARS, TODO_MAX_ITEMS
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 STATUSES = ("pending", "in_progress", "completed")
 
@@ -48,7 +48,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     )
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="todo",
     description=(
         "Write or update your plan for a task of 3 or more steps; the user "
@@ -86,3 +86,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

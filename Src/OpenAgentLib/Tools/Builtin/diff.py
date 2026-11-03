@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 from ..workspace import make_diff, resolve_path
 
 
@@ -16,7 +16,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return "\n\n".join(diff for diff in diffs if diff) or "no changes"
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="diff",
     description=(
         "Show the unified diff of files changed by the edit and write tools "
@@ -31,3 +31,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

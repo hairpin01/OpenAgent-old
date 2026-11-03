@@ -11,7 +11,7 @@ from types import CodeType
 
 import aiohttp
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 def _wrap(code: str) -> tuple[CodeType, str]:
@@ -112,7 +112,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return output or "OK (no output)"
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="python_telegram_exec",
     description=(
         "Execute Python code inside this Telegram session. Available globals: "
@@ -133,3 +133,5 @@ TOOL = Tool(
     handler=handle,
     timeout=120,
 )
+
+TOOL = PLUGIN

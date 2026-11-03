@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(ctx: ToolContext, args: dict[str, Any]) -> str:
@@ -89,7 +89,7 @@ async def handle(ctx: ToolContext, args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="get_reply_message",
     description=(
         "Get information and text content of the message that the current command "
@@ -104,3 +104,5 @@ TOOL = Tool(
     handler=handle,
     timeout=30,
 )
+
+TOOL = PLUGIN

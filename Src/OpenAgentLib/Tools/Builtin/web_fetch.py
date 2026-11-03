@@ -7,7 +7,7 @@ from html import unescape
 
 import aiohttp
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 _HEADERS = {"User-Agent": "MCUB-agent/1.0 (web_fetch tool)"}
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
@@ -73,7 +73,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return header + body
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="web_fetch",
     description=(
         "Fetch a URL and return its content as readable text "
@@ -96,3 +96,5 @@ TOOL = Tool(
     handler=handle,
     timeout=40,
 )
+
+TOOL = PLUGIN

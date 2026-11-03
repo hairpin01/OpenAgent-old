@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(ctx: ToolContext, args: dict) -> str:
@@ -55,7 +55,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     )
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="help_tool",
     description=(
         "Show the schema and argument descriptions of a tool. "
@@ -73,3 +73,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 from typing import TYPE_CHECKING
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 if TYPE_CHECKING:
     from OpenAgentMain import OpenAgent
@@ -49,7 +49,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return "\n".join(lines)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="thinking",
     description=(
         "Add a short note to the 'Thinking' block shown to the user while you "
@@ -74,3 +74,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

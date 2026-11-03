@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from ..checks import LANG_PARAM, apply_result, verify
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 from ..workspace import read_text, record_change, resolve_path, write_text
 
 
@@ -19,7 +19,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="write",
     description=(
         "Create a file or overwrite it with the given content. The content is "
@@ -38,3 +38,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

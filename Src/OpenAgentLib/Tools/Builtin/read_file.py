@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 from ..workspace import read_text, resolve_path
 
 
@@ -13,7 +13,7 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     return "\n".join(lines[start - 1 : end])
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="read_file",
     description="Read a text file, optionally a range of lines.",
     parameters={
@@ -28,3 +28,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

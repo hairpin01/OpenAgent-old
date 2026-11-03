@@ -44,8 +44,8 @@ from .Settings import (
     CHAT_ID,
 )
 
-# Tools
-from .OpenAgentLib.Tools import Tool, ToolContext, load_tools
+# Tools / Plugins
+from .OpenAgentLib.Tools import AgentPlugin, Tool, ToolContext, load_tools
 
 # Harness: the agent loop and the provider (UI-agnostic)
 from .OpenAgentLib.harness import AgentError, RunInput, run as harness_run
@@ -692,6 +692,7 @@ class OpenAgent(loader.ModuleBase):
             "prompt": raw,
             "tool": "",
             "tool_calls": 0,
+            "context_window": int(self.config.get("context_window") or 0),
             "user_id": getattr(event, "sender_id", None)
             or getattr(getattr(event, "message", None), "sender_id", None),
         }

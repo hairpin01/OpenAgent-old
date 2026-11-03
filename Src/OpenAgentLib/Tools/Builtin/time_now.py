@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(_ctx: ToolContext, _args: dict) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="time_now",
     description="Return the current UTC date and time in ISO 8601 format.",
     parameters={
@@ -19,3 +19,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

@@ -4,7 +4,7 @@ import asyncio
 import os
 import signal
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(_ctx: ToolContext, args: dict) -> str:
@@ -35,7 +35,7 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     return f"exit code: {proc.returncode}\n{text}"
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="shell",
     description=(
         "Run a shell command and return its exit code and combined "
@@ -53,3 +53,5 @@ TOOL = Tool(
     handler=handle,
     timeout=120,
 )
+
+TOOL = PLUGIN

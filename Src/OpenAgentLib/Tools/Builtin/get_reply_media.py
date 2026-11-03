@@ -6,7 +6,7 @@ import os
 import tempfile
 from typing import Any
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 from ..workspace import resolve_path
 
 
@@ -94,7 +94,7 @@ async def handle(ctx: ToolContext, args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="get_reply_media",
     description=(
         "Download and retrieve information about media attached to the replied-to "
@@ -122,3 +122,5 @@ TOOL = Tool(
     handler=handle,
     timeout=60,
 )
+
+TOOL = PLUGIN

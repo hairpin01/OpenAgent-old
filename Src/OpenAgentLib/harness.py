@@ -21,7 +21,14 @@ from Settings import (
     MAX_TOOL_ITERATIONS,
     PROGRESS_UPDATE_INTERVAL,
 )
-from .Tools import Tool, ToolContext, call_tool, tool_schemas
+from .Tools import (
+    AgentPlugin,
+    Tool,
+    ToolContext,
+    call_tool,
+    run_final_response_hooks,
+    tool_schemas,
+)
 
 
 class AgentError(Exception):
@@ -41,7 +48,7 @@ class RunInput:
     """Everything ``run`` needs for one request."""
 
     messages: list[dict[str, Any]]  # system + history + prompt, built by the caller
-    tools: list[Tool]
+    tools: list[AgentPlugin]
     tool_context: ToolContext
     state: dict[str, Any]  # UI state (tool_bar, thinking notes, ...)
     provider: Any  # .chat(messages, tools, on_delta) -> (message dict, usage|None)
@@ -201,13 +208,21 @@ async def run(inp: RunInput) -> str:
                     "output": str(item.get("content") or ""),
                 })
             state["exchange_tools"] = record[:CONTEXT_TOOL_RECORD_LIMIT]
-            return content.strip()
+            final_content = content.strip()
+            # Run final response hooks
+            final_content = await run_final_response_hooks(
+                inp.tools, final_content, inp.tool_context, messages
+            )
+            return final_content
 
         messages.append({
             "role": "assistant",
             "content": message.get("content") or "",
             "tool_calls": calls,
         })
+
+        # Expose active messages to tool_context.state for plugins (e.g. context management)
+        inp.tool_context.state["active_messages"] = messages
 
         for index, call in enumerate(calls):
             function = call.get("function") or {}
@@ -267,6 +282,7 @@ async def run(inp: RunInput) -> str:
                         arguments,
                         inp.tool_context,
                         timeout=inp.tool_timeout,
+                        messages=messages,
                     )
                 )
                 result = await _await_ticked(inp, tool_task, "tool_tick")

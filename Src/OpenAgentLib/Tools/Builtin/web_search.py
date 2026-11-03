@@ -7,7 +7,7 @@ import re
 from html import unescape
 from typing import TYPE_CHECKING
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 if TYPE_CHECKING:
     from OpenAgentMain import OpenAgent
@@ -113,7 +113,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return "\n".join(lines)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="web_search",
     description=(
         "Search the web and return titles, URLs and short snippets. "
@@ -134,3 +134,5 @@ TOOL = Tool(
     handler=handle,
     timeout=30,
 )
+
+TOOL = PLUGIN

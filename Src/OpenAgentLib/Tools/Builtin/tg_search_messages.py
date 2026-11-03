@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(ctx: ToolContext, args: dict) -> str:
@@ -57,7 +57,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
     return "\n\n".join(results)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="tg_search_messages",
     description=(
         "Search Telegram messages in a chat using Telethon full-text search. "
@@ -96,3 +96,5 @@ TOOL = Tool(
     handler=handle,
     timeout=30,
 )
+
+TOOL = PLUGIN

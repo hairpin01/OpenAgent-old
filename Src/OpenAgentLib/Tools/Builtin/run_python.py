@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 
 async def handle(_ctx: ToolContext, args: dict) -> str:
@@ -42,7 +42,7 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     return "\n".join(parts) or "OK (no output)"
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="run_python",
     description=(
         "Run Python code in a separate subprocess (isolated, no Telegram "
@@ -61,3 +61,5 @@ TOOL = Tool(
     handler=handle,
     timeout=60,
 )
+
+TOOL = PLUGIN

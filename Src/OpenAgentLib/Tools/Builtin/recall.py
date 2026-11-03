@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 
 if TYPE_CHECKING:
     pass
@@ -84,7 +84,7 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     return "\n".join(lines)
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="recall",
     description=(
         "Search the agent's long-term memory (JSONL notes stored at "
@@ -119,3 +119,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

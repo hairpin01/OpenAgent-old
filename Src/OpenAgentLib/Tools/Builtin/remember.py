@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from ..core import Tool, ToolContext
+from ..core import AgentPlugin, Tool, ToolContext
 from .recall import MAX_TEXT_CHARS, MEMORY_PATH, load_entries
 
 MAX_TAGS = 8
@@ -54,7 +54,7 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     )
 
 
-TOOL = Tool(
+PLUGIN = AgentPlugin(
     name="remember",
     description=(
         "Save ONE short note to long-term memory (found later by recall). "
@@ -80,3 +80,5 @@ TOOL = Tool(
     },
     handler=handle,
 )
+
+TOOL = PLUGIN

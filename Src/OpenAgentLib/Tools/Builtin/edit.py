@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from ..checks import LANG_PARAM, apply_result, verify
 from ..core import Tool, ToolContext
 from ..workspace import read_text, record_change, resolve_path, write_text
 
@@ -28,12 +29,12 @@ async def handle(ctx: ToolContext, args: dict) -> str:
             )
         text = text.replace(before, after, 1)
 
-    # Nothing is written unless every replacement succeeded
+    # Nothing is written unless every replacement succeeded and the result passes the check
+    payload = {"ok": True, "path": name, "replaced": len(old_strings)}
+    apply_result(verify(args.get("lang"), name, old, text), payload)
     write_text(path, name, text)
     record_change(ctx, name, old, text)
-    return json.dumps(
-        {"ok": True, "path": name, "replaced": len(old_strings)}, ensure_ascii=False
-    )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 TOOL = Tool(
@@ -41,7 +42,9 @@ TOOL = Tool(
     description=(
         "Edit a file in place: replace each old string with the new string "
         "at the same index. Every old string must occur exactly once. "
-        "Replacements are applied in order and either all succeed or none."
+        "Replacements are applied in order and either all succeed or none. "
+        "The result is syntax-checked by lang before saving (python, json, "
+        "yaml, toml) and a change that breaks the file is rejected."
     ),
     parameters={
         "type": "object",
@@ -57,6 +60,7 @@ TOOL = Tool(
                 "items": {"type": "string"},
                 "description": "Replacements, same order and length as old_strings.",
             },
+            "lang": LANG_PARAM,
         },
         "required": ["path", "old_strings", "new_strings"],
         "additionalProperties": False,

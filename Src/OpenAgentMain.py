@@ -38,6 +38,7 @@ from .Settings import (
     CUSTOM_EMOJI,
     DEFAULT_CONTEXT_ENABLED,
     DEFAULT_CONTEXT_SIZE,
+    DEFAULT_CONTEXT_WINDOW,
     MAX_CONTEXT_MESSAGES,
     CONTEXT_RESET_ARGS,
     CHAT_ID,
@@ -51,7 +52,7 @@ from .OpenAgentLib.harness import AgentError, RunInput, run as harness_run
 from .OpenAgentLib.providers import OpenAIProvider
 
 # Chat context: DB history store + provider message building
-from .OpenAgentLib.context import ContextStore, build_messages
+from .OpenAgentLib.context import ContextStore, build_messages, estimate_tokens
 
 # Text rendering
 from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
@@ -117,6 +118,12 @@ class OpenAgent(loader.ModuleBase):
             DEFAULT_CONTEXT_SIZE,
             description=lambda self: self.strings("cfg_context_size"),
             validator=cfg.Integer(min=0, max=MAX_CONTEXT_MESSAGES),
+        ),
+        cfg.ConfigValue(
+            "context_window",
+            DEFAULT_CONTEXT_WINDOW,
+            description=lambda self: self.strings("cfg_context_window"),
+            validator=cfg.Integer(min=0, max=100_000_000),
         ),
         cfg.ConfigValue(
             "tool_rules",
@@ -201,6 +208,14 @@ class OpenAgent(loader.ModuleBase):
         async def on_usage(usage: dict[str, Any]) -> None:
             # Latest provider step's token counts for the token_stats widget
             state["tokens"] = usage
+            # What the model has seen so far = size of the session context
+            total = int(usage.get("total_tokens") or 0) or (
+                int(usage.get("prompt_tokens") or 0)
+                + int(usage.get("completion_tokens") or 0)
+            )
+            if total:
+                state["context_tokens"] = total
+                state["context_estimated"] = False
 
         async def on_stream(text: str) -> None:
             # Picked up by the refresh loop (_wait_for_reply); no edit here,
@@ -216,15 +231,19 @@ class OpenAgent(loader.ModuleBase):
             tools=self._tools,
             state=state,
         )
+        messages = build_messages(
+            self.config["system_prompt"],
+            self.config["tool_rules"],
+            self._tools,
+            history,
+            prompt,
+        )
+        # Estimate until the provider reports real usage for this request
+        state["context_tokens"] = estimate_tokens(messages)
+        state["context_estimated"] = True
         return await harness_run(
             RunInput(
-                messages=build_messages(
-                    self.config["system_prompt"],
-                    self.config["tool_rules"],
-                    self._tools,
-                    history,
-                    prompt,
-                ),
+                messages=messages,
                 tools=self._tools,
                 tool_context=tool_context,
                 state=state,

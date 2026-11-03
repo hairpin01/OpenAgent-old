@@ -27,6 +27,7 @@ from ...Settings import (
     TOOL_BAR_MAX_PILLS,
     TOOL_BAR_TTL,
     TOOL_DETAIL_CHARS,
+    CONTEXT_PILL_DANGER,
 )
 
 @dataclass
@@ -120,6 +121,18 @@ def _header(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     ctx_size = int(agent.config.get("context_size") or 0)
     ctx_label = "∞" if ctx_size == 0 else ctx_size
     badges.append(f"<tg-pill style='primary'>🧠 {ctx_count}/{ctx_label}</tg-pill>")
+
+    # Size of the whole session context (history + this request), in tokens
+    ctx_tokens = int(state.get("context_tokens") or 0)
+    if ctx_tokens:
+        window = int(agent.config.get("context_window") or 0)
+        label = ("~" if state.get("context_estimated") else "") + _fmt_tokens(ctx_tokens)
+        style = "primary"
+        if window:
+            label += f"/{_fmt_tokens(window)}"
+            if ctx_tokens >= window * CONTEXT_PILL_DANGER:
+                style = "danger"
+        badges.append(f"<tg-pill style='{style}'>📊 {label}</tg-pill>")
 
     badges.append(f"<tg-pill style='primary'>⏱ {elapsed:.2f}s</tg-pill>")
     return f"<p>{' '.join(badges)}</p>"
@@ -364,7 +377,7 @@ def _fmt_tokens(value: object) -> str:
     """Short human count for the token widget: 15.5k, 980, 0."""
     n = int(value or 0)
     if n >= 1000:
-        return f"{n / 1000:.1f}k"
+        return f"{n / 1000:.1f}".rstrip("0").rstrip(".") + "k"
     return str(n)
 
 
@@ -476,6 +489,33 @@ def _tool_details(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     return "\n".join(blocks) or None
 
 
+TODO_MARKS = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+
+
+@text_module("todo")
+def _todo(agent: "OpenAgent", ctx: RenderContext) -> str | None:
+    """The agent's plan (todo tool) as a checklist; collapsed in the final message."""
+    todos = (ctx.state or {}).get("todos")
+    if not todos:
+        return None
+
+    rows: list[str] = []
+    for item in todos:
+        text = html.escape(str(item["content"]))
+        if item["status"] == "completed":
+            text = f"<s>{text}</s>"
+        elif item["status"] == "in_progress":
+            text = f"<b>{text}</b>"
+        rows.append(f"{TODO_MARKS.get(item['status'], '[ ]')} {text}")
+
+    done = sum(1 for item in todos if item["status"] == "completed")
+    tag = "blockquote" if ctx.kind == "running" else "blockquote expandable"
+    return (
+        f"<{tag}><cite>{html.escape(agent.strings('todo_title'))} "
+        f"{done}/{len(todos)}</cite>\n{'<br>'.join(rows)}</blockquote>"
+    )
+
+
 @text_module("history_header")
 def _history_header(agent: "OpenAgent", ctx: RenderContext) -> str:
     """Header of a stored (older) exchange shown by the history pager."""
@@ -563,8 +603,8 @@ def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "token_stats", "tool_bar", "tool_details", "stream", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "error_detail", "token_stats", "tool_bar", "tool_details", "history_nav")
+text_format("progress", "status_header", "prompt", "token_stats", "todo", "tool_bar", "tool_details", "stream", "thinking", "cancel_button")
+text_format("result", "status_header", "prompt", "body", "error_detail", "todo", "token_stats", "tool_bar", "tool_details", "history_nav")
 text_format("history", "history_header", "prompt", "body", "history_nav")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body", "error_detail")

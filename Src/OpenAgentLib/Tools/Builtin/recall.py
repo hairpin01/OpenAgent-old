@@ -18,7 +18,7 @@ MAX_ENTRIES = 100
 MAX_TEXT_CHARS = 2000
 
 
-def _load_entries() -> list[dict]:
+def load_entries() -> list[dict]:
     if not MEMORY_PATH.is_file():
         return []
     entries: list[dict] = []
@@ -51,15 +51,9 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     if not args.get("all") and not query and not tags:
         raise ValueError("provide query, tags, or use all=true")
 
-    entries = _load_entries()
+    entries = load_entries()
     if not entries:
-        return (
-            "Memory is empty. To store a note, append one JSON line "
-            f"to {MEMORY_PATH} (create the directory first), e.g. via shell: "
-            'mkdir -p ~/.openagent && echo \'{"ts": "2025-01-01T00:00:00Z", '
-            '"text": "user prefers HTML output", "tags": ["preference"]}\' '
-            f">> {MEMORY_PATH}"
-        )
+        return "Memory is empty. Notes are stored with the remember tool."
 
     if not args.get("all"):
         keywords = [k for k in query.split() if k]
@@ -96,8 +90,8 @@ TOOL = Tool(
         "Search the agent's long-term memory (JSONL notes stored at "
         "~/.openagent/memory.jsonl). Each entry has: ts (ISO timestamp), "
         "text, tags (list). All query keywords must match (case-insensitive, "
-        "text or tags). New notes are stored by appending one JSON line via "
-        "the shell tool. Use all=true to list the most recent entries."
+        "text or tags). New notes are stored with the remember tool. Use "
+        "all=true to list the most recent entries."
     ),
     parameters={
         "type": "object",

@@ -154,6 +154,17 @@ def history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    """Rough token count (about 4 chars per token) of a message list.
+
+    Only used until the provider reports real usage for the request.
+    """
+    try:
+        return len(json.dumps(messages, ensure_ascii=False)) // 4
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_messages(
     system_prompt: str,
     tool_rules: bool,
@@ -162,23 +173,16 @@ def build_messages(
     prompt: str,
 ) -> list[dict[str, Any]]:
     """Assemble the provider message list for one request."""
-    messages: list[dict[str, Any]] = []
     system = str(system_prompt).strip()
+    # The built-in rules always apply, even when the user prompt is empty
+    rules = f"<rules>{RICH_HTML_RULES}</rules>"
+    if tool_rules and tools:
+        listing = "\n".join(f"- {tool.name}: {tool.description}" for tool in tools)
+        rules += f"\n<tool-rules>{TOOL_RULES.format(tools=listing)}</tool-rules>"
     if system:
-        rules = f"<rules>{RICH_HTML_RULES}</rules>"
-        if tool_rules and tools:
-            listing = "\n".join(
-                f"- {tool.name}: {tool.description}" for tool in tools
-            )
-            rules += f"\n<tool-rules>{TOOL_RULES.format(tools=listing)}</tool-rules>"
-        messages.append({
-            "role": "system",
-            "content": (
-                rules
-                + "\nUser system prompt:\n<user-prompt>" + system + "</user-prompt>"
-            ),
-        })
+        rules += "\nUser system prompt:\n<user-prompt>" + system + "</user-prompt>"
 
+    messages: list[dict[str, Any]] = [{"role": "system", "content": rules}]
     messages.extend(history_to_messages(history))
     messages.append({"role": "user", "content": prompt})
     return messages

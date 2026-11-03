@@ -194,6 +194,8 @@ async def run(inp: RunInput) -> str:
             for item in messages[start_len:]:
                 if not isinstance(item, dict) or item.get("role") != "tool":
                     continue
+                if item.get("tool_name") == "todo":
+                    continue  # the plan is UI state, not worth a record slot
                 record.append({
                     "name": str(item.get("tool_name") or "?"),
                     "output": str(item.get("content") or ""),

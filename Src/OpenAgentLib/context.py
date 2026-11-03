@@ -37,6 +37,29 @@ class ContextStore:
     def _key(self, chat_id: int | str) -> str:
         return f"ctx_{chat_id}"
 
+    def _usage_key(self, chat_id: int | str) -> str:
+        return f"usage_{chat_id}"
+
+    async def load_usage(self, chat_id: int | str) -> int:
+        """Tokens spent by all requests of this chat since the last reset."""
+        try:
+            raw = await self._db.db_get(self._prefix, self._usage_key(chat_id))
+            return max(int(raw or 0), 0)
+        except (TypeError, ValueError):
+            return 0
+        except Exception as exc:
+            self._log.error("OpenAgent usage load failed: %s", exc)
+            return 0
+
+    async def add_usage(self, chat_id: int | str, tokens: int) -> int:
+        """Add ``tokens`` to the chat total and return the new total."""
+        total = await self.load_usage(chat_id) + max(int(tokens), 0)
+        try:
+            await self._db.db_set(self._prefix, self._usage_key(chat_id), total)
+        except Exception as exc:
+            self._log.error("OpenAgent usage save failed: %s", exc)
+        return total
+
     async def load(self, chat_id: int | str) -> list[dict[str, Any]]:
         try:
             raw = await self._db.db_get(self._prefix, self._key(chat_id))
@@ -91,6 +114,10 @@ class ContextStore:
         removed = len(history)
         if removed:
             await self.save(chat_id, [])
+        try:
+            await self._db.db_set(self._prefix, self._usage_key(chat_id), 0)
+        except Exception as exc:
+            self._log.error("OpenAgent usage reset failed: %s", exc)
         return removed
 
     async def append(
@@ -152,17 +179,6 @@ def history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     )
             out.append(message)
     return out
-
-
-def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    """Rough token count (about 4 chars per token) of a message list.
-
-    Only used until the provider reports real usage for the request.
-    """
-    try:
-        return len(json.dumps(messages, ensure_ascii=False)) // 4
-    except (TypeError, ValueError):
-        return 0
 
 
 def build_messages(

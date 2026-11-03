@@ -27,7 +27,6 @@ from ...Settings import (
     TOOL_BAR_MAX_PILLS,
     TOOL_BAR_TTL,
     TOOL_DETAIL_CHARS,
-    CONTEXT_PILL_DANGER,
 )
 
 @dataclass
@@ -122,17 +121,12 @@ def _header(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     ctx_label = "∞" if ctx_size == 0 else ctx_size
     badges.append(f"<tg-pill style='primary'>🧠 {ctx_count}/{ctx_label}</tg-pill>")
 
-    # Size of the whole session context (history + this request), in tokens
-    ctx_tokens = int(state.get("context_tokens") or 0)
-    if ctx_tokens:
-        window = int(agent.config.get("context_window") or 0)
-        label = ("~" if state.get("context_estimated") else "") + _fmt_tokens(ctx_tokens)
-        style = "primary"
-        if window:
-            label += f"/{_fmt_tokens(window)}"
-            if ctx_tokens >= window * CONTEXT_PILL_DANGER:
-                style = "danger"
-        badges.append(f"<tg-pill style='{style}'>📊 {label}</tg-pill>")
+    # Tokens spent by the whole chat: saved total + the request in progress
+    chat_tokens = int(state.get("chat_tokens_base") or 0) + int(
+        state.get("request_tokens") or 0
+    )
+    if chat_tokens:
+        badges.append(f"<tg-pill style='primary'>📊 {_fmt_tokens(chat_tokens)}</tg-pill>")
 
     badges.append(f"<tg-pill style='primary'>⏱ {elapsed:.2f}s</tg-pill>")
     return f"<p>{' '.join(badges)}</p>"
@@ -376,6 +370,8 @@ def _bar_clip(text: object, limit: int) -> str:
 def _fmt_tokens(value: object) -> str:
     """Short human count for the token widget: 15.5k, 980, 0."""
     n = int(value or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
     if n >= 1000:
         return f"{n / 1000:.1f}".rstrip("0").rstrip(".") + "k"
     return str(n)
@@ -387,9 +383,11 @@ def _token_stats(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     usage = (ctx.state or {}).get("tokens") or {}
     if not usage:
         return None
+    window = int(agent.config.get("context_window") or 0)
+    window_part = f"/{_fmt_tokens(window)}" if window else ""
     return (
         "<blockquote>"
-        f"↑ {_fmt_tokens(usage.get('prompt_tokens'))} | "
+        f"↑ {_fmt_tokens(usage.get('prompt_tokens'))}{window_part} | "
         f"↓ {_fmt_tokens(usage.get('completion_tokens'))} | "
         f"~{_fmt_tokens(usage.get('total_tokens'))}"
         "</blockquote>"

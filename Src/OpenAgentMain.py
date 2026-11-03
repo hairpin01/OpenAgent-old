@@ -52,7 +52,7 @@ from .OpenAgentLib.harness import AgentError, RunInput, run as harness_run
 from .OpenAgentLib.providers import OpenAIProvider
 
 # Chat context: DB history store + provider message building
-from .OpenAgentLib.context import ContextStore, build_messages, estimate_tokens
+from .OpenAgentLib.context import ContextStore, build_messages
 
 # Text rendering
 from .OpenAgentLib.Format.TextRender import RenderContext, render as render_text
@@ -208,14 +208,13 @@ class OpenAgent(loader.ModuleBase):
         async def on_usage(usage: dict[str, Any]) -> None:
             # Latest provider step's token counts for the token_stats widget
             state["tokens"] = usage
-            # What the model has seen so far = size of the session context
+            # Tokens billed by this step; the header pill adds them to the
+            # chat total saved by the earlier requests
             total = int(usage.get("total_tokens") or 0) or (
                 int(usage.get("prompt_tokens") or 0)
                 + int(usage.get("completion_tokens") or 0)
             )
-            if total:
-                state["context_tokens"] = total
-                state["context_estimated"] = False
+            state["request_tokens"] = int(state.get("request_tokens") or 0) + total
 
         async def on_stream(text: str) -> None:
             # Picked up by the refresh loop (_wait_for_reply); no edit here,
@@ -231,19 +230,15 @@ class OpenAgent(loader.ModuleBase):
             tools=self._tools,
             state=state,
         )
-        messages = build_messages(
-            self.config["system_prompt"],
-            self.config["tool_rules"],
-            self._tools,
-            history,
-            prompt,
-        )
-        # Estimate until the provider reports real usage for this request
-        state["context_tokens"] = estimate_tokens(messages)
-        state["context_estimated"] = True
         return await harness_run(
             RunInput(
-                messages=messages,
+                messages=build_messages(
+                    self.config["system_prompt"],
+                    self.config["tool_rules"],
+                    self._tools,
+                    history,
+                    prompt,
+                ),
                 tools=self._tools,
                 tool_context=tool_context,
                 state=state,
@@ -729,6 +724,10 @@ class OpenAgent(loader.ModuleBase):
 
             history = await self._context_store.load(chat_id) if context_enabled else []
             state['context_count'] = len(history) // 2
+            # Tokens of the earlier requests in this chat (the pill adds the live one)
+            state["chat_tokens_base"] = (
+                await self._context_store.load_usage(chat_id) if context_enabled else 0
+            )
             if context_enabled:
                 # Snapshot for the pager: errors can still scroll back
                 state["history"] = history
@@ -784,3 +783,7 @@ class OpenAgent(loader.ModuleBase):
             self._active_requests.pop(request_id, None)
             if not task.done():
                 task.cancel()
+            # Spent tokens count even when the request failed or was cancelled
+            spent = int(state.get("request_tokens") or 0)
+            if context_enabled and spent:
+                await self._context_store.add_usage(chat_id, spent)

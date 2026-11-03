@@ -25,10 +25,9 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 DEFAULT_TOOL_RULES_ENABLED = True
 DEFAULT_STREAM = True  # show the answer while it is being generated
-# Model context window in tokens, for the header pill (0 = limit unknown)
+# Model context window in tokens, shown next to the prompt size in the token
+# stats (0 = limit unknown)
 DEFAULT_CONTEXT_WINDOW = 0
-# The context pill turns red at this share of the window
-CONTEXT_PILL_DANGER = 0.9
 
 # Provider endpoints, relative to base_url (OpenAI compatible)
 CHAT_PATH = "/chat/completions"

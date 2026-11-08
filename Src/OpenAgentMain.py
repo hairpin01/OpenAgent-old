@@ -146,7 +146,6 @@ class OpenAgent(loader.ModuleBase):
     _provider: OpenAIProvider | None = None
     _context_store: ContextStore | None = None
 
-
     async def on_load(self) -> None:
         await super().on_load()
 
@@ -200,6 +199,7 @@ class OpenAgent(loader.ModuleBase):
         The harness drives the chat <-> tool steps; this method only
         translates its events into rich-message updates.
         """
+
         async def on_event(name: str, payload: dict[str, Any]) -> None:
             # Any harness event (tool_start / tool_done) re-renders the
             # progress message with the current state (RUN timer, pills).
@@ -268,18 +268,13 @@ class OpenAgent(loader.ModuleBase):
         return label
 
     def _header(self, state: dict[str, Any], kind: str) -> str:
-        return render_text(
-            self,
-            "status_header",
-            RenderContext(state=state, kind=kind)
-        )
+        return render_text(self, "status_header", RenderContext(state=state, kind=kind))
 
     def _guest_mention(self) -> str:
         username = (
             str(self.kernel.config.get("inline_bot_username") or "").strip().lstrip("@")
         )
         return f"@{username}" if username else "@bot"
-
 
     def _build_progress_text(self, state: dict[str, Any]) -> str:
         return render_text(
@@ -289,7 +284,11 @@ class OpenAgent(loader.ModuleBase):
         )
 
     def _build_result_text(
-        self, state: dict[str, Any], kind: str, text: str = "", message: typ.Message = None
+        self,
+        state: dict[str, Any],
+        kind: str,
+        text: str = "",
+        message: typ.Message = None,
     ) -> str:
         fmt = "cancelled" if kind == "cancelled" else "result"
         # Kept so a tool button can re-render the final message on click
@@ -297,7 +296,13 @@ class OpenAgent(loader.ModuleBase):
         return render_text(
             self,
             fmt,
-            RenderContext(kind=kind, text=text, copy_text=text, state=state, extra={"message": message}),
+            RenderContext(
+                kind=kind,
+                text=text,
+                copy_text=text,
+                state=state,
+                extra={"message": message},
+            ),
         )
 
     def _build_error_text(self, text: str, detail: str | None = None) -> str:
@@ -311,7 +316,11 @@ class OpenAgent(loader.ModuleBase):
     def _build_usage_text(self) -> str:
         mention = self._guest_mention()
         command = html.escape(f"{mention} agent ", quote=True)
-        return render_text(self, "usage", RenderContext(copy_text=command, label=self.strings("btn_copy_prompt")))
+        return render_text(
+            self,
+            "usage",
+            RenderContext(copy_text=command, label=self.strings("btn_copy_prompt")),
+        )
 
     def _render_models(self, state: dict[str, Any]) -> str:
         """Render one page of the model list; ``state`` keeps the full list."""
@@ -346,7 +355,6 @@ class OpenAgent(loader.ModuleBase):
         self._models_cache = tuple(list_models)
         return self._render_models({"models": list(list_models), "page": 0})
 
-
     async def _edit_rich(self, message: Any, text: str) -> bool:
         try:
             await message.edit_rich(text)
@@ -360,7 +368,9 @@ class OpenAgent(loader.ModuleBase):
                 await message.edit_rich(plain_escaped)
                 return True
             except Exception as fallback_exc:
-                self.log.debug("OpenAgent message update fallback failed: %s", fallback_exc)
+                self.log.debug(
+                    "OpenAgent message update fallback failed: %s", fallback_exc
+                )
                 return False
 
     async def _wait_for_reply(
@@ -405,7 +415,6 @@ class OpenAgent(loader.ModuleBase):
                 if not streaming or state["ui_errors"] >= 3:
                     state["ui_alive"] = False
 
-
     def _build_notice_text(
         self, text: str, style: str = "primary", label: str | None = None
     ) -> str:
@@ -434,7 +443,6 @@ class OpenAgent(loader.ModuleBase):
             else self.strings("context_empty")
         )
         return self._build_notice_text(text)
-
 
     @loader.callback()
     async def on_cancel_request(self, call: typ.InlineMessage, data=None) -> None:
@@ -482,9 +490,7 @@ class OpenAgent(loader.ModuleBase):
             return
         await self._edit_rich(
             call,
-            self._build_result_text(
-                state, last["kind"], last["text"], last["message"]
-            ),
+            self._build_result_text(state, last["kind"], last["text"], last["message"]),
         )
 
     @staticmethod
@@ -654,13 +660,36 @@ class OpenAgent(loader.ModuleBase):
                 # Only process text-based files (by mime type or extension)
                 mime = getattr(doc, "mime_type", "") or ""
                 name = getattr(doc, "file_name", "") or "file"
-                is_text = mime.startswith("text/") or mime in (
-                    "application/json",
-                    "application/xml",
-                    "application/javascript",
-                    "application/x-python-code",
-                ) or name.lower().endswith(
-                    (".txt", ".md", ".py", ".js", ".json", ".xml", ".html", ".css", ".csv", ".log", ".ini", ".cfg", ".yaml", ".yml", ".toml", ".sh", ".sql")
+                is_text = (
+                    mime.startswith("text/")
+                    or mime
+                    in (
+                        "application/json",
+                        "application/xml",
+                        "application/javascript",
+                        "application/x-python-code",
+                    )
+                    or name.lower().endswith(
+                        (
+                            ".txt",
+                            ".md",
+                            ".py",
+                            ".js",
+                            ".json",
+                            ".xml",
+                            ".html",
+                            ".css",
+                            ".csv",
+                            ".log",
+                            ".ini",
+                            ".cfg",
+                            ".yaml",
+                            ".yml",
+                            ".toml",
+                            ".sh",
+                            ".sql",
+                        )
+                    )
                 )
                 if is_text:
                     try:
@@ -670,14 +699,22 @@ class OpenAgent(loader.ModuleBase):
                             f"\n\n--- Attached file: {name} ({len(content)} chars) ---\n{content}\n--- End of {name} ---"
                         )
                     except Exception as exc:
-                        self.log.debug("OpenAgent failed to read attached document: %s", exc)
-                        file_text_parts.append(f"\n\n[Attached file: {name} - could not read: {exc}]")
+                        self.log.debug(
+                            "OpenAgent failed to read attached document: %s", exc
+                        )
+                        file_text_parts.append(
+                            f"\n\n[Attached file: {name} - could not read: {exc}]"
+                        )
                 else:
-                    file_text_parts.append(f"\n\n[Attached file: {name} (type: {mime or 'unknown'}) - binary file, not processed]")
+                    file_text_parts.append(
+                        f"\n\n[Attached file: {name} (type: {mime or 'unknown'}) - binary file, not processed]"
+                    )
 
             # Handle photo (image)
             elif getattr(msg, "photo", None):
-                file_text_parts.append("\n\n[Attached image - vision support depends on the model/provider]")
+                file_text_parts.append(
+                    "\n\n[Attached image - vision support depends on the model/provider]"
+                )
 
         # Combine prompt with file content
         if file_text_parts:
@@ -737,12 +774,12 @@ class OpenAgent(loader.ModuleBase):
             message = await event.reply_rich(self._build_progress_text(state))
 
             chat_id = CHAT_ID
-            context_enabled = (
-                chat_id is not None and bool(self.config["context_enabled"])
+            context_enabled = chat_id is not None and bool(
+                self.config["context_enabled"]
             )
 
             history = await self._context_store.load(chat_id) if context_enabled else []
-            state['context_count'] = len(history) // 2
+            state["context_count"] = len(history) // 2
             # Tokens of the earlier requests in this chat (the pill adds the live one)
             state["chat_tokens_base"] = (
                 await self._context_store.load_usage(chat_id) if context_enabled else 0
@@ -756,7 +793,6 @@ class OpenAgent(loader.ModuleBase):
             )
             state["task"] = task
             self._active_requests[request_id] = state
-
 
         except BaseException:
             task.cancel()
@@ -777,7 +813,8 @@ class OpenAgent(loader.ModuleBase):
         except AgentError as exc:
             state["error_detail"] = exc.detail
             await self._edit_rich(
-                message, self._build_result_text(state, "error", str(exc), message=message)
+                message,
+                self._build_result_text(state, "error", str(exc), message=message),
             )
         except Exception as exc:
             await self._edit_rich(
@@ -797,7 +834,9 @@ class OpenAgent(loader.ModuleBase):
                 # append to the stored context
                 state["history"] = await self._context_store.load(chat_id)
                 state["history_pos"] = len(state["history"]) // 2 - 1
-            await self._edit_rich(message, self._build_result_text(state, "done", text, message=message))
+            await self._edit_rich(
+                message, self._build_result_text(state, "done", text, message=message)
+            )
         finally:
             self._active_requests.pop(request_id, None)
             if not task.done():

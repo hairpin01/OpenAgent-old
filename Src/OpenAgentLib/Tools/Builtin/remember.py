@@ -18,7 +18,9 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     if not text:
         raise ValueError("text is empty")
     if len(text) > MAX_TEXT_CHARS:
-        raise ValueError(f"note is too long ({len(text)} > {MAX_TEXT_CHARS}); shorten it")
+        raise ValueError(
+            f"note is too long ({len(text)} > {MAX_TEXT_CHARS}); shorten it"
+        )
 
     tags: list[str] = []
     for raw in args.get("tags") or []:
@@ -28,7 +30,10 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
     tags = tags[:MAX_TAGS]
 
     entries = load_entries()
-    if any(" ".join(str(e.get("text", "")).split()).lower() == text.lower() for e in entries):
+    if any(
+        " ".join(str(e.get("text", "")).split()).lower() == text.lower()
+        for e in entries
+    ):
         return json.dumps(
             {"ok": True, "saved": False, "reason": "same note already exists"},
             ensure_ascii=False,

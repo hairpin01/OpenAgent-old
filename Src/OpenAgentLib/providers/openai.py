@@ -35,7 +35,9 @@ def error_detail(body: Any, raw: str = "") -> str:
     if isinstance(body, dict):
         err = body.get("error", body.get("message", ""))
         if isinstance(err, dict):
-            text = str(err.get("message") or err.get("detail") or err.get("details") or "")
+            text = str(
+                err.get("message") or err.get("detail") or err.get("details") or ""
+            )
         elif err:
             text = str(err)
     elif isinstance(body, str) and body:
@@ -250,7 +252,9 @@ class OpenAIProvider:
                         if not isinstance(index, int):
                             # No index: a new id starts a call, otherwise the
                             # chunk continues the last one
-                            index = len(calls) if item.get("id") else max(calls, default=0)
+                            index = (
+                                len(calls) if item.get("id") else max(calls, default=0)
+                            )
                         entry = calls.setdefault(
                             index, {"id": "", "name": "", "arguments": ""}
                         )

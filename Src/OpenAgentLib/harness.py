@@ -61,9 +61,7 @@ class RunInput:
     on_stream: Callable[[str], Awaitable[None]] | None = None
 
 
-async def _await_ticked(
-    inp: RunInput, task: asyncio.Task, event: str
-) -> Any:
+async def _await_ticked(inp: RunInput, task: asyncio.Task, event: str) -> Any:
     """Wait for ``task``, emitting ``event`` every PROGRESS_UPDATE_INTERVAL."""
     while True:
         try:
@@ -203,10 +201,12 @@ async def run(inp: RunInput) -> str:
                     continue
                 if item.get("tool_name") == "todo":
                     continue  # the plan is UI state, not worth a record slot
-                record.append({
-                    "name": str(item.get("tool_name") or "?"),
-                    "output": str(item.get("content") or ""),
-                })
+                record.append(
+                    {
+                        "name": str(item.get("tool_name") or "?"),
+                        "output": str(item.get("content") or ""),
+                    }
+                )
             state["exchange_tools"] = record[:CONTEXT_TOOL_RECORD_LIMIT]
             final_content = content.strip()
             # Run final response hooks
@@ -215,11 +215,13 @@ async def run(inp: RunInput) -> str:
             )
             return final_content
 
-        messages.append({
-            "role": "assistant",
-            "content": message.get("content") or "",
-            "tool_calls": calls,
-        })
+        messages.append(
+            {
+                "role": "assistant",
+                "content": message.get("content") or "",
+                "tool_calls": calls,
+            }
+        )
 
         # Expose active messages to tool_context.state for plugins (e.g. context management)
         inp.tool_context.state["active_messages"] = messages
@@ -257,7 +259,11 @@ async def run(inp: RunInput) -> str:
                 # The "thinking" tool writes its own notes in its handler;
                 # counting the injected pseudo-argument too would add the same
                 # note twice.
-                if name != "thinking" and thinking_text and isinstance(thinking_text, str):
+                if (
+                    name != "thinking"
+                    and thinking_text
+                    and isinstance(thinking_text, str)
+                ):
                     clean_thinking = " ".join(thinking_text.split())
                     if clean_thinking:
                         lines = state.setdefault("thinking_lines", [])
@@ -297,12 +303,14 @@ async def run(inp: RunInput) -> str:
                     "tool_done", {"name": name, "status": entry["status"]}
                 )
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call.get("id") or f"call_{step}_{index}",
-                "tool_name": name,
-                "content": result,
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"call_{step}_{index}",
+                    "tool_name": name,
+                    "content": result,
+                }
+            )
 
     raise AgentError(inp.strings("err_tool_limit"))
 

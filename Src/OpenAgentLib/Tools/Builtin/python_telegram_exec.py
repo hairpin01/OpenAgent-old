@@ -57,7 +57,9 @@ def _wrap(code: str) -> tuple[CodeType, str]:
                 value=value,
             )
         )
-        function.body.append(ast.Return(value=ast.Name(id="__result__", ctx=ast.Load())))
+        function.body.append(
+            ast.Return(value=ast.Name(id="__result__", ctx=ast.Load()))
+        )
         ast.fix_missing_locations(tree)
     return compile(tree, "<python_telegram_exec>", "exec"), "func"
 
@@ -72,7 +74,9 @@ async def handle(ctx: ToolContext, args: dict) -> str:
 
     # Prefer the userbot client from the module/kernel over the inline bot
     client = ctx.client if ctx.client is not None else event.client
-    chat_id = ctx.chat_id if ctx.chat_id is not None else getattr(event, "chat_id", None)
+    chat_id = (
+        ctx.chat_id if ctx.chat_id is not None else getattr(event, "chat_id", None)
+    )
     me = await client.get_me()
     sender = await event.get_sender()
 

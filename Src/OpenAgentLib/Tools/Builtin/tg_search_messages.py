@@ -33,12 +33,18 @@ async def handle(ctx: ToolContext, args: dict) -> str:
 
     results = []
     async for message in client.iter_messages(
-        chat, search=query, limit=limit,
+        chat,
+        search=query,
+        limit=limit,
     ):
         date = message.date.strftime("%Y-%m-%d %H:%M")
         sender_name = ""
         try:
-            user = await client.get_entity(message.sender_id) if message.sender_id else None
+            user = (
+                await client.get_entity(message.sender_id)
+                if message.sender_id
+                else None
+            )
             if user is not None:
                 sender_name = getattr(user, "title", None) or (
                     f"{user.first_name} {user.last_name}".strip()

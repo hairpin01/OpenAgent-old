@@ -29,7 +29,9 @@ async def handle(ctx: ToolContext, args: dict) -> str:
             raise ValueError(f"item {index}: content is empty")
         status = str(entry.get("status") or "pending").strip().lower()
         if status not in STATUSES:
-            raise ValueError(f"item {index}: status must be one of {', '.join(STATUSES)}")
+            raise ValueError(
+                f"item {index}: status must be one of {', '.join(STATUSES)}"
+            )
         items.append({"content": content[:TODO_ITEM_CHARS], "status": status})
 
     # Rendered by the "todo" text module in the running and the final message

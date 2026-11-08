@@ -22,9 +22,15 @@ async def handle(ctx: ToolContext, args: dict[str, Any]) -> str:
         reply = await msg.get_reply_message()
 
     if reply is None:
-        return "No reply message found (current message is not replying to any message)."
+        return (
+            "No reply message found (current message is not replying to any message)."
+        )
 
-    date = reply.date.strftime("%Y-%m-%d %H:%M:%S") if getattr(reply, "date", None) else "unknown"
+    date = (
+        reply.date.strftime("%Y-%m-%d %H:%M:%S")
+        if getattr(reply, "date", None)
+        else "unknown"
+    )
     sender_name = ""
     sender_id = getattr(reply, "sender_id", None)
     if client is not None and sender_id is not None:
@@ -71,7 +77,9 @@ async def handle(ctx: ToolContext, args: dict[str, Any]) -> str:
     if getattr(reply, "geo", None):
         media_info.append("Location")
 
-    text = (getattr(reply, "message", None) or getattr(reply, "text", None) or "").strip()
+    text = (
+        getattr(reply, "message", None) or getattr(reply, "text", None) or ""
+    ).strip()
 
     lines = [
         f"Reply message ID: {reply.id}",

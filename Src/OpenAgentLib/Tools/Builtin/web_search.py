@@ -16,9 +16,7 @@ if TYPE_CHECKING:
 _SEARCH_URL = "https://html.duckduckgo.com/html/"
 _HEADERS = {"User-Agent": "MCUB-agent/1.0 (web_search tool)"}
 
-_RESULT_RE = re.compile(
-    r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S
-)
+_RESULT_RE = re.compile(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 _SNIPPET_RE = re.compile(r'class="result__snippet"[^>]*>(.*?)</a>', re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 _UDDG_RE = re.compile(r"[?&]uddg=([^&]+)")
@@ -49,7 +47,9 @@ def _parse(page: str, limit: int) -> list[tuple[str, str, str]]:
         if not url.startswith("http") or url in seen:
             continue
         seen.add(url)
-        results.append((_clean(title), url, snippets[index] if index < len(snippets) else ""))
+        results.append(
+            (_clean(title), url, snippets[index] if index < len(snippets) else "")
+        )
         if len(results) >= limit:
             break
     return results

@@ -29,7 +29,10 @@ PLUGIN = AgentPlugin(
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "File path (relative to the bot working dir or absolute)."},
+            "path": {
+                "type": "string",
+                "description": "File path (relative to the bot working dir or absolute).",
+            },
             "content": {"type": "string", "description": "Full new file content."},
             "lang": LANG_PARAM,
         },

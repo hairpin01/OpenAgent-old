@@ -7,7 +7,7 @@ from __future__ import annotations
 DEBUG = False
 
 # Context chat
-CHAT_ID = 'global'
+CHAT_ID = "global"
 
 # Default values for the user config (ModuleConfig)
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -38,7 +38,9 @@ MAX_REPLY_CHARS = 6200
 MAX_MODELS_LISTED = 50
 MODELS_PAGE_SIZE = 60
 MAX_DETAIL_CHARS = 200
-MAX_PROVIDER_ERROR_CHARS = 1500  # max chars of the raw provider error text shown in the message
+MAX_PROVIDER_ERROR_CHARS = (
+    1500  # max chars of the raw provider error text shown in the message
+)
 
 # Tools
 MAX_TOOL_ITERATIONS = 59
@@ -48,7 +50,9 @@ TOOL_BAR_TTL = 3600  # seconds the tool bar buttons stay clickable
 TOOL_BAR_MAX_PILLS = 5  # the tool bar is a feed: newest pills first, older ones drop
 HISTORY_NAV_TTL = 3600  # seconds the history Back/Next buttons stay clickable
 MODELS_NAV_TTL = 3600  # seconds the models Back/Next buttons stay clickable
-TOOL_DETAIL_CHARS = 600  # max chars of tool args / output / description shown in details
+TOOL_DETAIL_CHARS = (
+    600  # max chars of tool args / output / description shown in details
+)
 TODO_MAX_ITEMS = 20  # items in one todo list
 TODO_ITEM_CHARS = 200  # max chars of one todo item
 
@@ -178,23 +182,76 @@ Available tools:
 
 # HTML rules for RichBoby
 ALLOWED_TAGS = {
-    "p", "h1", "h2", "h3", "h4", "h5", "h6",
-    "blockquote", "cite", "pre", "footer", "hr",
-    "ul", "ol", "li", "details", "summary", "aside",
-    "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
-    "code", "mark", "sub", "sup", "tg-spoiler",
-    "a", "tg-emoji", "tg-time", "tg-math", "img",
-    "table", "caption", "thead", "tbody", "tfoot",
-    "tr", "th", "td",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "cite",
+    "pre",
+    "footer",
+    "hr",
+    "ul",
+    "ol",
+    "li",
+    "details",
+    "summary",
+    "aside",
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "ins",
+    "s",
+    "strike",
+    "del",
+    "code",
+    "mark",
+    "sub",
+    "sup",
+    "tg-spoiler",
+    "a",
+    "tg-emoji",
+    "tg-time",
+    "tg-math",
+    "img",
+    "table",
+    "caption",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "th",
+    "td",
 }
 
 VOID_TAGS = {"hr", "img"}
 
 BLOCK_TAGS_FORBIDDEN_IN_CELLS = {
-    "p", "h1", "h2", "h3", "h4", "h5", "h6",
-    "pre", "footer", "hr",
-    "ul", "ol", "li", "details", "summary", "aside",
-    "table", "tr", "td", "th",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "pre",
+    "footer",
+    "hr",
+    "ul",
+    "ol",
+    "li",
+    "details",
+    "summary",
+    "aside",
+    "table",
+    "tr",
+    "td",
+    "th",
 }
 
 # Context

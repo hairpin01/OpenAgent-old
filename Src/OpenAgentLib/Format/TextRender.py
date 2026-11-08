@@ -29,6 +29,7 @@ from ...Settings import (
     TOOL_DETAIL_CHARS,
 )
 
+
 @dataclass
 class RenderContext:
     """Everything modules need to build a message body."""
@@ -37,12 +38,13 @@ class RenderContext:
     text: str = ""  # main body text
     state: dict[str, Any] | None = None  # active request state
     extra: dict[str, Any] = field(default_factory=dict)  # models, labels, ...
-    copy_text: str = "" # copy text
+    copy_text: str = ""  # copy text
     label: str = ""
 
 
 TEXT_MODULES: dict[str, Callable[["OpenAgent", RenderContext], str | None]] = {}
 TEXT_FORMATS: dict[str, tuple[str, ...]] = {}
+
 
 def text_module(name: str):
     """Register a rendering module under ``name``."""
@@ -126,10 +128,13 @@ def _header(agent: "OpenAgent", ctx: RenderContext) -> str | None:
         state.get("request_tokens") or 0
     )
     if chat_tokens:
-        badges.append(f"<tg-pill style='primary'>📊 {_fmt_tokens(chat_tokens)}</tg-pill>")
+        badges.append(
+            f"<tg-pill style='primary'>📊 {_fmt_tokens(chat_tokens)}</tg-pill>"
+        )
 
     badges.append(f"<tg-pill style='primary'>⏱ {elapsed:.2f}s</tg-pill>")
     return f"<p>{' '.join(badges)}</p>"
+
 
 @text_module("standalone_header")
 def _standalone_header(agent: "OpenAgent", ctx: RenderContext) -> str:
@@ -152,7 +157,7 @@ def _usage_header(agent: "OpenAgent", ctx: RenderContext) -> str:
     )
 
 
-STICK_FRAMES = ('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+STICK_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STICK_FRAME_SECONDS = 0.15
 
 
@@ -223,7 +228,6 @@ def _cancel_button(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     return state.get("cancel_tag") or ctx.extra.get("cancel_tag")
 
 
-
 @text_module("body")
 def _body(agent: "OpenAgent", ctx: RenderContext) -> str:
     if not ctx.text:
@@ -274,9 +278,7 @@ def _models_header(agent: "OpenAgent", ctx: RenderContext) -> str:
     page = int(ctx.extra.get("page") or 0)
     pages = int(ctx.extra.get("pages") or 1)
     pager = (
-        f" <tg-pill style='primary'>{page + 1}/{pages}</tg-pill>"
-        if pages > 1
-        else ""
+        f" <tg-pill style='primary'>{page + 1}/{pages}</tg-pill>" if pages > 1 else ""
     )
     return (
         f"<p>{CUSTOM_EMOJI['bals']} "
@@ -296,7 +298,7 @@ def _models_list(agent: "OpenAgent", ctx: RenderContext) -> str:
     for model in models:
         selected = model == current
         style = "success" if selected else "link"
-        marker = '  ' + CUSTOM_EMOJI["ok"] if selected else "  "
+        marker = "  " + CUSTOM_EMOJI["ok"] if selected else "  "
         button = agent.Button.rich.inline(
             model,
             agent.on_change_model,
@@ -313,9 +315,8 @@ def _models_list(agent: "OpenAgent", ctx: RenderContext) -> str:
         f"<tg-pill style='primary'>{html.escape(provider)}</tg-pill></p>"
     )
 
-    return "\n".join(
-        ["\n".join(rows), f'<blockquote>{footer}</blockquote']
-    )
+    return "\n".join(["\n".join(rows), f"<blockquote>{footer}</blockquote"])
+
 
 @text_module("models_nav")
 def _models_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
@@ -355,11 +356,13 @@ def _models_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
 def _line_break(agent: "OpenAgent", ctx: RenderContext) -> str:
     return "<hr/>\n"
 
+
 @text_module("prompt")
 def _prompt(agent: "OpenAgent", ctx: RenderContext) -> str:
     # A history view passes the stored prompt through ctx.extra
     prompt = ctx.extra.get("prompt", (ctx.state or {}).get("prompt", ""))
     return f"""<details><summary>{agent.strings('prompt')}</summary>⬅️ {html.escape(agent._clip(prompt))}</details>"""
+
 
 def _bar_clip(text: object, limit: int) -> str:
     """Flatten ``text`` to one line and cut it to ``limit`` chars."""
@@ -537,9 +540,7 @@ def _history_nav(agent: "OpenAgent", ctx: RenderContext) -> str | None:
     history = state.get("history") or []
     total = len(history) // 2
     in_history = "pos" in ctx.extra
-    pos = int(
-        ctx.extra.get("pos", state.get("history_pos", total - 1 if total else 0))
-    )
+    pos = int(ctx.extra.get("pos", state.get("history_pos", total - 1 if total else 0)))
     if total:
         pos = max(0, min(pos, total - 1))
     prompt = ctx.extra.get("prompt") or state.get("prompt")
@@ -594,15 +595,37 @@ def _diffs(agent: "OpenAgent", ctx: RenderContext) -> str | None:
         if diff:
             blocks.append(
                 f"<details><summary>Diff: {html.escape(name)} file</summary>"
-                f"<pre><code class=\"language-diff\">{html.escape(diff)}</code></pre>"
+                f'<pre><code class="language-diff">{html.escape(diff)}</code></pre>'
                 "</details>"
             )
     return "\n".join(blocks) or None
 
 
 text_format("notice", "standalone_header", "body")
-text_format("progress", "status_header", "prompt", "token_stats", "todo", "tool_bar", "tool_details", "stream", "thinking", "cancel_button")
-text_format("result", "status_header", "prompt", "body", "error_detail", "todo", "token_stats", "tool_bar", "tool_details", "history_nav")
+text_format(
+    "progress",
+    "status_header",
+    "prompt",
+    "token_stats",
+    "todo",
+    "tool_bar",
+    "tool_details",
+    "stream",
+    "thinking",
+    "cancel_button",
+)
+text_format(
+    "result",
+    "status_header",
+    "prompt",
+    "body",
+    "error_detail",
+    "todo",
+    "token_stats",
+    "tool_bar",
+    "tool_details",
+    "history_nav",
+)
 text_format("history", "history_header", "prompt", "body", "history_nav")
 text_format("cancelled", "status_header", "cancelled_body")
 text_format("error_standalone", "standalone_header", "body", "error_detail")

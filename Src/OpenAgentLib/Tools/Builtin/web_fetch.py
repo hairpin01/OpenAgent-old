@@ -50,8 +50,7 @@ async def handle(ctx: ToolContext, args: dict) -> str:
         if content_type.startswith("image/"):
             return f"[image: {content_type}]"
         if not any(
-            kind in content_type
-            for kind in ("text/", "json", "xml", "javascript")
+            kind in content_type for kind in ("text/", "json", "xml", "javascript")
         ):
             body = await response.read()
             return f"[binary content: {content_type or 'unknown'}; {len(body)} bytes]"

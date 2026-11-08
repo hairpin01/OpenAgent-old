@@ -87,7 +87,12 @@ async def handle(ctx: ToolContext, args: dict[str, Any]) -> str:
         try:
             with open(saved_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            lines.append("Content preview:\n```\n" + content[:2000] + ("\n..." if len(content) > 2000 else "") + "\n```")
+            lines.append(
+                "Content preview:\n```\n"
+                + content[:2000]
+                + ("\n..." if len(content) > 2000 else "")
+                + "\n```"
+            )
         except Exception:
             pass
 

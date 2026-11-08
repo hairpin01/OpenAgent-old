@@ -72,7 +72,9 @@ class AgentPlugin:
         """Execute the tool action."""
         if self._handler is not None:
             return await self._handler(ctx, args)
-        raise NotImplementedError(f"Plugin {self.name or type(self).__name__} does not implement execute()")
+        raise NotImplementedError(
+            f"Plugin {self.name or type(self).__name__} does not implement execute()"
+        )
 
     async def on_before_call(
         self, name: str, args: dict[str, Any], ctx: ToolContext
@@ -173,7 +175,9 @@ def load_tools(logger: logging.Logger | None = None) -> list[AgentPlugin]:
                 log.warning("plugin module %s has no PLUGIN or TOOL", module_name)
                 continue
             if plugin.name and plugin.name in seen:
-                log.warning("duplicate plugin %s in %s skipped", plugin.name, module_name)
+                log.warning(
+                    "duplicate plugin %s in %s skipped", plugin.name, module_name
+                )
                 continue
 
             if plugin.name:
@@ -286,7 +290,9 @@ async def call_tool(
                 name, arguments, result_str, context, cur_messages
             )
         except Exception as exc:
-            context.logger.warning("on_after_call hook failed in %s: %s", plugin.name, exc)
+            context.logger.warning(
+                "on_after_call hook failed in %s: %s", plugin.name, exc
+            )
 
     return _clip(result_str)
 

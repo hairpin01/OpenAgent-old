@@ -117,7 +117,9 @@ class SelfManagedContextPlugin(AgentPlugin):
                     "tool_messages": tool_msg_count,
                     "estimated_tokens": est_tokens,
                     "context_window_limit": window_limit,
-                    "is_near_or_exceeded": (window_limit > 0 and est_tokens >= window_limit * 0.8),
+                    "is_near_or_exceeded": (
+                        window_limit > 0 and est_tokens >= window_limit * 0.8
+                    ),
                     "total_chars": total_chars,
                 },
                 ensure_ascii=False,
@@ -131,7 +133,8 @@ class SelfManagedContextPlugin(AgentPlugin):
 
             # Collect indices of dialog messages (exclude system at 0)
             dialog_indices = [
-                i for i in range(1, len(messages))
+                i
+                for i in range(1, len(messages))
                 if messages[i].get("role") in ("user", "assistant")
             ]
 
@@ -160,7 +163,9 @@ class SelfManagedContextPlugin(AgentPlugin):
                 )
 
             if custom_summary:
-                summary_content = f"[Context Summary of earlier turns]:\n{custom_summary}"
+                summary_content = (
+                    f"[Context Summary of earlier turns]:\n{custom_summary}"
+                )
             else:
                 summary_lines = []
                 for m in to_summarize:
@@ -206,9 +211,9 @@ class SelfManagedContextPlugin(AgentPlugin):
                 if len(content) > 150:
                     tool_name = messages[idx].get("tool_name", "tool")
                     saved_chars += len(content) - 100
-                    messages[idx]["content"] = (
-                        f"[{tool_name} output truncated to save context; original {len(content)} chars]"
-                    )
+                    messages[idx][
+                        "content"
+                    ] = f"[{tool_name} output truncated to save context; original {len(content)} chars]"
                     pruned_count += 1
 
             return json.dumps(
@@ -240,7 +245,9 @@ class SelfManagedContextPlugin(AgentPlugin):
                 ensure_ascii=False,
             )
 
-        return json.dumps({"ok": False, "error": f"Unknown action: {action}"}, ensure_ascii=False)
+        return json.dumps(
+            {"ok": False, "error": f"Unknown action: {action}"}, ensure_ascii=False
+        )
 
     async def on_before_call(
         self, name: str, args: dict[str, Any], ctx: ToolContext

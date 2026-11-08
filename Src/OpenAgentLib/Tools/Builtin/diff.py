@@ -12,7 +12,9 @@ async def handle(ctx: ToolContext, args: dict) -> str:
             raise ValueError(f"no changes recorded for: {name}")
         changes = {name: changes[name]}
 
-    diffs = [make_diff(name, item["old"], item["new"]) for name, item in changes.items()]
+    diffs = [
+        make_diff(name, item["old"], item["new"]) for name, item in changes.items()
+    ]
     return "\n\n".join(diff for diff in diffs if diff) or "no changes"
 
 

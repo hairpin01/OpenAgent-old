@@ -61,7 +61,9 @@ async def handle(_ctx: ToolContext, args: dict) -> str:
         for entry in entries:
             text = str(entry.get("text", "")).lower()
             entry_tags = [str(t).lower() for t in entry.get("tags") or []]
-            if keywords and not all(k in text or k in " ".join(entry_tags) for k in keywords):
+            if keywords and not all(
+                k in text or k in " ".join(entry_tags) for k in keywords
+            ):
                 continue
             if tags and not set(tags) <= set(entry_tags):
                 continue
